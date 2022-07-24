@@ -130,14 +130,14 @@ def mutation_eff_varying_linkage(ct_mut_in_measured_cpg_w_methyl_age_df, corr_df
     
 
 
-def plot_sig_bars(results_dfs):
+def plot_sig_bars(result_dfs):
     """
     Plot the sig bars for mean abs err 
     """
-    m_abs_err_p, m_abs_errs_eff, m_linked_mean_abs_err, m_non_linked_mean_abs_err, stdev_linked_mean_abs_err, stdev_non_linked_mean_abs_err, m_avg_err_p, m_avg_errs_eff, m_linked_mean_avg_err, m_non_linked_mean_avg_err, r_p, r_eff, wilc_p, wilc_eff = utils.test_sig(results_dfs)
+    m_abs_err_p, m_abs_errs_eff, m_linked_mean_abs_err, m_non_linked_mean_abs_err, stdev_linked_mean_abs_err, stdev_non_linked_mean_abs_err, m_avg_err_p, m_avg_errs_eff, m_linked_mean_avg_err, m_non_linked_mean_avg_err, r_p, r_eff, wilc_p, wilc_eff = utils.test_sig(result_dfs)
     # plot abs error
     r = [i for i in range(10)]
-    raw_data = {'sig': m_abs_err_p, 'non_sig': [len(results_dfs[0]) - i for i in m_abs_err_p] }
+    raw_data = {'sig': m_abs_err_p, 'non_sig': [len(result_dfs[0]) - i for i in m_abs_err_p] }
     plot_df = pd.DataFrame(raw_data)
     totals = [i+j for i,j in zip(plot_df['sig'], plot_df['non_sig'])]
     sig = [i / j * 100 for i,j in zip(plot_df['sig'], totals)]
@@ -157,7 +157,6 @@ def plot_sig_bars(results_dfs):
 
 def main(corr_fns, illumina_cpg_locs_df, ct_mut_in_measured_cpg_w_methyl_df, all_meta_df, all_methyl_df_t, out_dir):
     # read correlations
-    corrs_fns = sorted(glob.glob( "/cellar/users/zkoch/methyl_mut_proj/corr_matrices/chr_1*.parquet"))
     corr_df = read_correlations(corr_fns, illumina_cpg_locs_df)
 
     # join ages with mutations

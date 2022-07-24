@@ -2,7 +2,6 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 plt.style.use("seaborn-deep")
-import sys
 import os 
 import glob
 
@@ -69,7 +68,7 @@ def get_methylation(data_files_by_name, illumina_cpg_locs_df, let_na_pass = Fals
     """
     methyl_dfs = []
     for dataset_name in data_files_by_name:
-        print(dataset_name)
+        print("Getting methylation for {}".format(dataset_name))
         methyl_fn = data_files_by_name[dataset_name]['methyl_fn']
         if methyl_fn.split('.')[-1] == "parquet":
             methyl_df = pd.read_parquet(methyl_fn, engine="fastparquet")

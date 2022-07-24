@@ -33,7 +33,7 @@ def plot_mutations(all_mut_df, all_meta_df, dataset_names_list, out_dir, illumin
     utils.plot_mutation_count_by_age(all_mut_df, all_meta_df, dataset_names_list, out_dir)
     return mut_in_measured_cpg_df
 
-def compare_mf_mutated_sample_vs_avg(ct_mutation_in_measured_cpg_df, out_dir, dataset=""):
+def compare_mf_mutated_sample_vs_avg(ct_mutation_in_measured_cpg_df, out_dir, dataset="TCGA"):
     """
     Plot MF at sites of mutation event vs same site with no mutation. Write pvals of testing difference of distribution between mutated and not 
     """
@@ -137,18 +137,16 @@ def methylation_fraction_comparison(all_mut_df, illumina_cpg_locs_df, all_methyl
     ct_mutation_in_measured_cpg_df['difference'] = ct_mutation_in_measured_cpg_df['methyl_fraction'] - ct_mutation_in_measured_cpg_df['avg_methyl_frac']
     # test for a difference
     compare_mf_mutated_sample_vs_avg(ct_mutation_in_measured_cpg_df, out_dir)
-    compare_mf_site_of_mutation_vs_not(ct_mutation_in_measured_cpg_df, out_dir)
+    compare_mf_site_of_mutation_vs_not(ct_mutation_in_measured_cpg_df, all_methyl_df_t, out_dir)
     
     return ct_mutation_in_measured_cpg_df
 
-def main(illum_cpg_locs_fn, out_dir, data_dirs):
+def main(illumina_cpg_locs_df, out_dir, all_mut_df, all_methyl_df_t, all_meta_df, dataset_names_list):
     # make output directories
     os.makedirs(out_dir, exist_ok=True)
     os.makedirs(os.path.join(out_dir, "bootstrap"), exist_ok=True)
 
     if DATA_SET == "TCGA":
-        # read in data
-        illumina_cpg_locs_df, all_mut_df, all_methyl_df, all_methyl_df_t, all_meta_df, run_name, dataset_names_list = get_data.main(illum_cpg_locs_fn, out_dir, data_dirs)
 
         # do mutation analysis 
         mut_in_measured_cpg_df = plot_mutations(all_mut_df, all_meta_df, dataset_names_list, out_dir, illumina_cpg_locs_df, all_methyl_df_t)
@@ -157,9 +155,11 @@ def main(illum_cpg_locs_fn, out_dir, data_dirs):
         ct_mut_in_measured_cpg_df = mut_in_measured_cpg_df[mut_in_measured_cpg_df.mutation == "C>T"]
         
         ct_mut_in_measured_cpg_w_methyl_df = methylation_fraction_comparison(all_mut_df, illumina_cpg_locs_df, all_methyl_df_t, out_dir, all_meta_df)
+
+        return mut_in_measured_cpg_df, ct_mut_in_measured_cpg_df, ct_mut_in_measured_cpg_w_methyl_df
     elif DATA_SET == "ICGC":
         sys.exit(1)
     
 
 if __name__ == "__main__":
-    main(sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4:])
+    main(sys.argv[1], sys.argv[2], sys.argv[4:])
