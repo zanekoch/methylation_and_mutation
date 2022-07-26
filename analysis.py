@@ -160,6 +160,3 @@ def main(illumina_cpg_locs_df, out_dir, all_mut_df, all_methyl_df_t, all_meta_df
     elif DATA_SET == "ICGC":
         sys.exit(1)
     
-
-if __name__ == "__main__":
-    main(sys.argv[1], sys.argv[2], sys.argv[4:])

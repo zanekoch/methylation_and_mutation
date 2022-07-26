@@ -59,6 +59,8 @@ def get_mutations(data_files_by_name):
         mut_dfs.append(mut_df)
     # combine all mut_dfs
     all_mut_df = pd.concat(mut_dfs)
+    # reset index
+    all_mut_df = all_mut_df.reset_index(drop=True)
     return all_mut_df
 
 def get_methylation(data_files_by_name, illumina_cpg_locs_df, let_na_pass = False):
@@ -161,5 +163,12 @@ def main(illum_cpg_locs_fn, out_dir, data_dirs):
 
         # read in and combine metadata files (ages)
         all_meta_df = get_metadata(data_files_by_name)
-
+        
         return illumina_cpg_locs_df, all_mut_df, all_methyl_df, all_methyl_df_t, all_meta_df, run_name, dataset_names_list
+
+def f():
+    cpg_sample_mut_count_to_corr = cpg_sample_mut_count_df.loc[cpg_sample_mut_count_df.index.isin(all_meta_df.index)]
+    ages_to_corr = all_meta_df.loc[cpg_sample_mut_count_to_corr.index]['age_at_index']
+    # get correlation between each column of cpg_sample_mut_count_to_corr and ages_to_corr
+    cpg_sample_mut_count_to_corr_corr = cpg_sample_mut_count_to_corr.corrwith(ages_to_corr)
+    return

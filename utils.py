@@ -5,6 +5,11 @@ plt.style.use("seaborn-deep")
 import os 
 from scipy import stats
 import statsmodels.api as sm
+import sys
+from collections import defaultdict
+PERCENTILES = np.flip(np.linspace(0.01, .99, 10))
+
+
 
 # CONSTANTS
 VALID_MUTATIONS = ["C>A", "C>G", "C>T", "T>A", "T>C", "T>G", "G>C","G>A", "A>T", "A>G" , "A>C", "G>T", "C>-"]
@@ -261,39 +266,57 @@ def calc_correlation(ct_mut_in_measured_cpg_w_methyl_df, all_methyl_df_t, num, c
     return corr_matrix_dict
 
 def test_sig(results_dfs):
-    m_abs_err_p = []
-    m_abs_errs_eff = []
-    m_linked_mean_abs_err = []
-    m_non_linked_mean_abs_err = []
-    stdev_linked_mean_abs_err = []
-    stdev_non_linked_mean_abs_err = []
-    m_avg_err_p = []
-    m_avg_errs_eff = []
-    m_linked_mean_avg_err = []
-    m_non_linked_mean_avg_err = []
-    r_p = []
-    r_eff = []
-    wilc_p = []
-    wilc_eff = []
-    PERCENTILES = np.flip(np.linspace(0.01, .99, 10))
+    """
+    @ returns: dict of effect sizes for each signfiicant result and metrics
+    """
+    # initialize dict of lists
+    result_metrics_dict = defaultdict(list)
+
     for i in range(len(PERCENTILES)):
         this_result_df = results_dfs[i]
         bonf_p_val = 0.05/len(this_result_df)
-        # abs and avg are switched until we re-run
-        m_avg_err_p.append(len(this_result_df[this_result_df['p_mean_avg_err'] < bonf_p_val]))
-        m_avg_errs_eff.append(this_result_df[this_result_df['p_mean_avg_err'] < bonf_p_val]['eff_mean_avg_err'].mean())
-        m_linked_mean_avg_err.append(this_result_df[this_result_df['p_mean_avg_err'] < bonf_p_val]['linked_mean_avg_err'].mean())
-        m_non_linked_mean_avg_err.append(this_result_df[this_result_df['p_mean_avg_err'] < bonf_p_val]['non_linked_mean_avg_err'].mean())
-        m_abs_err_p.append(len(this_result_df[this_result_df['p_mean_abs_err'] < bonf_p_val]))
-        m_abs_errs_eff.append(this_result_df[this_result_df['p_mean_abs_err'] < bonf_p_val]['eff_mean_abs_err'].mean())
-        #m_linked_mean_abs_err.append(this_result_df[this_result_df['p_mean_abs_err'] < bonf_p_val]['linked_mean_abs_err'].mean())
-        m_linked_mean_abs_err.append(this_result_df['linked_mean_abs_err'].mean())
-        #m_non_linked_mean_abs_err.append(this_result_df[this_result_df['p_mean_abs_err'] < bonf_p_val]['non_linked_mean_abs_err'].mean())
-        m_non_linked_mean_abs_err.append(this_result_df['non_linked_mean_abs_err'].mean())
-        stdev_linked_mean_abs_err.append(this_result_df[this_result_df['p_mean_abs_err'] < bonf_p_val]['linked_mean_abs_err'].std())
-        stdev_non_linked_mean_abs_err.append(this_result_df[this_result_df['p_mean_abs_err'] < bonf_p_val]['non_linked_mean_abs_err'].std())
-        r_p.append(len(this_result_df[this_result_df['p_r'] < bonf_p_val]))
-        r_eff.append(this_result_df[this_result_df['p_r'] < bonf_p_val]['eff_r'].mean())
-        wilc_p.append(len(this_result_df[this_result_df['p_wilc'] < bonf_p_val]))
-        wilc_eff.append(this_result_df[this_result_df['p_wilc'] < bonf_p_val]['eff_wilc'].mean())
-    return m_abs_err_p, m_abs_errs_eff, m_linked_mean_abs_err, m_non_linked_mean_abs_err, stdev_linked_mean_abs_err, stdev_non_linked_mean_abs_err, m_avg_err_p, m_avg_errs_eff, m_linked_mean_avg_err, m_non_linked_mean_avg_err, r_p, r_eff, wilc_p, wilc_eff
+        result_metrics_dict['m_avg_err_p'].append(len(this_result_df[this_result_df['p_mean_avg_err'] < bonf_p_val]))
+        result_metrics_dict['m_avg_errs_eff'].append(this_result_df[this_result_df['p_mean_avg_err'] < bonf_p_val]['eff_mean_avg_err'].mean())
+        result_metrics_dict['m_linked_mean_avg_err'].append(this_result_df[this_result_df['p_mean_avg_err'] < bonf_p_val]['linked_mean_avg_err'].mean())
+        result_metrics_dict['m_non_linked_mean_avg_err'].append(this_result_df[this_result_df['p_mean_avg_err'] < bonf_p_val]['non_linked_mean_avg_err'].mean())
+        result_metrics_dict['m_abs_err_p'].append(len(this_result_df[this_result_df['p_mean_abs_err'] < bonf_p_val]))
+        result_metrics_dict['m_abs_errs_eff'].append(this_result_df[this_result_df['p_mean_abs_err'] < bonf_p_val]['eff_mean_abs_err'].mean())
+        result_metrics_dict['m_linked_mean_abs_err'].append(this_result_df['linked_mean_abs_err'].mean())
+        result_metrics_dict['m_non_linked_mean_abs_err'].append(this_result_df['non_linked_mean_abs_err'].mean())
+        result_metrics_dict['stdev_linked_mean_abs_err'].append(this_result_df[this_result_df['p_mean_abs_err'] < bonf_p_val]['linked_mean_abs_err'].std())
+        result_metrics_dict['stdev_non_linked_mean_abs_err'].append(this_result_df[this_result_df['p_mean_abs_err'] < bonf_p_val]['non_linked_mean_abs_err'].std())
+    return result_metrics_dict
+
+def calc_correlation(ct_mut_in_measured_cpg_w_methyl_df, all_methyl_df_t, chr=''):
+    # for each mutated site on chr calculate correlation matrix
+    corr_matrix_dict = {}
+    # subset to a single chromsome
+    if chr != '':
+        ct_mut_in_measured_cpg_w_methyl_df = ct_mut_in_measured_cpg_w_methyl_df[ct_mut_in_measured_cpg_w_methyl_df['chr'] == str(chr)]
+
+    for _, row in ct_mut_in_measured_cpg_w_methyl_df.iterrows():
+        this_cpg_corr_matrix = all_methyl_df_t.corrwith(all_methyl_df_t[row['#id']])
+        this_cpg_corr_matrix.drop(row['#id'], inplace=True)
+        corr_matrix_dict[row['#id']] = this_cpg_corr_matrix
+    corr_df = pd.DataFrame(corr_matrix_dict)
+    return corr_df
+
+
+def EWAS(X, y, out_fn):
+    """
+    Calculates correlataion of CpGs with age and writes to out_fn
+    @ X: dataframe of all CpGs as rows and samples as columns
+    @ y: series of ages corresponding to samples
+    """
+    # add olddogs to path
+    sys.path.append('/cellar/users/zkoch/olddogs')
+    import olddogs as dogs
+    # create scanner
+    scanner = dogs.scan.scan_covariate()
+    # do correlation
+    pearson_corrs, _ = scanner.scanCpGs_Correlate(X, y, parallel = True, method = 'pearson')
+    # output
+    out_dict = {'pearson_corrs': pearson_corrs}
+    out_df = pd.DataFrame(out_dict)
+    out_df.to_parquet(out_fn)
+    return out_df
