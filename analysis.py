@@ -2,12 +2,11 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 plt.style.use("seaborn-deep")
-from sklearnex import patch_sklearn
-patch_sklearn()
+#from sklearnex import patch_sklearn
+#patch_sklearn()
 from scipy import stats
 import sys
 import os 
-from scipy import stats
 
 # CONSTANTS
 VALID_MUTATIONS = ["C>A", "C>G", "C>T", "T>A", "T>C", "T>G", "G>C","G>A", "A>T", "A>G" , "A>C", "G>T", "C>-"]
@@ -41,7 +40,7 @@ def compare_mf_mutated_sample_vs_avg(ct_mutation_in_measured_cpg_df, out_dir, da
     # histograms
     fig, axes = plt.subplots()
     ct_mutation_in_measured_cpg_df[['avg_methyl_frac', 'methyl_fraction']].plot.hist(bins=12, alpha=.7, color=['maroon', 'steelblue'], ax = axes)
-    axes.legend(["Mean of non-mutated samples\nat same CpGs", "C>T mutation events", ])
+    axes.legend(["Mean of non-mutated samples at\nCpGs with >=1 mutation event", "C>T mutation events" ])
     axes.set_ylabel('Count')
     axes.set_xlabel('Methylation fraction')
     fig.savefig(os.path.join(out_dir, '{}_methylation_fraction_comparison.png'.format(dataset)))
@@ -59,7 +58,7 @@ def compare_mf_mutated_sample_vs_avg(ct_mutation_in_measured_cpg_df, out_dir, da
     axes.bar( x= ["Difference < 0", "Difference > 0"], color= ['maroon', 'steelblue'], alpha=.7, height = [num_less_zero, num_greater_zero] )
     axes.set_ylabel("Count")
     if JUST_CT:
-        axes.set_xlabel('C>T mutation event MF - mean MF of non-mutated samples\nat same CpG')
+        axes.set_xlabel('C>T mutation event MF - mean MF of  non-mutated samples\nat same CpG site')
     else:
         axes.set_xlabel('Methylation fraction difference at C>T/G>A sites in mutated - non-mutated samples')
     fig.savefig(os.path.join(out_dir, '{}_methylation_fraction_difference_hist.png'.format(dataset)))
@@ -104,10 +103,9 @@ def compare_mf_site_of_mutation_vs_not(ct_mutation_in_measured_cpg_df, all_methy
 
     fig, axes = plt.subplots(facecolor="white")
     weights = np.ones_like(ct_mutation_in_measured_cpg_df['avg_methyl_frac']) / len(ct_mutation_in_measured_cpg_df['avg_methyl_frac'])
-    ct_mutation_in_measured_cpg_df['avg_methyl_frac'].plot.hist(weights=weights,bins=12, ax = axes,alpha=.7, color = 'maroon')
+    ct_mutation_in_measured_cpg_df['avg_methyl_frac'].plot.hist(weights=weights,bins=12, ax = axes,alpha=.7, color = 'goldenrod')
     weights = np.ones_like(non_mutated_methyl_df_t.loc['mean']) / len(non_mutated_methyl_df_t.loc['mean'])
-    non_mutated_methyl_df_t.loc['mean'].plot.hist(weights = weights,bins=12, ax = axes, alpha=.7, color='steelblue')
-    
+    non_mutated_methyl_df_t.loc['mean'].plot.hist(weights = weights,bins=12, ax = axes, alpha=.7, color='dimgray')
     axes.legend(["Sites of C>T\nmutation event", "Sites of no C>T mutation\n event"])
     axes.set_ylabel("Probability")
     axes.set_xlabel("Mean methylation fraction")
@@ -132,7 +130,8 @@ def methylation_fraction_comparison(all_mut_df, illumina_cpg_locs_df, all_methyl
     # get rid of samples that do not have age
     ct_mutation_in_measured_cpg_df = ct_mutation_in_measured_cpg_df.loc[ct_mutation_in_measured_cpg_df['sample'].isin(all_meta_df.index)]
     # get means 
-    ct_mutation_in_measured_cpg_df['avg_methyl_frac'] = utils.get_same_age_means(ct_mutation_in_measured_cpg_df, all_meta_df, all_methyl_df_t)
+    """ct_mutation_in_measured_cpg_df['avg_methyl_frac'] = utils.get_same_age_means(ct_mutation_in_measured_cpg_df, all_meta_df, all_methyl_df_t)"""
+    ct_mutation_in_measured_cpg_df['avg_methyl_frac'] = all_methyl_df_t[ct_mutation_in_measured_cpg_df['#id']].mean().values
     # get difference between mean and mutated sample
     ct_mutation_in_measured_cpg_df['difference'] = ct_mutation_in_measured_cpg_df['methyl_fraction'] - ct_mutation_in_measured_cpg_df['avg_methyl_frac']
     # test for a difference

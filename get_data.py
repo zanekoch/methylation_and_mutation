@@ -70,15 +70,19 @@ def get_methylation(data_files_by_name, illumina_cpg_locs_df, let_na_pass = Fals
     """
     methyl_dfs = []
     for dataset_name in data_files_by_name:
-        print("Getting methylation for {}".format(dataset_name))
+        print("Getting methylation for {}".format(dataset_name), flush=True)
         methyl_fn = data_files_by_name[dataset_name]['methyl_fn']
+        
+        # changed from parquet because breaks with some datasets on vscode
+        #methyl_df = pd.read_csv(methyl_fn, sep='\t')
+
         if methyl_fn.split('.')[-1] == "parquet":
-            methyl_df = pd.read_parquet(methyl_fn, engine="fastparquet")
+            methyl_df = pd.read_parquet(methyl_fn, engine="pyarrow")
         else: # if not parquet the ending is .gz
             methyl_df = pd.read_csv(methyl_fn, sep='\t')
             # write to parquet so it is fast next time
             new_name = methyl_fn[:-3] + '.parquet'
-            methyl_df.to_parquet(new_name, engine="fastparquet")
+            methyl_df.to_parquet(new_name, engine="pyarrow")
         # drop any column with a missing methylation value
         if not let_na_pass:
             methyl_df = methyl_df.dropna(how='any')
@@ -166,9 +170,3 @@ def main(illum_cpg_locs_fn, out_dir, data_dirs):
         
         return illumina_cpg_locs_df, all_mut_df, all_methyl_df, all_methyl_df_t, all_meta_df, run_name, dataset_names_list
 
-def f():
-    cpg_sample_mut_count_to_corr = cpg_sample_mut_count_df.loc[cpg_sample_mut_count_df.index.isin(all_meta_df.index)]
-    ages_to_corr = all_meta_df.loc[cpg_sample_mut_count_to_corr.index]['age_at_index']
-    # get correlation between each column of cpg_sample_mut_count_to_corr and ages_to_corr
-    cpg_sample_mut_count_to_corr_corr = cpg_sample_mut_count_to_corr.corrwith(ages_to_corr)
-    return

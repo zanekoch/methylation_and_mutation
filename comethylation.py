@@ -1,13 +1,29 @@
 import pandas as pd
 from scipy import stats
 import numpy as np
-import glob
 import os
 import matplotlib.pyplot as plt
 import utils
 import seaborn as sns
 
 PERCENTILES = np.flip(np.linspace(0.01, .99, 10))
+
+def select_pos_linked_sites(in_cpg, corr_df, num, percentile):
+    """
+    Gets the num sites that are in the top Percentile percentile of most positively correlated sites with in_cpg
+    @ in_cpg: cpg to get correlated sites for
+    @ corr_df: df of correlation between sites and in_cpg
+    @ num: number of sites to select
+    @ percentile: percentile of sites to select
+    @ returns: list of sites to select
+    """
+    # limit to sites posive correlated with in_cpg
+    pos_corr_df = corr_df[corr_df[in_cpg] > 0]
+    # get the value of the qth percentile cpg site
+    q = pos_corr_df[in_cpg].quantile(percentile, interpolation='lower')
+    # select num sites closest to q
+    comparison_sites = pos_corr_df.iloc[(pos_corr_df[in_cpg] - q).abs().argsort().iloc[:num],0].index
+    return comparison_sites
 
 def comparison_site_comparison(same_age_samples_mf_df, mut_sample_comparison_mfs_df, bootstrap=False):
     """
@@ -36,12 +52,8 @@ def measure_mut_eff_on_module_other_backgrnd(max_diff_corr_df, all_methyl_age_df
         same_chr_cpgs = illumina_cpg_locs_df[illumina_cpg_locs_df['chr'] == mut_cpg_chr]['#id'].to_list()
         same_chr_corr_df = max_diff_corr_df.loc[max_diff_corr_df.index.isin(same_chr_cpgs)]
         # get the positively correlated sites that are on the same chromosome as the mutated CpG
-        same_chr_corr_pos_df = same_chr_corr_df[same_chr_corr_df[mut_cpg] >=0]
-        # get value that is the input percentile of positively correlated sites
-        q = same_chr_corr_pos_df[mut_cpg].quantile(percentile, interpolation='lower')
-        # select num_comp sites closest to this value
-        comparison_sites = same_chr_corr_pos_df.iloc[(same_chr_corr_pos_df[mut_cpg] - q).abs().argsort().iloc[:num_comp_sites],0].index
-        
+        comparison_sites = select_pos_linked_sites(mut_cpg, same_chr_corr_df, num_comp_sites, percentile) # changed to fucntion call might break
+
         try:
             this_age = mut_sample['age_at_index'].to_list()[0]
         except: # for some reason this CpG is not in the dataframes of mutants
@@ -193,14 +205,14 @@ def plot_eff_line(result_dfs, ct_mut_in_measured_cpg_w_methyl_age_df, max_diff_c
     x_pos = np.arange(0,1.5*len(linked_heights),1.5)  
     axes.plot(x_pos, linked_heights, color='steelblue', marker='o', label='Linked')
     axes.plot(x_pos, nonlinked_heights, color='skyblue', marker='o', label='Non-linked')
-    axes.plot(x_pos, [avg_mut_mf_change]*len(x_pos),  color='green',marker='o', label='Mutated sites')
+    axes.plot(x_pos, [avg_mut_mf_change]*len(x_pos),  color='goldenrod',marker='o', label='Mutated sites')
     plt.legend()
     ticks_pos = np.arange(0,1.5*(len(linked_heights)),1.5)    
-    plt.xticks(ticks_pos, [str(i)[:4] for i in PERCENTILES], rotation=45)
+    plt.xticks(ticks_pos, [str(i)[:4] for i in PERCENTILES])
     if sig_only:
-        axes.set_ylabel(r"Average linked site $\Delta$MF across mutations with significant effects")
+        axes.set_ylabel(r"Mean $\Delta$MF across mutations with significant effects")
     else:
-        axes.set_ylabel(r"Average linked site $\Delta$MF across all mutations")
+        axes.set_ylabel(r"Mean $\Delta$MF of each tested mutation (n=100)")
     axes.set_xlabel("Linkage percentile")
 
 def plot_eff_violin(result_dfs):
@@ -218,13 +230,81 @@ def plot_eff_violin(result_dfs):
     #p = sns.pointplot(x='linkage_perc', y='MavgErr', data=to_plot_df, ci=None, color='black')
 
     p.set_xlabel("Linkage percentile")
-    p.set_ylabel(r"$\Delta$MF (Mutated sample - mean of non-mutated)")
+    p.set_ylabel(r"$\Delta$MF")
     axes.invert_xaxis()
     return 
+
+def count_nearby_muts_one_cpg(cpg_name, all_mut_w_methyl_df, illumina_cpg_locs_df, max_dist = 100000):
+    """
+    Count the number of nearby mutations to a given CpG in each sample
+    @ cpg_name: cpg for which to look for nearby mutants
+    @ all_mut_w_methyl_df: df of all mutations that happened in a sample with methylation
+    @ illumina_cpg_locs_df: df of cpg locations
+    @ returns: the number of nearby C>T mutations 
+    """
+    # get location of CpG from illumina
+    cpg_chr = illumina_cpg_locs_df[illumina_cpg_locs_df['#id'] == cpg_name]['chr'].values[0]
+    cpg_start = illumina_cpg_locs_df[illumina_cpg_locs_df['#id'] == cpg_name]['start'].values[0]
+    # get mutations that are on the same chr, are within max_dist of the CpG, and are C>T
+    nearby_df = all_mut_w_methyl_df[(all_mut_w_methyl_df['chr'] == cpg_chr) & (np.abs(all_mut_w_methyl_df['start'] - cpg_start) < max_dist) & (all_mut_w_methyl_df['mutation'] == 'C>T')]
+    return nearby_df
+
+def count_nearby_mutations(cpgs_to_count_df, all_mut_w_methyl_df, illumina_cpg_locs_df, all_methyl_df, max_dist = 100000):
+    """
+    @ cpgs_to_count_df: df of cpgs to count nearby mutations for
+    @ all_mut_w_methyl_df: df of all mutations that happened in a sample with methylation
+    @ illumina_cpg_locs_df: df of cpg locations
+    @ all_methyl_df: df of all methylation
+    @ returns: df of samples x cpgs with number of nearby mutations
+    """
+    cpg_sample_mut_count_df = pd.DataFrame(0, index=all_methyl_df.columns, columns=cpgs_to_count_df.index)
+    # for each of the cpgs to count
+    for cpg_name, _ in cpgs_to_count_df.iterrows():
+        # find nearby muts across all samples
+        nearby_df = count_nearby_muts_one_cpg(cpg_name, all_mut_w_methyl_df, illumina_cpg_locs_df, max_dist)
+        # increment count for each sample in result
+        nearby_sample_counts = nearby_df['sample'].value_counts()
+        cpg_sample_mut_count_df.loc[nearby_sample_counts.index, cpg_name] += nearby_sample_counts.values
+    return cpg_sample_mut_count_df
+
+def count_linked_mutations(cpgs_to_count_df, 
+                            all_mut_w_methyl_df, 
+                            illumina_cpg_locs_df,
+                            all_methyl_df, 
+                            corr_df, 
+                            num_sites=100, 
+                            max_dist=100, 
+                            percentile_cutoff=.99):
+    """
+    Count the number of mutations that are in linked sites for each sample
+    @ cpgs_to_count_df: df of cpgs to count nearby mutations for
+    @ all_mut_w_methyl_df: df of all mutations with methylation
+    @ illumina_cpg_locs_df: df of cpg locations
+    @ all_methyl_df: df of all methylation
+    @ corr_df: df of linkage status
+    @ num_sites: number of sites to consider
+    @ percentile_cutoff: percentile cutoff for linkage status
+    @ returns: df of samples x cpgs with number of mutations in linked sites for that CpG
+    """
+    cpg_sample_mut_count_df = pd.DataFrame(0, index=all_methyl_df.columns, columns=cpgs_to_count_df.index)
+    # for each of the cpgs to count
+    for cpg_name, _ in cpgs_to_count_df.iterrows():
+        print(cpg_name, flush=True)
+        # get this CpG's linked sites
+        linked_sites = select_pos_linked_sites(cpg_name, corr_df, num_sites, percentile_cutoff)
+        # count the number of mutations in each of these linked sites
+        for linked_site in linked_sites:
+            # get mutations that are on the same chr, are within max_dist of the CpG, and are C>T
+            nearby_df = count_nearby_muts_one_cpg(linked_site, all_mut_w_methyl_df, illumina_cpg_locs_df, max_dist)
+            # increment count for each sample in result
+            nearby_sample_counts = nearby_df['sample'].value_counts()
+            cpg_sample_mut_count_df.loc[nearby_sample_counts.index, cpg_name] += nearby_sample_counts.values
+    return cpg_sample_mut_count_df
 
 def main(corr_fns, illumina_cpg_locs_df, ct_mut_in_measured_cpg_w_methyl_df, all_meta_df, all_methyl_df_t, out_dir):
     # read correlations
     corr_df = read_correlations(corr_fns, illumina_cpg_locs_df)
+
 
     # join ages with mutations
     ct_mut_in_measured_cpg_w_methyl_age_df, all_methyl_age_df_t = add_ages_to_methylation(ct_mut_in_measured_cpg_w_methyl_df, all_meta_df, all_methyl_df_t)

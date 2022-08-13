@@ -241,6 +241,7 @@ def get_methyl_fractions(ct_mutation_in_measured_cpg_df, all_methyl_df_t):
             methyl_fractions.append(-1)
     return methyl_fractions
 
+
 def get_same_age_means(ct_mutation_in_measured_cpg_df, all_meta_df, all_methyl_df_t):
     means = []
     for i, row in ct_mutation_in_measured_cpg_df.iterrows():
@@ -320,3 +321,50 @@ def EWAS(X, y, out_fn):
     out_df = pd.DataFrame(out_dict)
     out_df.to_parquet(out_fn)
     return out_df
+
+
+def get_distances_one_chrom(chrom_name, illumina_cpg_locs_df, cpg_subset):
+    """
+    Calculate distances between all CpGs on a give chromosome
+    @ chrom_name: name of chromosome
+    @ illumina_cpg_locs_df: dataframe of CpG locations
+    @ cpg_subset: subset of CpGs to calculate distances for
+    """
+    # subset to a single chromsome
+    illumina_cpg_locs_df_chr = illumina_cpg_locs_df[illumina_cpg_locs_df['chr'] == str(chrom_name)]
+    # subset to CpGs in cpg_subset
+    illumina_cpg_locs_df_chr = illumina_cpg_locs_df_chr[illumina_cpg_locs_df_chr['#id'].isin(cpg_subset)]
+    # for each CpG in illumina_cpg_locs_df_chr
+    distances_dict = {}
+    for _, row in illumina_cpg_locs_df_chr.iterrows():
+        # calculate distance to all other CpGs
+        this_cpg_distances = illumina_cpg_locs_df_chr.apply(lambda x: row['start'] - x['start'], axis=1)
+        distances_dict[row['#id']] = this_cpg_distances
+    distances_df = pd.DataFrame(distances_dict)
+    return distances_df
+    
+
+def read_in_result_dfs(result_base_path):
+    """
+    @ result_base_path: path to file of result dfs without PERCENTILE suffix
+    @ returns: list of result dataframes
+    """
+    result_dfs = []
+    for i in range(len(PERCENTILES)):
+        result_dfs.append(pd.read_parquet(result_base_path + '_' + str(PERCENTILES[i]) + '.parquet'))
+    return result_dfs
+
+def write_out_result_dfs(out_dir, name, result_dfs):
+    """
+    @ out_dir: path to directory to write out result dfs
+    """
+    for i in range(len(PERCENTILES)):
+        result_dfs[i].to_parquet(out_dir + '_' + name + '_' + str(PERCENTILES[i]) + '.parquet')
+
+def get_diff_from_mean(methyl_df_t):
+    """
+    @ methyl_df_t: dataframe of methylation data
+    @ returns: df of samples x sites where each entry is (sample mf - avg methyl frac across samples)
+    """
+    diff_from_mean_df = methyl_df_t.sub(methyl_df_t.mean(axis=0), axis=1)
+    return diff_from_mean_df
