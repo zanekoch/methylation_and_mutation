@@ -29,7 +29,8 @@ def plot_mutations(all_mut_df, all_meta_df, dataset_names_list, out_dir, illumin
     # for each dataset plot distribtion of all mutations, mutations in CpG sites, and C>T mutations in CpG sites
     mut_in_measured_cpg_df = utils.plot_mutations_distributions(all_mut_df, out_dir, illumina_cpg_locs_df, all_methyl_df_t)
     # for each dataset plot # of C>T mutations by age
-    utils.plot_mutation_count_by_age(all_mut_df, all_meta_df, dataset_names_list, out_dir)
+    # TODO: fix plot_mutation_count_by_age to work with PANCAN
+    """utils.plot_mutation_count_by_age(all_mut_df, all_meta_df, dataset_names_list, out_dir)"""
     return mut_in_measured_cpg_df
 
 def compare_mf_mutated_sample_vs_avg(ct_mutation_in_measured_cpg_df, out_dir, dataset="TCGA"):
@@ -145,17 +146,14 @@ def main(illumina_cpg_locs_df, out_dir, all_mut_df, all_methyl_df_t, all_meta_df
     os.makedirs(out_dir, exist_ok=True)
     os.makedirs(os.path.join(out_dir, "bootstrap"), exist_ok=True)
 
-    if DATA_SET == "TCGA":
+    # do mutation analysis 
+    mut_in_measured_cpg_df = plot_mutations(all_mut_df, all_meta_df, dataset_names_list, out_dir, illumina_cpg_locs_df, all_methyl_df_t)
+    # subset to only C>T mutations
+    # TODO: remove this return if possible
+    ct_mut_in_measured_cpg_df = mut_in_measured_cpg_df[mut_in_measured_cpg_df.mutation == "C>T"]
+    
+    ct_mut_in_measured_cpg_w_methyl_df = methylation_fraction_comparison(all_mut_df, illumina_cpg_locs_df, all_methyl_df_t, out_dir, all_meta_df)
 
-        # do mutation analysis 
-        mut_in_measured_cpg_df = plot_mutations(all_mut_df, all_meta_df, dataset_names_list, out_dir, illumina_cpg_locs_df, all_methyl_df_t)
-        # subset to only C>T mutations
-        # TODO: remove this return if possible
-        ct_mut_in_measured_cpg_df = mut_in_measured_cpg_df[mut_in_measured_cpg_df.mutation == "C>T"]
-        
-        ct_mut_in_measured_cpg_w_methyl_df = methylation_fraction_comparison(all_mut_df, illumina_cpg_locs_df, all_methyl_df_t, out_dir, all_meta_df)
-
-        return mut_in_measured_cpg_df, ct_mut_in_measured_cpg_df, ct_mut_in_measured_cpg_w_methyl_df
-    elif DATA_SET == "ICGC":
-        sys.exit(1)
+    return mut_in_measured_cpg_df, ct_mut_in_measured_cpg_df, ct_mut_in_measured_cpg_w_methyl_df
+    
     

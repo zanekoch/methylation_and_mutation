@@ -368,3 +368,10 @@ def get_diff_from_mean(methyl_df_t):
     """
     diff_from_mean_df = methyl_df_t.sub(methyl_df_t.mean(axis=0), axis=1)
     return diff_from_mean_df
+
+
+def convert_csv_to_parquet(in_fn):
+    from pyarrow import csv, parquet
+    out_fn = in_fn.split('.')[0] + '.parquet'
+    table = csv.read_csv(in_fn, parse_options=csv.ParseOptions(delimiter="\t"))
+    parquet.write_table(table, out_fn)
