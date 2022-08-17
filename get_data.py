@@ -98,7 +98,7 @@ def get_methylation(methylation_dir):
     @ returns: pandas dataframe of methylation data
     """
     methyl_dd = dd.read_parquet(methylation_dir)
-    print("Converting Dask df to pandas df", flush=True)
+    print("Converting Dask df to pandas df, takes ~10min", flush=True)
     methyl_df = methyl_dd.compute()
     return methyl_df
 
