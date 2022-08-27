@@ -7,7 +7,7 @@ from scipy import stats
 import statsmodels.api as sm
 import sys
 from collections import defaultdict
-PERCENTILES = np.flip(np.linspace(0.01, .99, 10))
+
 
 
 
@@ -15,6 +15,11 @@ PERCENTILES = np.flip(np.linspace(0.01, .99, 10))
 VALID_MUTATIONS = ["C>A", "C>G", "C>T", "T>A", "T>C", "T>G", "G>C","G>A", "A>T", "A>G" , "A>C", "G>T", "C>-"]
 JUST_CT = True
 DATA_SET = "TCGA"
+PERCENTILES = [1]#np.flip(np.linspace(0, 1, 11))
+
+
+def get_percentiles():
+    return PERCENTILES
 
 # returns mut_df joined s.t. only mutations that are in measured CpG sites with methylation data remain
 # be aware that drop_duplicates first 
@@ -315,35 +320,39 @@ def EWAS(X, y, out_fn):
     # create scanner
     scanner = dogs.scan.scan_covariate()
     # do correlation
-    pearson_corrs, _ = scanner.scanCpGs_Correlate(X, y, parallel = True, method = 'pearson')
+    pearson_corrs, _ = scanner.scanCpGs_Correlate(X, y, parallel = False, method = 'pearson')
     # output
     out_dict = {'pearson_corrs': pearson_corrs}
     out_df = pd.DataFrame(out_dict)
+    # set index to CpG names
+    out_df.index = X.index
     out_df.to_parquet(out_fn)
     return out_df
 
 
-def get_distances_one_chrom(chrom_name, illumina_cpg_locs_df, cpg_subset):
+def get_distances_one_chrom(chrom_name,
+                            illumina_cpg_locs_df):
     """
-    Calculate distances between all CpGs on a give chromosome
+    Calculate absolute distances between all CpGs on a give chromosome
     @ chrom_name: name of chromosome
     @ illumina_cpg_locs_df: dataframe of CpG locations
-    @ cpg_subset: subset of CpGs to calculate distances for
+    @ returns: dataframe of absolute distances between all CpGs on a given chromosome
     """
     # subset to a single chromsome
     illumina_cpg_locs_df_chr = illumina_cpg_locs_df[illumina_cpg_locs_df['chr'] == str(chrom_name)]
-    # subset to CpGs in cpg_subset
-    illumina_cpg_locs_df_chr = illumina_cpg_locs_df_chr[illumina_cpg_locs_df_chr['#id'].isin(cpg_subset)]
+    """# subset to CpGs in cpg_subset
+    illumina_cpg_locs_df_chr = illumina_cpg_locs_df_chr[illumina_cpg_locs_df_chr['#id'].isin(cpg_subset)]"""
     # for each CpG in illumina_cpg_locs_df_chr
     distances_dict = {}
     for _, row in illumina_cpg_locs_df_chr.iterrows():
         # calculate distance to all other CpGs
-        this_cpg_distances = illumina_cpg_locs_df_chr.apply(lambda x: row['start'] - x['start'], axis=1)
+        this_cpg_distances = illumina_cpg_locs_df_chr['start'] - row['start']
         distances_dict[row['#id']] = this_cpg_distances
     distances_df = pd.DataFrame(distances_dict)
+    distances_df.index = distances_df.columns
+    distances_df = np.abs(distances_df)
     return distances_df
     
-
 def read_in_result_dfs(result_base_path):
     """
     @ result_base_path: path to file of result dfs without PERCENTILE suffix
@@ -359,7 +368,7 @@ def write_out_result_dfs(out_dir, name, result_dfs):
     @ out_dir: path to directory to write out result dfs
     """
     for i in range(len(PERCENTILES)):
-        result_dfs[i].to_parquet(out_dir + '_' + name + '_' + str(PERCENTILES[i]) + '.parquet')
+        result_dfs[i].to_parquet(out_dir + '/' + name + '_' + str(PERCENTILES[i]) + '.parquet')
 
 def get_diff_from_mean(methyl_df_t):
     """
@@ -369,9 +378,31 @@ def get_diff_from_mean(methyl_df_t):
     diff_from_mean_df = methyl_df_t.sub(methyl_df_t.mean(axis=0), axis=1)
     return diff_from_mean_df
 
-
 def convert_csv_to_parquet(in_fn):
     from pyarrow import csv, parquet
     out_fn = in_fn.split('.')[0] + '.parquet'
     table = csv.read_csv(in_fn, parse_options=csv.ParseOptions(delimiter="\t"))
     parquet.write_table(table, out_fn)
+
+
+def plot_corr_dist_boxplots(corr_dist_df):
+    """
+    Plots distance vs correlation boxplots
+    @ corr_dist_df: dataframe with 2 columns: dists and corrs
+    """
+    fig, axes = plt.subplots()
+    bin_edges = [0, 10, 10**3, 10**5, 10**7, 10**9]
+
+
+    boxes = [corr_dist_df[(corr_dist_df['dists'] < bin_edges[i+1] ) & (corr_dist_df['dists'] >= bin_edges[i])]['corrs'] for i in range(len(bin_edges)-1)]
+
+
+    bp = axes.boxplot(boxes, flierprops=dict(markersize=.1), showfliers=False, labels=[r"$0-10$", r"$10-10^3$", r"$10^3-10^5$", r"$10^5-10^7$", r"$10^7-10^9$"], patch_artist=True, boxprops=dict(facecolor="maroon", alpha=0.7, ))
+    # change color of median
+    for median in bp['medians']: 
+        median.set(color ='black', 
+                linewidth = 1)
+    axes.set_xlabel("Distance between CpG sites (bp)")
+    axes.set_ylabel("MF Pearson correlation")
+
+

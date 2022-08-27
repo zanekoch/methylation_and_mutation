@@ -102,41 +102,7 @@ def get_methylation(methylation_dir):
     methyl_df = methyl_dd.compute()
     return methyl_df
 
-"""def get_methylation(data_files_by_name, illumina_cpg_locs_df, let_na_pass = False):
 
-    methyl_dfs = []
-    for dataset_name in data_files_by_name:
-        print("Getting methylation for {}".format(dataset_name), flush=True)
-        methyl_fn = data_files_by_name[dataset_name]['methyl_fn']
-        
-        # changed from parquet because breaks with some datasets on vscode
-        #methyl_df = pd.read_csv(methyl_fn, sep='\t')
-
-        if methyl_fn.split('.')[-1] == "parquet":
-            methyl_df = pd.read_parquet(methyl_fn, engine="pyarrow")
-        else: # if not parquet the ending is .gz
-            methyl_df = pd.read_csv(methyl_fn, sep='\t')
-            # write to parquet so it is fast next time
-            new_name = methyl_fn[:-3] + '.parquet'
-            methyl_df.to_parquet(new_name, engine="pyarrow")
-        # drop any column with a missing methylation value
-        if not let_na_pass:
-            methyl_df = methyl_df.dropna(how='any')
-        # change sample names to not have '-01' at end
-        new_column_names = [col[:-3] for col in methyl_df.columns]
-        new_column_names[0] = "sample"
-        methyl_df.columns = new_column_names
-        # drop duplicate columns
-        methyl_df = methyl_df.loc[:,~methyl_df.columns.duplicated()]
-        # rename sample to cpg and then make it the index so we can join on it
-        methyl_df = methyl_df.rename(columns={"sample":"cpg_name"}) # need to fix names after joining 
-        methyl_df.set_index(['cpg_name'], inplace=True)
-        methyl_dfs.append(methyl_df)
-        
-    all_methyl_df = methyl_dfs[0].join(methyl_dfs[1:], how='inner')
-    # subset methylation to only be positions on the illumina array (only removes 77 positions, most named rsNNNNNN as if they were snps)
-    all_methyl_df = all_methyl_df[all_methyl_df.index.isin(illumina_cpg_locs_df['#id'])]
-    return all_methyl_df"""
 
 def get_metadata(meta_fn):
     """
@@ -163,7 +129,8 @@ def get_metadata(meta_fn):
     meta_df = meta_df.loc[meta_df.index.drop_duplicates()]
     # convert back to int, through float so e.g. '58.0' -> 58.0 -> 58
     meta_df['age_at_index'] = meta_df['age_at_index'].astype(float).astype(int)
-
+    # drop rows with duplicate index
+    meta_df = meta_df[~meta_df.index.duplicated(keep='first')]
     return meta_df, dataset_names_list
 
 def transpose_methylation(all_methyl_df):
