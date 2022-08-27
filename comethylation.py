@@ -6,9 +6,12 @@ import matplotlib.pyplot as plt
 import utils
 import seaborn as sns
 
-PERCENTILES = np.flip(np.linspace(0.01, .99, 10))
+PERCENTILES = utils.get_percentiles()
 
-def select_pos_linked_sites(in_cpg, corr_df, num, percentile):
+def select_pos_corr_sites(in_cpg,
+                            corr_df,
+                            num,
+                            percentile):
     """
     Gets the num sites that are in the top Percentile percentile of most positively correlated sites with in_cpg
     @ in_cpg: cpg to get correlated sites for
@@ -22,8 +25,27 @@ def select_pos_linked_sites(in_cpg, corr_df, num, percentile):
     # get the value of the qth percentile cpg site
     q = pos_corr_df[in_cpg].quantile(percentile, interpolation='lower')
     # select num sites closest to q
-    comparison_sites = pos_corr_df.iloc[(pos_corr_df[in_cpg] - q).abs().argsort().iloc[:num],0].index
+    comparison_sites = pos_corr_df.iloc[(pos_corr_df[in_cpg] - q).abs().argsort().iloc[:num], 0].index
     return comparison_sites
+
+def select_closest_sites(in_cpg,
+                         dist_df,
+                         num,
+                         percentile):
+    """
+    Gets the num sites that are in the top Percentile percentile of closet sites to in_cpg
+    @ in_cpg: cpg to get closest sites for
+    @ dist_df: df of distance between sites and in_cpg
+    @ num: number of sites to select
+    @ percentile: percentile of sites to select
+    @ returns: list of sites to select
+    """
+    # get the value of the qth percentile cpg site
+    q = dist_df[in_cpg].quantile(percentile, interpolation='lower')
+    # select num sites closest to q
+    comparison_sites = dist_df.iloc[(dist_df[in_cpg] - q).abs().argsort().iloc[:num], 0].index
+    return comparison_sites
+
 
 def comparison_site_comparison(same_age_samples_mf_df, mut_sample_comparison_mfs_df, bootstrap=False):
     """
@@ -36,31 +58,51 @@ def comparison_site_comparison(same_age_samples_mf_df, mut_sample_comparison_mfs
     result_df['mean_avg_err'] = same_age_samples_mf_df.apply(lambda x: np.average(mut_sample_comparison_mfs_df - x), axis=1)
     return result_df
 
-def measure_mut_eff_on_module_other_backgrnd(max_diff_corr_df, all_methyl_age_df_t, ct_mut_in_measured_cpg_w_methyl_age_df, illumina_cpg_locs_df, percentile, num_comp_sites, age_bin_size):
+def measure_mut_eff_on_module_other_backgrnd(mut_linkage_df,
+                                            linkage_type,
+                                            all_methyl_age_df_t, 
+                                            ct_mut_in_measured_cpg_w_methyl_age_df,
+                                            illumina_cpg_locs_df,
+                                            percentile,
+                                            num_linked_sites,
+                                            age_bin_size):
     """
-    Given a correlation matrix, calculate the effect of a mutation on the methylation of linked sites (num_comp_sites starting from specified percentile) 
+    Given a correlation matrix, calculate the effect of a mutation on the methylation of linked sites (num_linked_sites starting from specified percentile) 
+    @ mut_linkage_df: dataframe with columns corresponding to mutated sites we are measured effect of and rows the linkage of that site to all other sites on same chrom
+    @ linkage_type: type of linkage in mut_linkage_df either 'methylation_corr' or 'distance'
+    @ all_methyl_age_df_t: methylation dataframe with age information
+    @ ct_mut_in_measured_cpg_w_methyl_age_df: methylation dataframe with age information for mutated sites
+    @ illumina_cpg_locs_df:
+    @ percentile: percentile to draw comparison sites from
+    @ num_linked_sites: number of comparison sites to draw
+    @ age_bin_size: age bin size to use for selected samples to compare at comparison sites
     @ returns: a dataframe of pvals and effect sizes comparing linked sites in mutated sample to linked sites in non-mutated (within age_bin_size/2 year age) samples, for: MabsErr, MavgErr, pearson r, and WilcoxonP 
     """
     # for each mutated CpG that we have correlation for
     all_results = []
-    for mut_cpg in max_diff_corr_df.columns:
-        # get chrom of this site
+    for mut_cpg in mut_linkage_df.columns:
+        # get chrom of this site and which sample had this cpg mutated
         mut_cpg_chr = illumina_cpg_locs_df[illumina_cpg_locs_df['#id'] == mut_cpg]['chr'].iloc[0]
-        # get which sample had this cpg mutated and its age
         mut_sample = ct_mut_in_measured_cpg_w_methyl_age_df[ct_mut_in_measured_cpg_w_methyl_age_df['#id'] == mut_cpg]
         # limit comparison sites to cpgs on same chrom 
         same_chr_cpgs = illumina_cpg_locs_df[illumina_cpg_locs_df['chr'] == mut_cpg_chr]['#id'].to_list()
-        same_chr_corr_df = max_diff_corr_df.loc[max_diff_corr_df.index.isin(same_chr_cpgs)]
-        # get the positively correlated sites that are on the same chromosome as the mutated CpG
-        comparison_sites = select_pos_linked_sites(mut_cpg, same_chr_corr_df, num_comp_sites, percentile) # changed to fucntion call might break
-
-        try:
-            this_age = mut_sample['age_at_index'].to_list()[0]
-        except: # for some reason this CpG is not in the dataframes of mutants
-            print(mut_cpg)
-            print(mut_sample)
-            continue
-        # get this sample's name
+        same_chr_linkage_df = mut_linkage_df.loc[mut_linkage_df.index.isin(same_chr_cpgs)]
+        # drop mut_cpg from same_chr_linkage_df so it is not selected as a comparison site
+        same_chr_linkage_df.drop(mut_cpg, axis=0, inplace=True)
+        # get comparison sites based on method
+        if linkage_type == 'methylation_corr':
+            # get the positively correlated sites that are on the same chromosome as the mutated CpG
+            comparison_sites = select_pos_corr_sites(mut_cpg, same_chr_linkage_df, num_linked_sites, percentile)
+            low_comparison_sites = select_pos_corr_sites(mut_cpg, same_chr_linkage_df, num_linked_sites, 0)#np.abs(same_chr_linkage_df[mut_cpg]).nsmallest(num_linked_sites).index.to_list()
+        elif linkage_type == 'distance':
+            # get the closest sites that are on the same chromosome as the mutated CpG
+            comparison_sites = select_closest_sites(mut_cpg, same_chr_linkage_df, num_linked_sites, percentile)
+            # farthest sites are 100th percentile
+            low_comparison_sites = select_closest_sites(mut_cpg, same_chr_linkage_df, num_linked_sites, 1)
+        else:
+            raise ValueError("linkage_type must be either 'methylation_corr' or 'distance'")
+        # get this sample's age and name
+        this_age = mut_sample['age_at_index'].to_list()[0]
         this_sample_name = mut_sample['case_submitter_id']
         # get this mutated sample's MF at comparison sites
         mut_sample_comparison_mfs_df = all_methyl_age_df_t.loc[this_sample_name, comparison_sites] 
@@ -70,11 +112,10 @@ def measure_mut_eff_on_module_other_backgrnd(max_diff_corr_df, all_methyl_age_df
         mut_result_df = comparison_site_comparison(same_age_samples_mf_df.drop(index = this_sample_name)[comparison_sites], mut_sample_comparison_mfs_df)
         
         # do same comparison but seeing if CpGs with low absolute correlation to mut_cpg also changed same amount
-        low_corr_comparison_sites = np.abs(same_chr_corr_df[mut_cpg]).nsmallest(num_comp_sites).index.to_list()
-        low_mut_sample_comparison_mfs_df = all_methyl_age_df_t.loc[this_sample_name, low_corr_comparison_sites]
-        low_result_df = comparison_site_comparison(same_age_samples_mf_df.drop(index = this_sample_name)[low_corr_comparison_sites], low_mut_sample_comparison_mfs_df)
+        low_mut_sample_comparison_mfs_df = all_methyl_age_df_t.loc[this_sample_name, low_comparison_sites]
+        low_result_df = comparison_site_comparison(same_age_samples_mf_df.drop(index = this_sample_name)[low_comparison_sites], low_mut_sample_comparison_mfs_df)
 
-        # compare mut_result_df to low_result_df to see if there are less significant differences in lower corr CpGs
+        # compare mut_result_df to low_result_df to see if there are less significant differences in less linked CpGs
         this_mut_results = []
         # for each mutated site and corresponding linked sistes
         for label, col in low_result_df.items(): 
@@ -92,6 +133,31 @@ def measure_mut_eff_on_module_other_backgrnd(max_diff_corr_df, all_methyl_age_df
     
     result_df = pd.DataFrame(all_results, columns = ['p_mean_abs_err', 'eff_mean_abs_err', 'linked_mean_abs_err', 'non_linked_mean_abs_err', 'p_mean_avg_err', 'eff_mean_avg_err', 'linked_mean_avg_err', 'non_linked_mean_avg_err'] )
     return result_df
+
+def mutation_eff_varying_linkage(mut_linkage_df,
+                                linkage_type,
+                                ct_mut_in_measured_cpg_w_methyl_age_df,
+                                all_methyl_age_df_t,
+                                illumina_cpg_locs_df,
+                                num_linked_sites,
+                                age_bin_size):
+    """
+    For each percentile of comparison sites, get the effect size of the mutation in the mutated sample compared to the effect size of the mutation in the non-mutated samples of the same age.
+    @ mut_linkage_df: dataframe with columns corresponding to mutated sites we are measured effect of and rows the linkage of that site to all other sites on same chrom
+    @ linkage_type: type of linkage in mut_linkage_df either 'methylation_corr' or 'distance'
+    @ ct_mut_in_measured_cpg_w_methyl_age_df: methylation dataframe with age information for mutated sites
+    @ all_methyl_age_df_t: methylation dataframe with age information for all samples
+    @ illumina_cpg_locs_df: dataframe of CpG locations
+    @ num_linked_sites: number of comparison sites to draw
+    @ age_bin_size: age bin size to use for selected samples to compare at comparison sites
+    """ 
+    # calculate results varying percentile of linked CpG sites, only chr1 sites
+    result_dfs = []
+    for percentile in PERCENTILES:
+        print(percentile)
+        res_df = measure_mut_eff_on_module_other_backgrnd(mut_linkage_df, linkage_type, all_methyl_age_df_t, ct_mut_in_measured_cpg_w_methyl_age_df, illumina_cpg_locs_df, percentile, num_linked_sites, age_bin_size)
+        result_dfs.append(res_df)
+    return result_dfs
 
 def read_correlations(corr_fns, illumina_cpg_locs_df):
     # switch order
@@ -111,22 +177,15 @@ def add_ages_to_methylation(ct_mut_in_measured_cpg_w_methyl_df, all_meta_df, all
     to_join_ct_mut_in_measured_cpg_w_methyl_df = ct_mut_in_measured_cpg_w_methyl_df.rename(columns={'sample':'case_submitter_id'})
     ct_mut_in_measured_cpg_w_methyl_age_df =  to_join_ct_mut_in_measured_cpg_w_methyl_df.join(all_meta_df, on =['case_submitter_id'], rsuffix='_r',how='inner')
     # join ages with methylation
-    all_methyl_age_df_t = all_meta_df.join(all_methyl_df_t, on =['case_submitter_id'], rsuffix='_r',how='inner')
+    all_methyl_age_df_t = all_meta_df.join(all_methyl_df_t, on =['sample'], rsuffix='_r',how='inner')
     return ct_mut_in_measured_cpg_w_methyl_age_df, all_methyl_age_df_t
-
-def mutation_eff_varying_linkage(ct_mut_in_measured_cpg_w_methyl_age_df, max_diff_corr_df, all_methyl_age_df_t,illumina_cpg_locs_df, num_linked_sites, age_bin_size):
-    # calculate results varying percentile of linked CpG sites, only chr1 sites
-    result_dfs = []
-    for percentile in PERCENTILES:
-        print(percentile)
-        res_df = measure_mut_eff_on_module_other_backgrnd(max_diff_corr_df, all_methyl_age_df_t, ct_mut_in_measured_cpg_w_methyl_age_df, illumina_cpg_locs_df, percentile, num_linked_sites, age_bin_size)
-        result_dfs.append(res_df)
-    return result_dfs
     
 def plot_sig_bars(result_dfs):
-    
-    """Plot the sig bars for mean abs err"""
-
+    """
+    Plot the sig bars for mean avg err
+    """
+    # reverse order of result_dfs
+    result_dfs = result_dfs[::1]
     sig_result_effs_dict = utils.test_sig(result_dfs)
     # plot abs error
     r = [i for i in range(len(PERCENTILES))]
@@ -137,48 +196,18 @@ def plot_sig_bars(result_dfs):
     non_sig = [i / j * 100 for i,j in zip(plot_df['non_sig'], totals)]
     # plot
     barWidth = 0.85
-    names = [str(i)[:4] for i in  PERCENTILES]
-    # Create green Bars
+    names = [round(i, 2) for i in  PERCENTILES]
+    # Create blue Bars
     plt.bar(r, sig, color='steelblue', edgecolor='white', width=barWidth, label="Significant")
-    # Create orange Bars
+    # Create red Bars
     plt.bar(r, non_sig, bottom=sig, color='maroon', edgecolor='white', width=barWidth, label="Not significant")
     # Custom x axis
     plt.xticks(r, names)
-    plt.xlabel("Linkage percentile")
-    plt.ylabel("Percent of tests significant")
+    plt.xlabel("Distance-based linkage percentile")
+    plt.ylabel("Percent of mutations with significant effect")
     plt.legend()
 
-"""def plot_eff_bars(result_dfs, ct_mut_in_measured_cpg_w_methyl_age_df, max_diff_corr_df):
-    barWidth = .5
-    # limited to significant sites
-    _, _, m_linked_mean_abs_err, m_non_linked_mean_abs_err, stdev_linked_mean_abs_err, stdev_non_linked_mean_abs_err, _, _, _, _, _, _, _, _ = utils.test_sig(result_dfs)
 
-    # make single bar chart for top 100
-    fig, axes = plt.subplots()
-    linked_heights = []
-    nonlinked_heights = []
-    linked_errs = []
-    nonlinked_errs = []
-    for i in range(len(PERCENTILES)):
-        avg_mut_mf_change = ct_mut_in_measured_cpg_w_methyl_age_df[ct_mut_in_measured_cpg_w_methyl_age_df['#id'].isin(max_diff_corr_df.columns)]['difference'].mean()
-        stdev_mut_mf_change = ct_mut_in_measured_cpg_w_methyl_age_df[ct_mut_in_measured_cpg_w_methyl_age_df['#id'].isin(max_diff_corr_df.columns)]['difference'].std()
-        linked_heights.append(m_linked_mean_abs_err[i])
-        nonlinked_heights.append(m_non_linked_mean_abs_err[i])
-        linked_errs.append(stdev_linked_mean_abs_err[i])
-        nonlinked_errs.append(stdev_non_linked_mean_abs_err[i])
-
-    avg_mut_mf_change = np.abs(ct_mut_in_measured_cpg_w_methyl_age_df[ct_mut_in_measured_cpg_w_methyl_age_df['#id'].isin(max_diff_corr_df.columns)]['difference'].mean())
-        
-    x_pos1 = np.arange(0,1.5*len(linked_heights),1.5)  
-    x_pos2 = [x + barWidth for x in x_pos1]
-    axes.bar(x_pos1, linked_heights, width=barWidth, edgecolor='white',capsize=5, color='steelblue', label='Linked')
-    axes.bar(x_pos2, nonlinked_heights, width=barWidth, edgecolor='white',capsize=5, color='skyblue', label='Non-linked')
-    axes.bar(1.5*len(linked_heights), avg_mut_mf_change, width=barWidth, edgecolor='white',capsize=5, color='green', label='Mutated sites')
-    plt.legend()
-    ticks_pos = np.arange(0,1.5*(len(linked_heights)+1),1.5)    
-    plt.xticks(ticks_pos, [str(i)[:4] for i in  np.flip(np.linspace(0.01, .99, 10))] + ['Mut sites'], rotation=45)
-    axes.set_ylabel(r"Average $\Delta$MF")
-    axes.set_xlabel("Linkage percentile")"""
 
 def plot_eff_line(result_dfs, ct_mut_in_measured_cpg_w_methyl_age_df, max_diff_corr_df, sig_only):
     # limited to significant sites
@@ -223,15 +252,18 @@ def plot_eff_violin(result_dfs):
         this_to_plot_df = pd.DataFrame(this_to_plot_dict)
         to_plot_dfs.append(this_to_plot_df)
     to_plot_df = pd.concat(to_plot_dfs)
+    # uncomment next line to reverse for distance-based linkage
+    #to_plot_df['linkage_perc'] = round(1-to_plot_df['linkage_perc'],2)
     # violin plot
-    fig, axes = plt.subplots(figsize=(14, 5))
+    fig, axes = plt.subplots(figsize=(16, 5))
     my_pal = {"Linked": "steelblue", "Non-linked": "skyblue"}
-    p = sns.violinplot(x="linkage_perc", y="MavgErr", hue="Linkage status", data=to_plot_df, palette=my_pal, ax=axes)
-    #p = sns.pointplot(x='linkage_perc', y='MavgErr', data=to_plot_df, ci=None, color='black')
-
-    p.set_xlabel("Linkage percentile")
+    p = sns.violinplot(x="linkage_perc", y="MavgErr", hue="Linkage status", data=to_plot_df, scale="count",palette=my_pal, ax=axes, split=True)
+    p.set_xlabel("Correlation-based linkage percentile")
     p.set_ylabel(r"$\Delta$MF")
     axes.invert_xaxis()
+    # move legend to the bottom right
+    handles, labels = axes.get_legend_handles_labels()
+    axes.legend(handles[::-1], labels[::-1], loc='lower right')
     return 
 
 def count_nearby_muts_one_cpg(cpg_name, all_mut_w_methyl_df, illumina_cpg_locs_df, max_dist = 100000):
@@ -291,7 +323,7 @@ def count_linked_mutations(cpgs_to_count_df,
     for cpg_name, _ in cpgs_to_count_df.iterrows():
         print(cpg_name, flush=True)
         # get this CpG's linked sites
-        linked_sites = select_pos_linked_sites(cpg_name, corr_df, num_sites, percentile_cutoff)
+        linked_sites = select_pos_corr_sites(cpg_name, corr_df, num_sites, percentile_cutoff)
         # count the number of mutations in each of these linked sites
         for linked_site in linked_sites:
             # get mutations that are on the same chr, are within max_dist of the CpG, and are C>T
