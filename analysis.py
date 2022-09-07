@@ -39,21 +39,21 @@ def compare_mf_mutated_sample_vs_avg(ct_mutation_in_measured_cpg_df, out_dir, da
     """
     # output plots of avg vs not
     # histograms
-    fig, axes = plt.subplots()
+    fig, axes = plt.subplots(dpi=200)
     ct_mutation_in_measured_cpg_df[['avg_methyl_frac', 'methyl_fraction']].plot.hist(bins=12, alpha=.7, color=['steelblue', 'maroon'], ax = axes)
-    axes.legend(["Mean of non-mutated sasites of C>T mutation\nevents", "C>T mutation events" ])
+    axes.legend(["Mean of sites of C>T mutation events\n(excluding mutated samples)", "C>T mutation events" ])
     axes.set_ylabel('Count')
     axes.set_xlabel('Methylation fraction')
     fig.savefig(os.path.join(out_dir, '{}_methylation_fraction_comparison.png'.format(dataset)))
 
     # plot average by itself as well
-    fig, axes = plt.subplots(facecolor="white")
+    """fig, axes = plt.subplots(facecolor="white")
     ct_mutation_in_measured_cpg_df['avg_methyl_frac'].plot.hist(ax = axes, bins=12,  color='maroon', alpha=.7)
     axes.set_xlabel("Mean of non-mutated samples at sites of C>T mutation event")
     axes.set_ylabel("Count")
     fig.savefig(os.path.join(out_dir, '{}_avg_methylation_fraction_non_mutated_at_mut_site.png'.format(dataset)))
 
-    
+    """
     # write pvals and effect sizes to file
     with open(os.path.join(out_dir, "{}_methylation_fraction_results.txt".format(dataset)), "w+") as f:
         if JUST_CT:
@@ -69,7 +69,7 @@ def compare_mf_mutated_sample_vs_avg(ct_mutation_in_measured_cpg_df, out_dir, da
         result = stats.binomtest(len(ct_mutation_in_measured_cpg_df[ct_mutation_in_measured_cpg_df['difference']<0]), len(ct_mutation_in_measured_cpg_df), p=0.5, alternative='greater')
         f.write("Binomial test of greater than p=0.5 p-value {}\n".format(result.pvalue))
     # barplot 
-    fig, axes = plt.subplots(facecolor="white")
+    fig, axes = plt.subplots(facecolor="white", dpi=200)
     num_less_zero = len(ct_mutation_in_measured_cpg_df[ct_mutation_in_measured_cpg_df['difference']<0])
     num_greater_zero = len(ct_mutation_in_measured_cpg_df[ct_mutation_in_measured_cpg_df['difference']>0])
     axes.bar( x= ['Decrease', 'Increase'], color = ['darkgrey', 'lightgrey'], edgecolor='black', linewidth=2, height = [num_less_zero, num_greater_zero] )
@@ -94,19 +94,19 @@ def compare_mf_site_of_mutation_vs_not(ct_mutation_in_measured_cpg_df, all_methy
         oddsr, p = stats.fisher_exact(table=contingency_table, alternative='less')
         f.write("Fisher p-value for dsitr. of average methylation fraction at non-mutated CpG sites has greater proportion <.5 than at mutated CpG sites in non-mutated samples: {}".format(p))
     # plot
-    fig, axes = plt.subplots(facecolor="white")
+    fig, axes = plt.subplots(facecolor="white", dpi=200)
     non_mutated_methyl_df_t.loc['mean'] = non_mutated_methyl_df_t.mean()
     non_mutated_methyl_df_t.loc['mean'].plot.hist(ax = axes, color= 'maroon',alpha=0.7, bins=12)
     axes.set_ylabel("Count")
     axes.set_xlabel("Average methylation fraction at CpG sites with no C>T mutation")
     fig.savefig(os.path.join(out_dir, 'avg_methylation_fraction_non_ct_mut_sites.png'))
 
-    fig, axes = plt.subplots(facecolor="white")
+    fig, axes = plt.subplots(facecolor="white", dpi=200)
     weights = np.ones_like(ct_mutation_in_measured_cpg_df['avg_methyl_frac']) / len(ct_mutation_in_measured_cpg_df['avg_methyl_frac'])
-    ct_mutation_in_measured_cpg_df['avg_methyl_frac'].plot.hist(weights=weights,bins=12, ax = axes,alpha=.7, color = 'steelblue')
+    ct_mutation_in_measured_cpg_df['avg_methyl_frac'].plot.hist(weights=weights,bins=12, ax = axes,alpha=.7, color = 'goldenrod')
     weights = np.ones_like(non_mutated_methyl_df_t.loc['mean']) / len(non_mutated_methyl_df_t.loc['mean'])
     non_mutated_methyl_df_t.loc['mean'].plot.hist(weights = weights,bins=12, ax = axes, alpha=.7, color='dimgray')
-    axes.legend(["Sites of C>T\nmutation event", "Sites of no C>T mutation\n event"])
+    axes.legend(["Sites of C>T mutation events\n(including mutated samples)", "Sites of no C>T mutation\n event"])
     axes.set_ylabel("Probability")
     axes.set_xlabel("Mean methylation fraction")
     fig.savefig(os.path.join(out_dir, 'non_mut_vs_mut_site_mf.png'))
@@ -136,7 +136,7 @@ def methylation_fraction_comparison(all_mut_df, illumina_cpg_locs_df, all_methyl
     ct_mutation_in_measured_cpg_df['difference'] = ct_mutation_in_measured_cpg_df['methyl_fraction'] - ct_mutation_in_measured_cpg_df['avg_methyl_frac']
     # test for a difference
     compare_mf_mutated_sample_vs_avg(ct_mutation_in_measured_cpg_df, out_dir)
-    #compare_mf_site_of_mutation_vs_not(ct_mutation_in_measured_cpg_df, all_methyl_df_t, out_dir)
+    compare_mf_site_of_mutation_vs_not(ct_mutation_in_measured_cpg_df, all_methyl_df_t, out_dir)
     
     return ct_mutation_in_measured_cpg_df
 
