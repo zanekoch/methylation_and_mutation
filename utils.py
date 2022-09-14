@@ -7,14 +7,14 @@ from scipy import stats
 import statsmodels.api as sm
 import sys
 from collections import defaultdict
-
+import seaborn as sns
 
 
 # CONSTANTS
 VALID_MUTATIONS = ["C>A", "C>G", "C>T", "T>A", "T>C", "T>G", "G>C","G>A", "A>T", "A>G" , "A>C", "G>T", "C>-"]
 JUST_CT = True
 DATA_SET = "TCGA"
-PERCENTILES = [1]#np.flip(np.linspace(0, 1, 11))
+PERCENTILES = np.flip(np.linspace(0, 1, 11))
 
 
 def get_percentiles():
@@ -389,19 +389,23 @@ def plot_corr_dist_boxplots(corr_dist_df):
     Plots distance vs correlation boxplots
     @ corr_dist_df: dataframe with 2 columns: dists and corrs
     """
-    fig, axes = plt.subplots()
+    fig, axes = plt.subplots(figsize=(7,5), dpi=175)
     bin_edges = [0, 10, 10**3, 10**5, 10**7, 10**9]
 
-
     boxes = [corr_dist_df[(corr_dist_df['dists'] < bin_edges[i+1] ) & (corr_dist_df['dists'] >= bin_edges[i])]['corrs'] for i in range(len(bin_edges)-1)]
-
-
     bp = axes.boxplot(boxes, flierprops=dict(markersize=.1), showfliers=False, labels=[r"$0-10$", r"$10-10^3$", r"$10^3-10^5$", r"$10^5-10^7$", r"$10^7-10^9$"], patch_artist=True, boxprops=dict(facecolor="maroon", alpha=0.7, ))
     # change color of median
     for median in bp['medians']: 
         median.set(color ='black', 
                 linewidth = 1)
+
     axes.set_xlabel("Distance between CpG sites (bp)")
-    axes.set_ylabel("MF Pearson correlation")
+    axes.set_ylabel("Pearson correlation of methylation fraction")
 
+    fig2, axes2 = plt.subplots(figsize=(7,5), dpi=175)
+    bin_edges = [0, 10, 10**3, 10**5, 10**7, 10**9]
 
+    # add a new colmn to corr_dist_df that is the distances binned into bin_edges
+    corr_dist_df['dists_binned'] = pd.cut(corr_dist_df['dists'], bin_edges, labels=[r"$0-10$", r"$10-10^3$", r"$10^3-10^5$", r"$10^5-10^7$", r"$10^7-10^9$"])
+
+    sns.violinplot(data=corr_dist_df, x='dists_binned', y='corrs', ax=axes2, palette='Reds')
