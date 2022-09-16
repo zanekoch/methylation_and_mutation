@@ -352,7 +352,7 @@ def get_distances_one_chrom(chrom_name,
     distances_df = np.abs(distances_df)
     return distances_df
     
-def read_in_result_dfs(result_base_path):
+def read_in_result_dfs(result_base_path, PERCENTILES=PERCENTILES):
     """
     @ result_base_path: path to file of result dfs without PERCENTILE suffix
     @ returns: list of result dataframes
