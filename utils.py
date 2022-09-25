@@ -14,7 +14,7 @@ import seaborn as sns
 VALID_MUTATIONS = ["C>A", "C>G", "C>T", "T>A", "T>C", "T>G", "G>C","G>A", "A>T", "A>G" , "A>C", "G>T", "C>-"]
 JUST_CT = True
 DATA_SET = "TCGA"
-PERCENTILES = np.flip(np.linspace(0, 1, 11))
+PERCENTILES = [1]#np.flip(np.linspace(0, 1, 11))
 
 
 def get_percentiles():
@@ -281,15 +281,9 @@ def test_sig(results_dfs):
         this_result_df = results_dfs[i]
         bonf_p_val = 0.05/len(this_result_df)
         result_metrics_dict['m_avg_err_p'].append(len(this_result_df[this_result_df['p_mean_avg_err'] < bonf_p_val]))
-        result_metrics_dict['m_avg_errs_eff'].append(this_result_df[this_result_df['p_mean_avg_err'] < bonf_p_val]['eff_mean_avg_err'].mean())
-        result_metrics_dict['m_linked_mean_avg_err'].append(this_result_df[this_result_df['p_mean_avg_err'] < bonf_p_val]['linked_mean_avg_err'].mean())
-        result_metrics_dict['m_non_linked_mean_avg_err'].append(this_result_df[this_result_df['p_mean_avg_err'] < bonf_p_val]['non_linked_mean_avg_err'].mean())
-        result_metrics_dict['m_abs_err_p'].append(len(this_result_df[this_result_df['p_mean_abs_err'] < bonf_p_val]))
-        result_metrics_dict['m_abs_errs_eff'].append(this_result_df[this_result_df['p_mean_abs_err'] < bonf_p_val]['eff_mean_abs_err'].mean())
-        result_metrics_dict['m_linked_mean_abs_err'].append(this_result_df['linked_mean_abs_err'].mean())
-        result_metrics_dict['m_non_linked_mean_abs_err'].append(this_result_df['non_linked_mean_abs_err'].mean())
-        result_metrics_dict['stdev_linked_mean_abs_err'].append(this_result_df[this_result_df['p_mean_abs_err'] < bonf_p_val]['linked_mean_abs_err'].std())
-        result_metrics_dict['stdev_non_linked_mean_abs_err'].append(this_result_df[this_result_df['p_mean_abs_err'] < bonf_p_val]['non_linked_mean_abs_err'].std())
+        result_metrics_dict['m_avg_errs_eff'].append(this_result_df[this_result_df['p_mean_avg_err'] < bonf_p_val]['linked_minus_non_delta_mf'].mean())
+        result_metrics_dict['m_linked_mean_avg_err'].append(this_result_df[this_result_df['p_mean_avg_err'] < bonf_p_val]['linked_delta_mf'].mean())
+        result_metrics_dict['m_non_linked_mean_avg_err'].append(this_result_df[this_result_df['p_mean_avg_err'] < bonf_p_val]['non_linked_delta_mf'].mean())
     return result_metrics_dict
 
 def calc_correlation(ct_mut_in_measured_cpg_w_methyl_df, all_methyl_df_t, chr=''):
@@ -358,16 +352,24 @@ def read_in_result_dfs(result_base_path, PERCENTILES=PERCENTILES):
     @ returns: list of result dataframes
     """
     result_dfs = []
+    linked_sites_names_dfs = []
+    linked_sites_diffs_dfs = []
     for i in range(len(PERCENTILES)):
         result_dfs.append(pd.read_parquet(result_base_path + '_' + str(PERCENTILES[i]) + '.parquet'))
-    return result_dfs
+        linked_sites_names_dfs.append(pd.read_parquet(result_base_path + '_linked_sites_names_' + str(PERCENTILES[i]) + '.parquet'))
+        linked_sites_diffs_dfs.append(pd.read_parquet(result_base_path + '_linked_sites_diffs_' + str(PERCENTILES[i]) + '.parquet'))
+    return result_dfs, linked_sites_names_dfs
 
-def write_out_result_dfs(out_dir, name, result_dfs):
+def write_out_results(out_dir, name, result_dfs, linked_sites_names_dfs, linked_sites_diffs_dfs):
     """
-    @ out_dir: path to directory to write out result dfs
+    @ out_dir: path to directory to write out result dfs, linked_sites_names_dfs, and linked_sites_diffs_dfs
     """
     for i in range(len(PERCENTILES)):
         result_dfs[i].to_parquet(out_dir + '/' + name + '_' + str(PERCENTILES[i]) + '.parquet')
+        linked_sites_names_dfs[i].columns = linked_sites_names_dfs[i].columns.astype(str)
+        linked_sites_names_dfs[i].to_parquet(out_dir + '/' + name + '_linked_sites_names_' + str(PERCENTILES[i]) + '.parquet')
+        linked_sites_diffs_dfs[i].columns = linked_sites_diffs_dfs[i].columns.astype(str)
+        linked_sites_diffs_dfs[i].to_parquet(out_dir + '/' + name + '_linked_sites_diffs_' + str(PERCENTILES[i]) + '.parquet')
 
 def get_diff_from_mean(methyl_df_t):
     """
