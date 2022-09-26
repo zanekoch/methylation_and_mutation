@@ -14,7 +14,7 @@ import seaborn as sns
 VALID_MUTATIONS = ["C>A", "C>G", "C>T", "T>A", "T>C", "T>G", "G>C","G>A", "A>T", "A>G" , "A>C", "G>T", "C>-"]
 JUST_CT = True
 DATA_SET = "TCGA"
-PERCENTILES = [1]#np.flip(np.linspace(0, 1, 11))
+PERCENTILES = np.flip(np.linspace(0, 1, 11))
 
 
 def get_percentiles():
