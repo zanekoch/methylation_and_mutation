@@ -8,7 +8,7 @@ from matplotlib import ticker as mticker
 import utils
 import seaborn as sns
 
-PERCENTILES = np.flip(np.linspace(0, 1, 11))
+PERCENTILES = [1]#np.flip(np.linspace(0, 1, 11))
 
 
 def select_corr_sites(in_cpg,
@@ -414,16 +414,16 @@ def plot_linked_site_distances(linked_sites_dfs, distances_df, log=True):
         to_plot_dfs.append(percent_df_stacked)
     to_plot_df = pd.concat(to_plot_dfs)
     # plot the distances as a violion plot for each percentile
-    fig, axes = plt.subplots(figsize=(12, 5))
+    fig, axes = plt.subplots(figsize=(12, 5), dpi=100)
     # log scale y axis
     to_plot_df['log_distance'] = np.log10(to_plot_df['distance'])
     # change to megabases
     to_plot_df['mbp_distance'] = to_plot_df['distance']/1000000
     # plot
     if log:
-        sns.violinplot(data=to_plot_df, ax=axes, cut=0, x='percentile', y='log_distance', color='steelblue', linewidth=2)
+        sns.violinplot(data=to_plot_df, ax=axes, cut=0, x='percentile', y='log_distance', color='steelblue')
     else:
-        sns.violinplot(data=to_plot_df, ax=axes, cut=0, x='percentile', y='mbp_distance', color='steelblue', linewidth=2)
+        sns.violinplot(data=to_plot_df, ax=axes, cut=0, x='percentile', y='mbp_distance', color='steelblue')
     axes.invert_xaxis()
     axes.set_xlabel("Linkage percentile")
     if log:
@@ -438,7 +438,7 @@ def plot_linked_site_distances(linked_sites_dfs, distances_df, log=True):
         tick_range = np.arange(np.floor(ymin), ymax)
         axes.yaxis.set_ticks(tick_range)
         axes.yaxis.set_ticks([np.log10(x) for p in tick_range for x in np.linspace(10 ** p, 10 ** (p + 1), 10)], minor=True)
-
+    # angle x ticks
     return to_plot_df
 
 def plot_distance_vs_eff(linked_distances_df, linked_sites_diffs_df, log=True):

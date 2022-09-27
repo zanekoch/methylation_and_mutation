@@ -14,7 +14,7 @@ import seaborn as sns
 VALID_MUTATIONS = ["C>A", "C>G", "C>T", "T>A", "T>C", "T>G", "G>C","G>A", "A>T", "A>G" , "A>C", "G>T", "C>-"]
 JUST_CT = True
 DATA_SET = "TCGA"
-PERCENTILES = np.flip(np.linspace(0, 1, 11))
+PERCENTILES = [1]#np.flip(np.linspace(0, 1, 11))
 
 
 def get_percentiles():
@@ -404,6 +404,7 @@ def plot_corr_dist_boxplots(corr_dist_df):
     axes.set_xlabel("Distance between CpG sites (bp)")
     axes.set_ylabel("Pearson correlation of methylation fraction")
 
+
     fig2, axes2 = plt.subplots(figsize=(7,5), dpi=175)
     bin_edges = [0, 10, 10**3, 10**5, 10**7, 10**9]
 
@@ -411,3 +412,40 @@ def plot_corr_dist_boxplots(corr_dist_df):
     corr_dist_df['dists_binned'] = pd.cut(corr_dist_df['dists'], bin_edges, labels=[r"$0-10$", r"$10-10^3$", r"$10^3-10^5$", r"$10^5-10^7$", r"$10^7-10^9$"])
 
     sns.violinplot(data=corr_dist_df, x='dists_binned', y='corrs', ax=axes2, palette='Reds')
+
+
+def methylome_pca(all_methyl_df_t, illumina_cpg_locs_df, all_mut_df, num_pcs=5):
+    """
+    @ all_methyl_df: dataframe of methylation data
+    @ returns: pca object
+    """
+    # import PCA and standard scaler
+    from sklearn.decomposition import PCA
+    from sklearn.preprocessing import StandardScaler
+
+    # subset all_methyl_df_t to only include cpgs on chromosome 1
+    methyl_chr1 = all_methyl_df_t.loc[:,set(illumina_cpg_locs_df[illumina_cpg_locs_df['chr'] == '1']['#id'].values) & set(all_methyl_df_t.columns.values)]
+    # scale
+    methyl_chr1_scaled = StandardScaler().fit_transform(methyl_chr1)
+    # pca
+    pca = PCA(n_components=num_pcs)
+    methyl_chr1_tranf = pca.fit_transform(methyl_chr1_scaled)
+    
+    # count c>T mutations for each sample on chr 1, and fill in missing samples with 0
+    mut_counts_by_sample = all_mut_df[(all_mut_df.chr == '1') & (all_mut_df.mutation == 'C>T')]['sample'].value_counts().reindex(all_methyl_df_t.index.values).fillna(0)
+    print(mut_counts_by_sample)
+    # put in same order as methyl_chr1
+    mut_counts_by_sample = mut_counts_by_sample.loc[set(methyl_chr1.index.values) & set(mut_counts_by_sample.index.values)]
+    # measure correlation of each sample projected onto each pc with mut_counts_by_sample
+    pc_corrs_w_mut_counts = [np.corrcoef(mut_counts_by_sample, methyl_chr1_tranf[:,i])[0,1] for i in range(num_pcs)]
+
+    fig, axes = plt.subplots(1,2 , figsize=(12,5), dpi=175)
+    per_var = np.round(pca.explained_variance_ratio_ * 100, decimals=1)
+    labels = ['PC' + str(x) for x in range(1, len(per_var) + 1)]
+    axes[0].bar(x=range(1, len(per_var)+1), height=per_var, tick_label=labels)
+    axes[0].set_ylabel('percentange of explained variance')
+    axes[0].set_xlabel('principal component')
+    # plot correlation of each pc with mut_counts_by_sample
+    axes[1].bar(x=range(1, len(pc_corrs_w_mut_counts)+1), height=pc_corrs_w_mut_counts, tick_label=labels)
+
+    return pca, methyl_chr1_tranf, pc_corrs_w_mut_counts
