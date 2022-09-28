@@ -14,7 +14,7 @@ import seaborn as sns
 VALID_MUTATIONS = ["C>A", "C>G", "C>T", "T>A", "T>C", "T>G", "G>C","G>A", "A>T", "A>G" , "A>C", "G>T", "C>-"]
 JUST_CT = True
 DATA_SET = "TCGA"
-PERCENTILES = [1]#np.flip(np.linspace(0, 1, 11))
+PERCENTILES = np.flip(np.linspace(0, 1, 6))
 
 
 def get_percentiles():
@@ -270,20 +270,18 @@ def calc_correlation(ct_mut_in_measured_cpg_w_methyl_df, all_methyl_df_t, num, c
         corr_matrix_dict[row['#id']] = this_cpg_corr_matrix
     return corr_matrix_dict
 
-def test_sig(results_dfs):
+def test_sig(results_dfs, test='p_wilcoxon'):
     """
-    @ returns: dict of effect sizes for each signfiicant result and metrics
+    @ returns: dict of counts of mutations with significant effects
     """
     # initialize dict of lists
     result_metrics_dict = defaultdict(list)
-
+    # iterate over percentiles, finding mutations with pvalue of impact on linked sites below cutoff
     for i in range(len(PERCENTILES)):
         this_result_df = results_dfs[i]
         bonf_p_val = 0.05/len(this_result_df)
-        result_metrics_dict['m_avg_err_p'].append(len(this_result_df[this_result_df['p_mean_avg_err'] < bonf_p_val]))
-        result_metrics_dict['m_avg_errs_eff'].append(this_result_df[this_result_df['p_mean_avg_err'] < bonf_p_val]['linked_minus_non_delta_mf'].mean())
-        result_metrics_dict['m_linked_mean_avg_err'].append(this_result_df[this_result_df['p_mean_avg_err'] < bonf_p_val]['linked_delta_mf'].mean())
-        result_metrics_dict['m_non_linked_mean_avg_err'].append(this_result_df[this_result_df['p_mean_avg_err'] < bonf_p_val]['non_linked_delta_mf'].mean())
+        result_metrics_dict['p_wilcoxon'].append(len(this_result_df[this_result_df[test] < bonf_p_val]))
+        result_metrics_dict['p_barlett'].append(len(this_result_df[this_result_df[test] < bonf_p_val]))
     return result_metrics_dict
 
 def calc_correlation(ct_mut_in_measured_cpg_w_methyl_df, all_methyl_df_t, chr=''):
@@ -360,7 +358,7 @@ def read_in_result_dfs(result_base_path, PERCENTILES=PERCENTILES):
         linked_sites_diffs_dfs.append(pd.read_parquet(result_base_path + '_linked_sites_diffs_' + str(PERCENTILES[i]) + '.parquet'))
     return result_dfs, linked_sites_names_dfs, linked_sites_diffs_dfs
 
-def write_out_results(out_dir, name, result_dfs, linked_sites_names_dfs, linked_sites_diffs_dfs):
+def write_out_results(out_dir, name, result_dfs, linked_sites_names_dfs, linked_sites_diffs_dfs, linked_sites_pvals_dfs):
     """
     @ out_dir: path to directory to write out result dfs, linked_sites_names_dfs, and linked_sites_diffs_dfs
     """
@@ -370,6 +368,8 @@ def write_out_results(out_dir, name, result_dfs, linked_sites_names_dfs, linked_
         linked_sites_names_dfs[i].to_parquet(out_dir + '/' + name + '_linked_sites_names_' + str(PERCENTILES[i]) + '.parquet')
         linked_sites_diffs_dfs[i].columns = linked_sites_diffs_dfs[i].columns.astype(str)
         linked_sites_diffs_dfs[i].to_parquet(out_dir + '/' + name + '_linked_sites_diffs_' + str(PERCENTILES[i]) + '.parquet')
+        linked_sites_pvals_dfs[i].columns = linked_sites_pvals_dfs[i].columns.astype(str)
+        linked_sites_pvals_dfs[i].to_parquet(out_dir + '/' + name + '_linked_sites_pvals_' + str(PERCENTILES[i]) + '.parquet')
 
 def get_diff_from_mean(methyl_df_t):
     """
@@ -449,3 +449,4 @@ def methylome_pca(all_methyl_df_t, illumina_cpg_locs_df, all_mut_df, num_pcs=5):
     axes[1].bar(x=range(1, len(pc_corrs_w_mut_counts)+1), height=pc_corrs_w_mut_counts, tick_label=labels)
 
     return pca, methyl_chr1_tranf, pc_corrs_w_mut_counts
+
