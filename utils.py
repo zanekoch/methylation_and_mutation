@@ -9,7 +9,6 @@ import sys
 from collections import defaultdict
 import seaborn as sns
 
-
 # CONSTANTS
 VALID_MUTATIONS = ["C>A", "C>G", "C>T", "T>A", "T>C", "T>G", "G>C","G>A", "A>T", "A>G" , "A>C", "G>T", "C>-"]
 JUST_CT = True
@@ -245,7 +244,6 @@ def get_methyl_fractions(ct_mutation_in_measured_cpg_df, all_methyl_df_t):
             methyl_fractions.append(-1)
     return methyl_fractions
 
-
 def get_same_age_means(ct_mutation_in_measured_cpg_df, all_meta_df, all_methyl_df_t):
     means = []
     for i, row in ct_mutation_in_measured_cpg_df.iterrows():
@@ -282,6 +280,7 @@ def test_sig(results_dfs, test='p_wilcoxon'):
         bonf_p_val = 0.05/len(this_result_df)
         result_metrics_dict['p_wilcoxon'].append(len(this_result_df[this_result_df[test] < bonf_p_val]))
         result_metrics_dict['p_barlett'].append(len(this_result_df[this_result_df[test] < bonf_p_val]))
+        result_metrics_dict['sig_mean_linked_delta_mf'].append(this_result_df[this_result_df[test] < bonf_p_val]['mean_linked_delta_mf'].mean())
     return result_metrics_dict
 
 def calc_correlation(ct_mut_in_measured_cpg_w_methyl_df, all_methyl_df_t, chr=''):
@@ -297,7 +296,6 @@ def calc_correlation(ct_mut_in_measured_cpg_w_methyl_df, all_methyl_df_t, chr=''
         corr_matrix_dict[row['#id']] = this_cpg_corr_matrix
     corr_df = pd.DataFrame(corr_matrix_dict)
     return corr_df
-
 
 def EWAS(X, y, out_fn):
     """
@@ -319,7 +317,6 @@ def EWAS(X, y, out_fn):
     out_df.index = X.index
     out_df.to_parquet(out_fn)
     return out_df
-
 
 def get_distances_one_chrom(chrom_name,
                             illumina_cpg_locs_df):
@@ -352,13 +349,21 @@ def read_in_result_dfs(result_base_path, PERCENTILES=PERCENTILES):
     result_dfs = []
     linked_sites_names_dfs = []
     linked_sites_diffs_dfs = []
+    linked_sites_z_pvals_dfs = [] 
+    nonlinked_sites_names_dfs = []
+    nonlinked_sites_diffs_dfs = []
+    nonlinked_sites_z_pvals_dfs = []
     for i in range(len(PERCENTILES)):
         result_dfs.append(pd.read_parquet(result_base_path + '_' + str(PERCENTILES[i]) + '.parquet'))
         linked_sites_names_dfs.append(pd.read_parquet(result_base_path + '_linked_sites_names_' + str(PERCENTILES[i]) + '.parquet'))
         linked_sites_diffs_dfs.append(pd.read_parquet(result_base_path + '_linked_sites_diffs_' + str(PERCENTILES[i]) + '.parquet'))
-    return result_dfs, linked_sites_names_dfs, linked_sites_diffs_dfs
+        linked_sites_z_pvals_dfs.append(pd.read_parquet(result_base_path + '_linked_sites_pvals_' + str(PERCENTILES[i]) + '.parquet'))
+        nonlinked_sites_names_dfs.append(pd.read_parquet(result_base_path + '_nonlinked_sites_names_' + str(PERCENTILES[i]) + '.parquet'))
+        nonlinked_sites_diffs_dfs.append(pd.read_parquet(result_base_path + '_nonlinked_sites_diffs_' + str(PERCENTILES[i]) + '.parquet'))
+        nonlinked_sites_z_pvals_dfs.append(pd.read_parquet(result_base_path + '_nonlinked_sites_pvals_' + str(PERCENTILES[i]) + '.parquet'))
+    return result_dfs, linked_sites_names_dfs, linked_sites_diffs_dfs, linked_sites_z_pvals_dfs, nonlinked_sites_names_dfs, nonlinked_sites_diffs_dfs, nonlinked_sites_z_pvals_dfs
 
-def write_out_results(out_dir, name, result_dfs, linked_sites_names_dfs, linked_sites_diffs_dfs, linked_sites_pvals_dfs):
+def write_out_results(out_dir, name, result_dfs, linked_sites_names_dfs, linked_sites_diffs_dfs, linked_sites_z_pvals_dfs, nonlinked_sites_names_dfs, nonlinked_sites_diffs_dfs, nonlinked_sites_z_pvals_dfs):
     """
     @ out_dir: path to directory to write out result dfs, linked_sites_names_dfs, and linked_sites_diffs_dfs
     """
@@ -368,8 +373,14 @@ def write_out_results(out_dir, name, result_dfs, linked_sites_names_dfs, linked_
         linked_sites_names_dfs[i].to_parquet(out_dir + '/' + name + '_linked_sites_names_' + str(PERCENTILES[i]) + '.parquet')
         linked_sites_diffs_dfs[i].columns = linked_sites_diffs_dfs[i].columns.astype(str)
         linked_sites_diffs_dfs[i].to_parquet(out_dir + '/' + name + '_linked_sites_diffs_' + str(PERCENTILES[i]) + '.parquet')
-        linked_sites_pvals_dfs[i].columns = linked_sites_pvals_dfs[i].columns.astype(str)
-        linked_sites_pvals_dfs[i].to_parquet(out_dir + '/' + name + '_linked_sites_pvals_' + str(PERCENTILES[i]) + '.parquet')
+        linked_sites_z_pvals_dfs[i].columns = linked_sites_z_pvals_dfs[i].columns.astype(str)
+        linked_sites_z_pvals_dfs[i].to_parquet(out_dir + '/' + name + '_linked_sites_pvals_' + str(PERCENTILES[i]) + '.parquet')
+        nonlinked_sites_names_dfs[i].columns = nonlinked_sites_names_dfs[i].columns.astype(str)
+        nonlinked_sites_names_dfs[i].to_parquet(out_dir + '/' + name + '_nonlinked_sites_names_' + str(PERCENTILES[i]) + '.parquet')
+        nonlinked_sites_diffs_dfs[i].columns = nonlinked_sites_diffs_dfs[i].columns.astype(str)
+        nonlinked_sites_diffs_dfs[i].to_parquet(out_dir + '/' + name + '_nonlinked_sites_diffs_' + str(PERCENTILES[i]) + '.parquet')
+        nonlinked_sites_z_pvals_dfs[i].columns = nonlinked_sites_z_pvals_dfs[i].columns.astype(str)
+        nonlinked_sites_z_pvals_dfs[i].to_parquet(out_dir + '/' + name + '_nonlinked_sites_pvals_' + str(PERCENTILES[i]) + '.parquet')
 
 def get_diff_from_mean(methyl_df_t):
     """

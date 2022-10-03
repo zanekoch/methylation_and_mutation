@@ -8,11 +8,12 @@ from matplotlib import ticker as mticker
 import utils
 import seaborn as sns
 from statsmodels.stats.weightstats import ztest as ztest
-from statsmodels.stats.weightstats import ttest_ind as ttest_ind
 import ray
+from rich.progress import track
+import random
+
 
 PERCENTILES = np.flip(np.linspace(0, 1, 6))
-
 
 def select_corr_sites(in_cpg,
                             corr_df,
@@ -26,13 +27,14 @@ def select_corr_sites(in_cpg,
     @ percentile: percentile of sites to select
     @ returns: list of sites to select
     """
-    """# limit to sites posive correlated with in_cpg
-    pos_corr_df = corr_df[corr_df[in_cpg] > 0]"""
     # get the value of the qth percentile cpg site in absolute value so negatively correlated sites are included
     q = np.abs(corr_df[in_cpg]).quantile(percentile, interpolation='lower')
     # select num sites closest to q
     comparison_sites = corr_df.iloc[(np.abs(corr_df[in_cpg]) - q).abs().argsort().iloc[:num], 0].index
     return comparison_sites
+
+def select_random_sites(cpgs_names, num):
+    return np.random.choice(cpgs_names, num, replace=False)
 
 def select_closest_sites_2d_distance(in_cpg,
                          dist_df,
@@ -70,6 +72,18 @@ def select_closest_sites_hic_distance(in_cpg,
     comparison_sites = dist_df.iloc[(dist_df[in_cpg] - q).abs().argsort().iloc[:num], 0].index
     return comparison_sites
 
+def test_linked_vs_nonlinked(linked_diff, nonlinked_diff):
+    """
+    Tests if the mean difference of linked and nonlinked sites is significantly different
+    @ linked_mean_diff: mean difference of linked sites between mutated and non-mutated same age samples
+    @ nonlinked_mean_diff: mean difference of nonlinked sites between mutated and non-mutated same age samples
+    @ returns: list containing p-value of wilcoxon test and barlett's test
+    """
+    # test for diff in distr. of differences of mutated sample and other same age samples at linked vs non inked sites (we expect differences to be larger in magntiude in linked sites)
+    pval_wilc = stats.ranksums(linked_diff, nonlinked_diff, alternative='two-sided').pvalue
+    _, pval_barlett = stats.bartlett(linked_diff['delta_mf'].values, nonlinked_diff['delta_mf'].values)
+    return [pval_wilc, pval_barlett]
+
 def compare_sites(same_age_samples_mf_df, mut_sample_comparison_mfs_df):
     """
     For a given mutation, compare the methylation of input sites (linked or nonlinked) between mutated and non-mutated sample
@@ -77,34 +91,20 @@ def compare_sites(same_age_samples_mf_df, mut_sample_comparison_mfs_df):
     @ mut_sample_comparison_mfs_df: dataframe of methylation values for mutated sample at comparison sites (either linked or nonlinked)
     @ returns: Dataframe with rows being comparison sites, columns MAvgErr (average difference of mutated sample and non mutated sample at the comparison site that is the row) and ztest_pval (which says if the mutated sample was significantly different from the other samples at that site)
     """
-    # subtract mut_sample_comparison_mfs_df from every row in same_age_samples_mf_df
+    # subtract mut_sample_comparison_mfs_df from every row (sample) in same_age_samples_mf_df
     difference_at_comparison_sites = same_age_samples_mf_df.subtract(mut_sample_comparison_mfs_df.iloc[0])
-    mean_diff_each_comparison_site = pd.DataFrame(difference_at_comparison_sites.mean(axis = 0), columns=['MAvgErr'])
-
+    # switch the sign of every entry in difference_at_comparison_sites so that delta_mf is positive if the mutated sample has higher methylation than the other samples and vica versa
+    difference_at_comparison_sites = difference_at_comparison_sites.mul(-1)
+    # take mean to get mean average difference at each site
+    mean_diff_each_comparison_site = pd.DataFrame(difference_at_comparison_sites.mean(axis = 0), columns=['delta_mf'])
     # add mut_sample_comparison_mfs_df as last row of same_age_samples_mf_df
     all_samples_at_comparison_sites = same_age_samples_mf_df.append(mut_sample_comparison_mfs_df)
     # also calculate a z score pvalue for the mut_sample site being different from the non-mutated samples
     mean_diff_each_comparison_site['zscore'] = all_samples_at_comparison_sites.apply(lambda x: stats.zscore(x, nan_policy='omit')[-1], axis=0)
     # get 2-sided pvalues
     mean_diff_each_comparison_site['ztest_pval'] = stats.norm.sf(abs(mean_diff_each_comparison_site['zscore']))*2
-    return mean_diff_each_comparison_site[['MAvgErr','ztest_pval']]
-
-def test_linked_vs_nonlinked(linked_mean_diff, nonlinked_mean_diff):
-    """
-    Tests if the mean difference of linked and nonlinked sites is significantly different
-    @ linked_mean_diff: mean difference of linked sites between mutated and non-mutated same age samples
-    @ nonlinked_mean_diff: mean difference of nonlinked sites between mutated and non-mutated same age samples
-    @ returns: list containing p-value of wilcoxon test, the mean of meanAvgErrs of linked, the mean of meanAvgErrs of nonlinked sites, and the difference between the two
-    """
-    # test for diff in distr. of differences of mutated sample and other same age samples at linked vs non inked sites (we expect differences to be larger in linked sites)
-    pval_wilc = stats.ranksums(linked_mean_diff, nonlinked_mean_diff, alternative='two-sided').pvalue
-    _, pval_barlett = stats.bartlett(linked_mean_diff['MAvgErr'].values, nonlinked_mean_diff['MAvgErr'].values)
-    # get the mean effect across all linked sites
-    # the average of all the the averages of the differences between the mutated sample and the other same age samples at each linked site
-    delta_mf = np.average(linked_mean_diff)
-    # and non-linked sites
-    non_linked_delta_mf = np.average(nonlinked_mean_diff)
-    return [pval_wilc, pval_barlett, delta_mf, non_linked_delta_mf, delta_mf- non_linked_delta_mf]
+    
+    return mean_diff_each_comparison_site[['delta_mf','ztest_pval']]
 
 #@ray.remote
 def effect_one_mutation(mut_linkage_df,
@@ -142,7 +142,6 @@ def effect_one_mutation(mut_linkage_df,
         nonlinked_sites = select_closest_sites_hic_distance(mut_cpg, same_chr_linkage_df, num_linked_sites, 0)
     else:
         raise ValueError("linkage_type must be either 'methylation_corr' or '2d_distance' or 'hic_distance'")
-        # append chosen linked_sites to linked_sites_dict
 
     # get this sample's age and name
     this_age = mut_sample['age_at_index'].to_list()[0]
@@ -155,17 +154,18 @@ def effect_one_mutation(mut_linkage_df,
 
     # measure the change in methylation between linked sites in the mutated sample and in other non-mutated samples of the same age
     # linked_result_df is a dataframe with columns: MabsErr, MavgErr and rows: same age samples and entries the respective metric measuring distance between that sample and mutated sample across all linked sites
-    linked_mean_diff = compare_sites(same_age_samples_mf_df.drop(index = this_sample_name)[linked_sites], mut_sample_linked_mfs_df)
+    linked_diff = compare_sites(same_age_samples_mf_df.drop(index = this_sample_name)[linked_sites], mut_sample_linked_mfs_df)
 
     # do same comparison but seeing if unlinked sites also changed same amount
     mut_sample_nonlinked_mfs_df = all_methyl_age_df_t.loc[this_sample_name, nonlinked_sites]
     # nonlinked_result_df is a dataframe with columns: MabsErr, MavgErr and rows: same age samples and entries the respective metric measuring distance between that sample and mutated sample across all nonlinked sites
-    nonlinked_mean_diff = compare_sites(same_age_samples_mf_df.drop(index = this_sample_name)[nonlinked_sites], mut_sample_nonlinked_mfs_df)
+    nonlinked_diff = compare_sites(same_age_samples_mf_df.drop(index = this_sample_name)[nonlinked_sites], mut_sample_nonlinked_mfs_df)
 
     # compare mut_result_df to nonlinked_result_df to see if there are less significant differences in less linked CpGs
-    this_mut_results = test_linked_vs_nonlinked(linked_mean_diff[['MAvgErr']], nonlinked_mean_diff[['MAvgErr']])
-    return mut_cpg, this_mut_results, linked_sites, linked_mean_diff['MAvgErr'].to_list(), linked_mean_diff['ztest_pval'].to_list()
-    # to create dicitonaries (results, linked_sites_names, diffs, and pvals) out of with key being mut_cpg,
+    this_mut_results = test_linked_vs_nonlinked(linked_diff[['delta_mf']], nonlinked_diff[['delta_mf']])
+
+    # return lists to add to dictionaries
+    return mut_cpg, this_mut_results, linked_sites, linked_diff['delta_mf'].to_list(), linked_diff['ztest_pval'].to_list(), nonlinked_sites, nonlinked_diff['delta_mf'].to_list(), nonlinked_diff['ztest_pval'].to_list()
 
 def measure_mut_eff_on_module(mut_linkage_df,
                                 linkage_type,
@@ -193,33 +193,41 @@ def measure_mut_eff_on_module(mut_linkage_df,
     all_results = []
     linked_sites_names_dict = {}
     linked_site_diffs_dict = {}
-    linked_site_pvals_dict = {}
+    linked_site_z_pvals_dict = {}
+    nonlinked_sites_names_dict = {}
+    nonlinked_site_diffs_dict = {}
+    nonlinked_site_z_pvals_dict = {}
     # run in parallel or not
     if parallel != 0:
-        result_lists = [
+        each_perc_result_lists = [
             effect_one_mutation.remote(mut_linkage_df, linkage_type, all_methyl_age_df_t, mut_in_measured_cpg_w_methyl_age_df, illumina_cpg_locs_df, percentile, num_linked_sites, age_bin_size, mut_cpg) for mut_cpg in mut_linkage_df.columns
         ]
-        result_lists = ray.get(result_list)
+        result_lists = ray.get(each_perc_result_lists)
     else:
-        result_lists = [
-            effect_one_mutation(mut_linkage_df, linkage_type, all_methyl_age_df_t, mut_in_measured_cpg_w_methyl_age_df, illumina_cpg_locs_df, percentile, num_linked_sites, age_bin_size, mut_cpg) for mut_cpg in mut_linkage_df.columns
-        ]
+        each_perc_result_lists = []
+        for mut_cpg in track(mut_linkage_df.columns, description="Analyzing each mutation"):
+            each_perc_result_lists.append(effect_one_mutation(mut_linkage_df, linkage_type, all_methyl_age_df_t, mut_in_measured_cpg_w_methyl_age_df, illumina_cpg_locs_df, percentile, num_linked_sites, age_bin_size, mut_cpg))
     # put the result lists into dictionaries with key being mut_cpg
-    for result_list in result_lists:
-        mut_cpg = result_list[0]
-        all_results.append(result_list[1])
-        linked_sites_names_dict[mut_cpg] = result_list[2]
-        linked_site_diffs_dict[mut_cpg] = result_list[3]
-        linked_site_pvals_dict[mut_cpg] = result_list[4]
+    for this_perc_result_list in each_perc_result_lists:
+        mut_cpg = this_perc_result_list[0]
+        all_results.append(this_perc_result_list[1])
+        linked_sites_names_dict[mut_cpg] = this_perc_result_list[2]
+        linked_site_diffs_dict[mut_cpg] = this_perc_result_list[3]
+        linked_site_z_pvals_dict[mut_cpg] = this_perc_result_list[4]
+        nonlinked_sites_names_dict[mut_cpg] = this_perc_result_list[5]
+        nonlinked_site_diffs_dict[mut_cpg] = this_perc_result_list[6]
+        nonlinked_site_z_pvals_dict[mut_cpg] = this_perc_result_list[7]
 
-    result_df = pd.DataFrame(all_results, columns = ['p_wilcoxon', 'p_barlett', 'linked_delta_mf', 'non_linked_delta_mf', 'linked_minus_non_delta_mf'] )
+
+    result_df = pd.DataFrame(all_results, columns = ['p_wilcoxon', 'p_barlett'] )
     # create linked sites df from linked_sites_dict with keys as index
     linked_sites_names_df = pd.DataFrame.from_dict(linked_sites_names_dict, orient='index')
     linked_sites_diffs_df = pd.DataFrame.from_dict(linked_site_diffs_dict, orient='index')
-    linked_sites_pvals_df = pd.DataFrame.from_dict(linked_site_pvals_dict, orient='index')
-    return result_df, linked_sites_names_df, linked_sites_diffs_df, linked_sites_pvals_df
-
-
+    linked_sites_z_pvals_df = pd.DataFrame.from_dict(linked_site_z_pvals_dict, orient='index')
+    nonlinked_sites_names_df = pd.DataFrame.from_dict(nonlinked_sites_names_dict, orient='index')
+    nonlinked_sites_diffs_df = pd.DataFrame.from_dict(nonlinked_site_diffs_dict, orient='index')
+    nonlinked_sites_z_pvals_df = pd.DataFrame.from_dict(nonlinked_site_z_pvals_dict, orient='index')
+    return result_df, linked_sites_names_df, linked_sites_diffs_df, linked_sites_z_pvals_df, nonlinked_sites_names_df, nonlinked_sites_diffs_df, nonlinked_sites_z_pvals_df
 
 def mutation_eff_varying_linkage(mut_linkage_df,
                                 linkage_type,
@@ -247,15 +255,21 @@ def mutation_eff_varying_linkage(mut_linkage_df,
     result_dfs = []
     linked_sites_names_dfs = []
     linked_sites_diffs_dfs = []
-    linked_sites_pvals_dfs = []
+    linked_sites_z_pvals_dfs = []
+    nonlinked_sites_names_dfs = []
+    nonlinked_sites_diffs_dfs = []
+    nonlinked_sites_z_pvals_dfs = []
     for percentile in PERCENTILES:
         print("Starting percentile: {}".format(percentile))
-        result_df, linked_sites_names_df, linked_sites_diffs_df, linked_sites_pvals_df = measure_mut_eff_on_module(mut_linkage_df, linkage_type, all_methyl_age_df_t, mut_in_measured_cpg_w_methyl_age_df, illumina_cpg_locs_df, percentile, num_linked_sites, age_bin_size)
+        result_df, linked_sites_names_df, linked_sites_diffs_df, linked_sites_z_pvals_df, nonlinked_sites_names_df, nonlinked_sites_diffs_df, nonlinked_sites_z_pvals_df = measure_mut_eff_on_module(mut_linkage_df, linkage_type, all_methyl_age_df_t, mut_in_measured_cpg_w_methyl_age_df, illumina_cpg_locs_df, percentile, num_linked_sites, age_bin_size)
         result_dfs.append(result_df)
         linked_sites_names_dfs.append(linked_sites_names_df)
         linked_sites_diffs_dfs.append(linked_sites_diffs_df)
-        linked_sites_pvals_dfs.append(linked_sites_pvals_df)
-    return result_dfs, linked_sites_names_dfs, linked_sites_diffs_dfs, linked_sites_pvals_dfs
+        linked_sites_z_pvals_dfs.append(linked_sites_z_pvals_df)
+        nonlinked_sites_names_dfs.append(nonlinked_sites_names_df)
+        nonlinked_sites_diffs_dfs.append(nonlinked_sites_diffs_df)
+        nonlinked_sites_z_pvals_dfs.append(nonlinked_sites_z_pvals_df)
+    return result_dfs, linked_sites_names_dfs, linked_sites_diffs_dfs, linked_sites_z_pvals_dfs, nonlinked_sites_names_dfs, nonlinked_sites_diffs_dfs, nonlinked_sites_z_pvals_dfs
 
 def read_correlations(corr_fns, illumina_cpg_locs_df):
     # switch order
@@ -278,37 +292,6 @@ def add_ages_to_methylation(ct_mut_in_measured_cpg_w_methyl_df, all_meta_df, all
     all_methyl_age_df_t = all_meta_df.join(all_methyl_df_t, on =['sample'], rsuffix='_r',how='inner')
     return mut_in_measured_cpg_w_methyl_age_df, all_methyl_age_df_t
     
-def plot_sig_bars(result_dfs, linkage_type, test='p_wilcoxon'):
-    """
-    Plot the sig bars for mean avg err
-    @ result_dfs: list of dataframes, each containing the results for a different percentile
-    @ linkage_type: string, the type of linkage used
-    @ test: string, the test used to determine significance (p_wilcoxon or p_barlett)
-    """
-    # reverse order of result_dfs if 2d_distance
-    if linkage_type == '2d_distance':
-        result_dfs = result_dfs[::-1]
-        
-    sig_result_effs_dict = utils.test_sig(result_dfs)
-    # plot abs error
-    r = [i for i in range(len(PERCENTILES))]
-    raw_data = {'sig': sig_result_effs_dict[test], 'non_sig': [len(result_dfs[0]) - i for i in sig_result_effs_dict[test]] }
-    plot_df = pd.DataFrame(raw_data)
-    totals = [i+j for i,j in zip(plot_df['sig'], plot_df['non_sig'])]
-    sig = [i / j * 100 for i,j in zip(plot_df['sig'], totals)]
-    non_sig = [i / j * 100 for i,j in zip(plot_df['non_sig'], totals)]
-    # plot
-    barWidth = 0.85
-    names = [str(int(round(i, 1)*100))+'%' for i in  PERCENTILES]
-    # Create blue Bars
-    plt.bar(r, sig, color='steelblue', edgecolor='white', width=barWidth, label="Significant")
-    # Create red Bars
-    plt.bar(r, non_sig, bottom=sig, color='maroon', edgecolor='white', width=barWidth, label="Not significant")
-    # Custom x axis
-    plt.xticks(r, names)
-    plt.ylabel("Percent of mutations with significant effect")
-    plt.xlabel("Linkage percentile")
-    plt.legend()
 
 def plot_eff_line(result_dfs, mut_in_measured_cpg_w_methyl_age_df, mut_linkage_df, sig_only, linkage_type):
     """
@@ -361,7 +344,53 @@ def plot_eff_line(result_dfs, mut_in_measured_cpg_w_methyl_age_df, mut_linkage_d
     elif linkage_type == 'hic_distance':
         plt.xlabel("Hi-C distance-based linkage percentile")
 
-def plot_eff_violin(result_dfs, mut_in_measured_cpg_w_methyl_age_df, mut_linkage_df, linkage_type):
+def plot_sig_bars(result_dfs, linkage_type, test='p_wilcoxon'):
+    """
+    Plot the sig bars for mean avg err
+    @ result_dfs: list of dataframes, each containing the results for a different percentile
+    @ linkage_type: string, the type of linkage used
+    @ test: string, the test used to determine significance (p_wilcoxon or p_barlett)
+    """
+    # reverse order of result_dfs if 2d_distance
+    if linkage_type == '2d_distance':
+        result_dfs = result_dfs[::-1]
+        
+    sig_result_effs_dict = utils.test_sig(result_dfs)
+    # plot abs error
+    r = [i for i in range(len(PERCENTILES))]
+    raw_data = {'sig': sig_result_effs_dict[test], 'non_sig': [len(result_dfs[0]) - i for i in sig_result_effs_dict[test]] }
+    plot_df = pd.DataFrame(raw_data)
+    totals = [i+j for i,j in zip(plot_df['sig'], plot_df['non_sig'])]
+    sig = [i / j * 100 for i,j in zip(plot_df['sig'], totals)]
+    non_sig = [i / j * 100 for i,j in zip(plot_df['non_sig'], totals)]
+    # plot
+    barWidth = 0.85
+    names = [str(int(round(i, 1)*100))+'%' for i in  PERCENTILES]
+    # Create blue Bars
+    plt.bar(r, sig, color='steelblue', edgecolor='white', width=barWidth, label="Significant")
+    # Create red Bars
+    plt.bar(r, non_sig, bottom=sig, color='maroon', edgecolor='white', width=barWidth, label="Not significant")
+    # Custom x axis
+    plt.xticks(r, names)
+    plt.ylabel("Percent of mutations with significant effect")
+    plt.xlabel("Linkage percentile")
+    plt.legend()
+
+def stack_and_merge(diffs_df, pvals_df):
+    """
+    Take one diffs and one pvals df, stack them and merge
+    """
+    # stack the dfs
+    diffs_df = diffs_df.stack().reset_index()
+    pvals_df = pvals_df.stack().reset_index()
+    # rename the columns
+    diffs_df.columns = ['comparison_site', 'mut_site', 'delta_mf']
+    pvals_df.columns = ['comparison_site', 'mut_site', 'pval']
+    # merge
+    merged_df = pd.merge(diffs_df, pvals_df, on=['comparison_site', 'mut_site'])
+    return merged_df
+
+def plot_eff_violin(result_dfs, mut_in_measured_cpg_w_methyl_age_df, mut_linkage_df, linkage_type, linked_sites_pvals_dfs, linked_sites_diffs_dfs, nonlinked_sites_pvals_dfs, nonlinked_sites_diffs_dfs,  sig_thresh=1):
     """
     Plot the violin plots for mean avg err
     @ result_dfs: list of dataframes, each containing the results for a different percentile
@@ -372,20 +401,32 @@ def plot_eff_violin(result_dfs, mut_in_measured_cpg_w_methyl_age_df, mut_linkage
     # reverse order of result_dfs if 2d_distance
     if linkage_type == '2d_distance':
         result_dfs = result_dfs[::-1]
+        linked_sites_diffs_dfs = linked_sites_diffs_dfs[::-1]
+        linked_sites_pvals_dfs = linked_sites_pvals_dfs[::-1]
 
-    # make a df with columns: linkage percentile, delta MV, linked or not
+    # make a df with columns: linkage percentile, delta_mf, pval, and linkage_status
     to_plot_dfs = []
-    for i in range(len(result_dfs)):
-        this_to_plot_dict = {'delta_mf': result_dfs[i]['linked_delta_mf'].to_list() + result_dfs[i]['non_linked_delta_mf'].to_list(), 'linkage_perc': [int(round(PERCENTILES[i], 1)*100) for j in range(len(result_dfs[i])*2)], 'Linkage status': ["Linked CpGs" for j in range(len(result_dfs[i]))] + ["Non-linked CpGs" for j in range(len(result_dfs[i]))]}
-        this_to_plot_df = pd.DataFrame(this_to_plot_dict)
-        to_plot_dfs.append(this_to_plot_df)
-    to_plot_df = pd.concat(to_plot_dfs)
+    for i in range(len(linked_sites_diffs_dfs)):
+        linked_diffs_pvals = stack_and_merge(linked_sites_diffs_dfs[i], linked_sites_pvals_dfs[i])
+        # add a column for the linkage percentile
+        linked_diffs_pvals['Linkage percentile'] = int(round(PERCENTILES[i], 1)*100)
+        # also stack and merge the nonlinked_sites_diffs_dfs and nonlinked_sites_pvals_dfs
+        nonlinked_diffs_pvals = stack_and_merge(nonlinked_sites_diffs_dfs[i], nonlinked_sites_pvals_dfs[i])
+        nonlinked_diffs_pvals['Linkage percentile'] = int(round(PERCENTILES[i], 1)*100)
+        # concat these two dfs
+        to_plot_df = pd.concat([linked_diffs_pvals, nonlinked_diffs_pvals], axis=0)
+        # add a column for the linkage status
+        to_plot_df['Linkage status'] = ["Linked CpGs" for _ in range(len(linked_diffs_pvals))] + ["Non-linked CpGs" for _ in range(len(nonlinked_diffs_pvals))]
+        to_plot_dfs.append(to_plot_df)
+    # concat all the dfs
+    to_plot_df = pd.concat(to_plot_dfs, axis=0)
+    # subset to only the significant sites
+    to_plot_df = to_plot_df[to_plot_df['pval'] < sig_thresh]
 
     # violin plot of the mean avg err for each linkage percentile
-    _, axes = plt.subplots(1, 2, figsize=(20, 5), gridspec_kw={'width_ratios': [1, 6]}, sharey=False, constrained_layout=True)
+    _, axes = plt.subplots(1, 2, figsize=(20, 5), gridspec_kw={'width_ratios': [1, 6]}, sharey=True, constrained_layout=True)
     my_pal = {"Linked CpGs": "steelblue", "Non-linked CpGs": "skyblue"}
-    p = sns.violinplot(x="linkage_perc", y="delta_mf", hue="Linkage status", data=to_plot_df, scale="width", palette=my_pal, ax=axes[1], split=True, cut=0, linewidth=2)
-    p.set_xlabel("Linkage percentile")
+    p = sns.violinplot(x="Linkage percentile", y="delta_mf", hue="Linkage status", data=to_plot_df, scale="count", palette=my_pal, ax=axes[1], split=True, cut=0, linewidth=2)
     p.set_ylabel(r"$\Delta$MF")
     axes[1].invert_xaxis()
     # add a % sign after each x tick label
@@ -444,7 +485,7 @@ def plot_linked_site_distances(linked_sites_dfs, distances_df, log=True):
         to_plot_dfs.append(percent_df_stacked)
     to_plot_df = pd.concat(to_plot_dfs)
     # plot the distances as a violion plot for each percentile
-    fig, axes = plt.subplots(figsize=(12, 5), dpi=100)
+    fig, axes = plt.subplots(figsize=(10, 4), dpi=175)
     # log scale y axis
     to_plot_df['log_distance'] = np.log10(to_plot_df['distance'])
     # change to megabases
@@ -500,12 +541,32 @@ def plot_distance_vs_eff(linked_distances_df, linked_sites_diffs_df, log=True):
     cbar.set_label("Number of sites")
     return
 
+def site_characteristics(comparison_sites_df, all_methyl_age_df_t, mut_in_measured_cpg_w_methyl_age_df):
+    """
+    Return the average methylation fraction of each site in sites_df
+    @ sites_df: dataframe with rows corresponding the linked or nonlinks sites for a given mutated site (index value), columns the linked site index, and entries the site name
+    """
+    mean_methyls = {}
+    for mut_site, comparison_sites in comparison_sites_df.iterrows():
+        # get the mean methylation across all samples at the comparison sites
+        mean_comp_methyl = all_methyl_age_df_t.loc[:, comparison_sites].mean(axis=0, skipna=True)
+        mean_methyls[mut_site] = mean_comp_methyl.values
+    mean_methyls_df = pd.DataFrame.from_dict(mean_methyls, orient='index')
+    # set mut_in_measured_cpg_w_methyl_age_df index to be #id
+    mut_in_measured_cpg_w_methyl_age_df = mut_in_measured_cpg_w_methyl_age_df.set_index('#id')
+    # merge the two dfs on index
+    mean_methyls_df = pd.merge(mut_in_measured_cpg_w_methyl_age_df['avg_methyl_frac'], mean_methyls_df, left_index=True, right_index=True)
 
-def plot_hyper_vs_hypo_linked_site_eff(linked_sites_diffs_dfs, linked_sites_names_dfs, mut_in_measured_cpg_w_methyl_age_df, all_methyl_age_df_t):
+    return mean_methyls_df
+    
+    
+
+def plot_hyper_vs_hypo_linked_site_eff(linked_sites_diffs_dfs, linked_sites_names_dfs, linked_sites_pvals_dfs, mut_in_measured_cpg_w_methyl_age_df, all_methyl_age_df_t, sig_thresh=0.05):
     """
     Plot the delta_mf for all combinations of hyper and hypo methylated mutated and linked sites
     @ linked_sites_diffs_dfs: list of dataframes, containing the delta_mf for a certain percentile for every mutated site
     @ linked_sites_names_dfs: list of dataframes, containing the names of the linked sites for a certain percentile for every mutated site
+    @ linked_sites_pvals_dfs: list of dataframes, containing the pvals of the linked sites for a certain percentile for every mutated site
     @ mut_in_measured_cpg_w_methyl_age_df: dataframe, containing the age and average methylation of every mutated site
     @ all_methyl_age_df_t: dataframe, containing the age and average methylation of every cpg site
     @ age_bin_size: int, size of the age bins to use
@@ -513,15 +574,18 @@ def plot_hyper_vs_hypo_linked_site_eff(linked_sites_diffs_dfs, linked_sites_name
     # only do for top percentile
     diffs_df = linked_sites_diffs_dfs[0]
     linked_names_df = linked_sites_names_dfs[0]
-    # cjhange indexes
+    linked_pvals_df = linked_sites_pvals_dfs[0]
+    # change indexes
     mut_in_measured_cpg_w_methyl_age_df = mut_in_measured_cpg_w_methyl_age_df.set_index('#id', drop=True)
     all_methyl_age_df_t = all_methyl_age_df_t.reset_index(drop=True)
     all_methyl_age_df_t['age_at_index'] = all_methyl_age_df_t['age_at_index'].astype(int)
-    # for each row in linked_df
+
+    # get the methylation status of linked sites
     hyper_sites = {}
     hypo_sites = {}
+    # for each row in linked_df
     for mut_site, linked_sites in linked_names_df.iterrows():
-
+        # get the mean methylation across all samples of the linked sites
         mean_linked_methyl = all_methyl_age_df_t.loc[:, linked_sites].mean(axis=0)
         # add the name of each site with mean_linked_methyl > .5 to hyper_methylated
         hyper_sites[mut_site] = (mean_linked_methyl > .5).values
@@ -529,7 +593,8 @@ def plot_hyper_vs_hypo_linked_site_eff(linked_sites_diffs_dfs, linked_sites_name
         hypo_sites[mut_site] = (mean_linked_methyl <= .5).values
     hyper_sites_df = pd.DataFrame.from_dict(hyper_sites, orient='index')
     hypo_sites_df = pd.DataFrame.from_dict(hypo_sites, orient='index')
-    # for each row in hyper_sites_df, get the delta_mf for each hypermethylated site
+
+    # for each row in hyper_sites_df, get the delta_mf for each hypermethylated linked site
     hyper_df = hyper_sites_df.apply(lambda x: diffs_df.loc[x.name, x.values], axis=1)
     # same for hypo
     hypo_df = hypo_sites_df.apply(lambda x: diffs_df.loc[x.name, x.values], axis=1)
@@ -543,22 +608,35 @@ def plot_hyper_vs_hypo_linked_site_eff(linked_sites_diffs_dfs, linked_sites_name
     hypo_df_stacked.columns = ['linked_site_num', 'mutated_site', 'delta_mf']
     hypo_df_stacked['linked_site_num'] = hypo_df_stacked['linked_site_num'].astype(int)
     hypo_df_stacked['Linked site status'] = 'hypo'
-    merged_df = pd.concat([hyper_df_stacked, hypo_df_stacked])
+    delta_mf_by_methy_status = pd.concat([hyper_df_stacked, hypo_df_stacked])
 
-    # get methylation status of mutated sites
+    # get methylation status of the mutated sites
     # subset mut_in_measured_cpg_w_methyl_age_df to only tested sites
     mut_in_measured_cpg_w_methyl_age_df = mut_in_measured_cpg_w_methyl_age_df[mut_in_measured_cpg_w_methyl_age_df.index.isin(diffs_df.index)]
     # get the hyper and hypo sites
     hyper_mut_sites = mut_in_measured_cpg_w_methyl_age_df[mut_in_measured_cpg_w_methyl_age_df['avg_methyl_frac'] > .5].index
-    # add a column to merged_df for hyper or hypo mutated site
-    merged_df['mutated_site_status'] = merged_df['mutated_site'].apply(lambda x: 'Hyper-' if x in hyper_mut_sites else 'Hypo-')
+    # add a column to delta_mf_by_methy_status for hyper or hypo mutated site
+    delta_mf_by_methy_status['mutated_site_status'] = delta_mf_by_methy_status['mutated_site'].apply(lambda x: 'Hyper-' if x in hyper_mut_sites else 'Hypo-')
     # combine Linked site status and mutated site status columns
-    merged_df['Methylation status'] = merged_df['mutated_site_status'] + merged_df['Linked site status']
+    delta_mf_by_methy_status['Methylation status'] = delta_mf_by_methy_status['mutated_site_status'] + delta_mf_by_methy_status['Linked site status']
+
+    # subset to only linked sites that pass the pval threshold
+    pvals_df_stacked = linked_pvals_df.unstack().reset_index().dropna(how='any', axis=0)
+    pvals_df_stacked.columns = ['linked_site_num', 'mutated_site', 'pval']
+    # make column dtypes match
+    delta_mf_by_methy_status['mutated_site'] = delta_mf_by_methy_status['mutated_site'].astype(str)
+    delta_mf_by_methy_status['linked_site_num'] = delta_mf_by_methy_status['linked_site_num'].astype(int)
+    pvals_df_stacked['mutated_site'] = pvals_df_stacked['mutated_site'].astype(str)
+    pvals_df_stacked['linked_site_num'] = pvals_df_stacked['linked_site_num'].astype(int)
+    # join the pvals df to the delta_mf_by_methy_status on mutated site and linked site number
+    delta_mf_by_methy_status = delta_mf_by_methy_status.merge(pvals_df_stacked, on=['mutated_site', 'linked_site_num'])
+    # subset to only rows where pval <= sig_thresh
+    delta_mf_by_methy_status = delta_mf_by_methy_status[delta_mf_by_methy_status['pval'] <= sig_thresh]
 
     # make axes with first axes in 3 to 1 ration to second
-    fig, axes = plt.subplots(1, 2, figsize=(13, 5), dpi=100, gridspec_kw={'width_ratios': [1.25, 1]})
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5), dpi=100, gridspec_kw={'width_ratios': [1.25, 1]})
     # plot seaborn violin plot
-    violin = sns.violinplot(x='Methylation status', y='delta_mf', data=merged_df, palette = ['#1434A4', 'steelblue',  'white', '#2060A7'], ax=axes[0], order = ['Hyper-hyper', 'Hyper-hypo', 'Hypo-hypo', 'Hypo-hyper'])
+    _ = sns.violinplot(x='Methylation status', y='delta_mf', data=delta_mf_by_methy_status, palette = ['#1434A4', 'steelblue',  'white', '#2060A7'], ax=axes[0], order = ['Hyper-hyper', 'Hyper-hypo', 'Hypo-hypo', 'Hypo-hyper'], cut=0)
     # label axes
     axes[0].set_ylabel(r"$\Delta$MF")
     # add line at x = 0
@@ -566,16 +644,16 @@ def plot_hyper_vs_hypo_linked_site_eff(linked_sites_diffs_dfs, linked_sites_name
     # remove x label
     axes[0].set_xlabel('')
     # barplot of proportion of hyper/hypo sites that get mutated with black line around bars
-    hyper_hyper_bar_height = len(merged_df[merged_df['Methylation status'] == 'Hyper-hyper'])
-    hyper_hypo_bar_height = len(merged_df[merged_df['Methylation status'] == 'Hyper-hypo'])
-    hypo_hyper_bar_height = len(merged_df[merged_df['Methylation status'] == 'Hypo-hyper'])
-    hypo_hypo_bar_height = len(merged_df[merged_df['Methylation status'] == 'Hypo-hypo'])
+    hyper_hyper_bar_height = len(delta_mf_by_methy_status[delta_mf_by_methy_status['Methylation status'] == 'Hyper-hyper'])
+    hyper_hypo_bar_height = len(delta_mf_by_methy_status[delta_mf_by_methy_status['Methylation status'] == 'Hyper-hypo'])
+    hypo_hyper_bar_height = len(delta_mf_by_methy_status[delta_mf_by_methy_status['Methylation status'] == 'Hypo-hyper'])
+    hypo_hypo_bar_height = len(delta_mf_by_methy_status[delta_mf_by_methy_status['Methylation status'] == 'Hypo-hypo'])
     axes[1].bar([0, 1, 2, 3], [hyper_hyper_bar_height, hyper_hypo_bar_height, hypo_hypo_bar_height, hypo_hyper_bar_height ], color=['#1434A4', 'steelblue',  'white', '#2060A7'], edgecolor='black')
     # set xticks labels
     axes[1].set_xticks([0, 1, 2, 3])
     axes[1].set_xticklabels(['Hyper-hyper', 'hyper-hypo', 'hypo-hypo', 'hypo-hyper'])
     # label axes
-    axes[1].set_ylabel('Count of\nmutated site-linked site combinations')
+    axes[1].set_ylabel('Count of significant\nmutated site-linked site combinations')
     # super x label
     fig.text(0.5, 0.01, 'Mutated site-linked site methylation status', ha='center', va='center')
     
@@ -752,30 +830,281 @@ def get_hic_distances(in_cpgs, illumina_cpg_locs_df, hic_fn, this_chr_cpgs_all):
     dists_df = pd.DataFrame.from_dict(all_dists_dict, orient='columns')
     return dists_df
 
-def calc_total_mut_impact(result_dfs, linked_sites_names_dfs, linked_sites_diffs_dfs):
+class MethylChangeByAge:
     """
-    Calculates the total impact each of the tested mutations in result_dfs has on the methylation of the linked sites
-    @ result_dfs: list of dataframes of results
-    @ linked_sites_names_dfs: list of dataframes of the linked sites names
-    @ linked_sites_diffs_dfs: list of dataframes of the linked sites delta mfs
-    @ returns: Datafreame of the total impact of each mutation on the linked sites, in positive and negative direction
+    Class that assigns samples to age bins and then calculates observed and predicted mutational methylome difference between age bins
     """
-    # for now only consider the top percentile
-    result_df = result_dfs[0]
-    linked_sites_names_df = linked_sites_names_dfs[0]
-    linked_sites_diffs_df = linked_sites_diffs_dfs[0]
+    def __init__(self, methyl_age_df_t):
+        # TODO: make drop X, Y, MT chroms
+        self.methyl_age_df_t = methyl_age_df_t
 
-    # the sum of all diffs across linked sites of a mutation is the amount of methylation change that is due to the mutation
-    # to preserve directionality, sum all positive values and all negative values in each row of linked_sites_diffs_df
-    linked_sites_diffs_df['pos_eff'] = linked_sites_diffs_df[linked_sites_diffs_df > 0].sum(axis=1)
-    linked_sites_diffs_df['neg_eff'] = linked_sites_diffs_df[linked_sites_diffs_df < 0].sum(axis=1)
+    def split_into_age_bins(self, num_age_bins = 10):
+        """
+        Assign each sample in self.methyl_age_df_t to an age bin
+        """
+        self.methyl_age_df_t["age_bin"] = pd.qcut(self.methyl_age_df_t['age_at_index'], q=num_age_bins, labels=False)
+
+    def get_observed_methylome_diffs(self):
+        """
+        Get sum of positive differences and negative differences between the mean of each consecutive age bin
+        """
+        # get the difference between the mean methylome of each age bin
+        obs_methylome_diffs = self.methyl_age_df_t.groupby(['age_bin']).mean().diff(axis=0)
+        # get sum of positive differences and negative differences between each consecutive age bin
+        obs_methylome_diffs['pos_diff'] = obs_methylome_diffs[obs_methylome_diffs > 0].sum(axis=1)
+        obs_methylome_diffs['neg_diff'] = obs_methylome_diffs[obs_methylome_diffs < 0].sum(axis=1)
+        # drop first row (which is nan) because nothing to compare it to
+        obs_methylome_diffs = obs_methylome_diffs.iloc[1:]
+
+        self.obs_methylome_diffs = obs_methylome_diffs
+        return obs_methylome_diffs
+
+    def get_predicted_methylome_diffs(self, all_mut_df, linked_sites_diffs_dfs, linked_sites_pvals_dfs, pval_cutoff=0.05):
+        """
+        Get the predicted methylome diff for each age bin. 
+        - this is given by the difference in average number of mutations in each age bin and then converted to expected methylome change by MutationImpact
+        """
+        # initialize a MutationImpact object
+        mi = MutationImpact(all_mut_df, linked_sites_diffs_dfs, linked_sites_pvals_dfs)
+        # get the expected methylome change for each sample based on mutations
+        expected_mut_eff = mi.expected_mut_induced_mf_change(pval_cutoff = pval_cutoff)
+        
+        # add ages and age bins to expected_mut_eff by joining to self.methyl_age_df_t
+        expected_mut_eff_w_age = expected_mut_eff.join(self.methyl_age_df_t[['age_at_index', 'age_bin']], on='sample')
+
+        # group by age bin and calc mean of pos_expected_change, pos_standard_err, neg_expected_change, neg_standard_err
+        pred_methylome_diffs = expected_mut_eff_w_age.groupby(['age_bin']).mean()
+        # drop first row/age bin to match observed methylome diffs
+        pred_methylome_diffs = pred_methylome_diffs.iloc[1:]
+        #pred_methylome_diffs = pred_methylome_diffs.iloc[1:]
+
+        self.pred_methylome_diffs = pred_methylome_diffs
+        return pred_methylome_diffs
+
+    def plot_observed_vs_predicted(self):
+        """
+        Create a barplot of observed vs predicted methylome differences for each age bin
+        """
+        # unroll and stack actual_methylome_diffs[['pos_diff', 'neg_diff']]
+        obs_methylome_diffs_unstacked = self.obs_methylome_diffs[['pos_diff', 'neg_diff']].unstack().reset_index()
+        obs_methylome_diffs_unstacked.columns = ['Direction', 'Age bin', 'Methylome difference']
+        obs_methylome_diffs_unstacked['Type'] = "Observed"
+        obs_methylome_diffs_unstacked['Error'] = 0
+        # same for predicted_methylome_diffs
+        pred_methylome_diffs_unstacked = self.pred_methylome_diffs[['pos_expected_change', 'neg_expected_change']].unstack().reset_index()
+        pred_methylome_diffs_unstacked.columns = ['Direction', 'Age bin', 'Methylome difference']
+        pred_methylome_diffs_unstacked['Type'] = "Predicted"
+        # get standard errors for predicted to plot as error bars
+        pred_methylome_diffs_se = self.pred_methylome_diffs[['pos_standard_err', 'neg_standard_err']].unstack().reset_index()
+        pred_methylome_diffs_se.columns = ['Direction', 'Age bin', 'Standard error']
+        # add error column to pred_methylome_diffs_unstacked
+        pred_methylome_diffs_unstacked['Error'] = pred_methylome_diffs_se['Standard error'].values
+        # concat
+        all_methylome_diffs = pd.concat([obs_methylome_diffs_unstacked, pred_methylome_diffs_unstacked])
+        # plot
+        def grouped_barplot(df, cat, subcat, val , err):
+            fig, axes = plt.subplots(1, 1, figsize=(10, 5), dpi=150)
+            u = df[cat].unique()
+            x = np.arange(len(u))
+            subx = df[subcat].unique()
+            offsets = (np.arange(len(subx))-np.arange(len(subx)).mean())/(len(subx)+1.)
+            width= np.diff(offsets).mean()
+            for i,gr in enumerate(subx):
+                dfg = df[df[subcat] == gr]
+                axes.bar(x+offsets[i], dfg[val].values, width=width, 
+                        label="{} {}".format(subcat, gr), yerr=dfg[err].values)
+            axes.set_xlabel(cat)
+            axes.set_ylabel(val)
+            axes.set_xticks(x)
+            axes.set_xticklabels(u)
+            axes.legend()
+        grouped_barplot(all_methylome_diffs, 'Age bin', 'Direction', 'Methylome difference', 'Error')
+
+
+class methylChange:
+    """
+    Class that compares the observed and predicted methylome change between samples
+    """
+    def __init__(self, methyl_age_df_t, all_mut_df,linked_sites_diffs_dfs, linked_sites_pvals_dfs, pval_cutoff=0.05, n_pairs=1000, age_window=5, cancer_type='all'):
+        """
+        Initialize a methylChange object
+        @ methyl_age_df_t: a pandas dataframe of samples x methylation with age column
+        @ all_mut_df: a pandas dataframe of all mutations
+        @ n_pairs: number of pairs of samples to compare
+        @ age_window: the age window to compare samples in [default: 5 years]
+        @ cancer_type: the cancer type to compare samples from [default: all cancers]
+        """
+        self.methyl_age_df_t = methyl_age_df_t
+        self.all_mut_df = all_mut_df
+        self.linked_sites_diffs_dfs = linked_sites_diffs_dfs
+        self.linked_sites_pvals_dfs = linked_sites_pvals_dfs
+        self.pval_cutoff = pval_cutoff
+        self.n_pairs = n_pairs
+        self.age_window = age_window
+        self.cancer_type = cancer_type
+
+    def predict_methylome_diffs(self):
+        """
+        Get the predicted methylome diff for each sample given by number of mutations and their average effecct
+        """
+        # initialize a MutationImpact object
+        mi = MutationImpact(self.all_mut_df, self.linked_sites_diffs_dfs, self.linked_sites_pvals_dfs, self.methyl_age_df_t)
+        # get the expected methylome change for each sample based on mutations
+        expected_mut_eff = mi.expected_mut_induced_mf_change(pval_cutoff = self.pval_cutoff)
+        
+        # add ages and age bins to expected_mut_eff by joining to self.methyl_age_df_t
+        expected_mut_eff_w_age = expected_mut_eff.join(self.methyl_age_df_t[['age_at_index']], on='sample')
+
+        self.expected_mut_eff_w_age = expected_mut_eff_w_age
+        return expected_mut_eff_w_age
+
+    def methylome_diff(self, sample1, sample2):
+        """
+        Get the positive and negative methylome difference between two samples
+        """
+        cpg_cols = self.methyl_age_df_t.columns[2:]
+        # get methylome diff
+        methylome_diff = self.methyl_age_df_t.loc[sample1, cpg_cols] - self.methyl_age_df_t.loc[sample2, cpg_cols]
+        # get positive and negative methylome diff
+        pos_methylome_diff = methylome_diff[methylome_diff > 0].sum()
+        neg_methylome_diff = methylome_diff[methylome_diff < 0].sum()
+        return pos_methylome_diff, neg_methylome_diff
+
+    def compare_pairs(self):
+        """
+        For n_pairs of samples within age_window of eachother, compare their observed and predicted methylome differences
+        """
+        import random
+
+        diff_dict = {}
+        for i in range(self.n_pairs):
+            # choose a random sample from self.methyl_age_df_t.index
+            rand_sample1 = random.choice(self.methyl_age_df_t.index)
+            # get the age of the sample at that index
+            age1 = self.methyl_age_df_t.loc[rand_sample1]['age_at_index']
+            # get all other samples within age_window of that age
+            age_window_samples = self.methyl_age_df_t[(self.methyl_age_df_t['age_at_index'] >= age1 - self.age_window/2) & (self.methyl_age_df_t['age_at_index'] <= age1 + self.age_window/2)]
+            # drop the sample we chose so we don't choose it again
+            age_window_samples = age_window_samples.drop(rand_sample1)
+            # choose a random sample from the age_window_samples to compare with
+            rand_sample2 = random.choice(age_window_samples.index)
+            # get second age
+            age2 = self.methyl_age_df_t.loc[rand_sample2]['age_at_index']
+            # get the methylome diff between the two samples
+            pos_diff, neg_diff = self.methylome_diff(rand_sample1, rand_sample2)
+            # add to results
+            diff_dict[i] = {'sample1': rand_sample1, 'sample2': rand_sample2, 'age1': age1, 'age2': age2, 'obs_pos_diff': pos_diff, 'obs_neg_diff': neg_diff}
+        # convert to dataframe
+        diff_df = pd.DataFrame.from_dict(diff_dict, orient='index')
+        
+        # pre-compute prediction methylome diff for all samples
+        pred_methylome_diffs = self.predict_methylome_diffs()
     
-    return linked_sites_diffs_df[['pos_eff', 'neg_eff']]
+        # join diff_df and pred_methylome_diffs on sample1 and sample2
+        pred_methylome_diffs = pred_methylome_diffs.set_index('sample')
+        # join diff_df to pred_methylome_diffs on sample1
+        diff_df = diff_df.join(pred_methylome_diffs, on='sample1')
+        # join diff_df2 to pred_methylome_diffs on sample2
+        diff_df = diff_df.join(pred_methylome_diffs, on='sample2', rsuffix='_2')
+
+        self.diff_df = diff_df
+        return diff_df
+
+    def plot_methylome_diffs(self):
+        diff_df_unstacked = self.diff_df[['obs_pos_diff', 'obs_neg_diff', 'pos_expected_change', 'neg_expected_change']].unstack().reset_index()
+        diff_df_unstacked.columns = ['Difference type', 'Pair', 'Difference']
+
+        # seaborn bar chart of differences
+        _, axes = plt.subplots(figsize=(6,4), dpi=150)
+        sns.barplot(x='Difference type', y='Difference', data=diff_df_unstacked, ax=axes)
+
+class MutationImpact: 
+    """
+    Class to calculate information the expected impact of mutations on methyome of the set of samples in sample_mut_df.
+    - This the expected impact relative to the same individual with no mutations. 
+    """
+    def __init__(self, sample_mut_df, linked_sites_diffs_dfs, linked_sites_pvals_dfs, methyl_age_df_t):
+        """
+        @ sample_mut_df: df of all mutations
+        @ linked_sites_diffs_dfs: list of dfs of differences in methylation between linked sites
+        @ linked_sites_mwu_pvals_dfs: list of dfs of mwu pvals between linked sites
+        @ pval_cutoff: pval cutoff for significance
+        """
+        # TODO: make drop X, Y, MT chroms
+        self.sample_mut_df = sample_mut_df
+        self.linked_sites_diffs_dfs = linked_sites_diffs_dfs
+        self.linked_sites_pvals_dfs = linked_sites_pvals_dfs
+        self.methyl_age_df_t = methyl_age_df_t
+
+
+    def calc_avg_mut_impact(self, pval_cutoff=0.05):
+        """
+        Calculates the total impact each of the tested mutations in result_dfs has on the methylation of the linked sites
+        """
+        # for now only consider the top percentile
+        # copy so we don't change original
+        linked_sites_diffs_df = self.linked_sites_diffs_dfs[0].copy(deep=True)
+        linked_sites_pvals_df = self.linked_sites_pvals_dfs[0]
+        # set each delta mf to 0 if the corresponding pval in linked_site_mwu_pval_df is above the cutoff
+        linked_sites_diffs_df[linked_sites_pvals_df >= pval_cutoff] = 0
+        # the sum of all diffs across linked sites of a mutation is the amount of methylation change that is due to the mutation
+        # to preserve directionality, sum all positive values and all negative values in each row of linked_sites_diffs_df
+        linked_sites_diffs_df['pos_eff'] = linked_sites_diffs_df[linked_sites_diffs_df > 0].sum(axis=1)
+        linked_sites_diffs_df['neg_eff'] = linked_sites_diffs_df[linked_sites_diffs_df < 0].sum(axis=1)
+        # get median effect and range that contains 95% of the data
+        effect_range_df = linked_sites_diffs_df[['pos_eff', 'neg_eff']].quantile([0.025, 0.5, 0.975], axis=0)
+        # get mean effect and standard error
+        effect_range_df.loc['mean'] = linked_sites_diffs_df[['pos_eff', 'neg_eff']].mean(axis=0)
+        effect_range_df.loc['standard_err'] = linked_sites_diffs_df[['pos_eff', 'neg_eff']].sem(axis=0)
+
+        self.effect_range_df = effect_range_df
+
+    def count_mutation_per_sample(self):
+        """
+        Count the number of mutations in CpGs each sample has
+        """
+        # TODO: change so actually queries if site is a CpG or not
+        # subset to C>T mutations
+        ct_mut_df = self.sample_mut_df[self.sample_mut_df['mutation'] == 'C>T']
+        # count occurences of each sample
+        sample_counts = ct_mut_df['sample'].value_counts()
+        # create df of sample counts
+        sample_mut_counts_df = pd.DataFrame({'sample': sample_counts.index, 'num_mutations': sample_counts.values})
+
+        self.sample_mut_counts_df = sample_mut_counts_df
+
+    def expected_mut_induced_mf_change(self, pval_cutoff=0.05):
+        """
+        Calculates the expected change in methylation for each sample due to mutations
+        @ pval_cutoff: pval cutoff to use for determining if a mutation has an effect on a linked site
+        @ returns: dataframe of the expected change in methylation for each sample due to mutations
+        """
+        # count the number of mutations in CpGs each sample has
+        self.count_mutation_per_sample()
+        # calculate the range of effects mutations had on linked sites
+        self.calc_avg_mut_impact(pval_cutoff)
+        # calculate the expected change in methylation for each sample due to mutations
+        self.sample_mut_counts_df['pos_expected_change'] =  self.sample_mut_counts_df['num_mutations'] *  self.effect_range_df.loc['mean','pos_eff']
+        self.sample_mut_counts_df['pos_standard_err'] =  self.sample_mut_counts_df['num_mutations'] *  self.effect_range_df.loc['standard_err','pos_eff']
+        self.sample_mut_counts_df['neg_expected_change'] =  self.sample_mut_counts_df['num_mutations'] *  self.effect_range_df.loc['mean','neg_eff']
+        self.sample_mut_counts_df['neg_standard_err'] =  self.sample_mut_counts_df['num_mutations'] *  self.effect_range_df.loc['standard_err','neg_eff']
+
+        # get samples in self.methyl_age_df_t that are not in self.sample_mut_counts_df
+        samples_with_no_mutations = self.methyl_age_df_t[~self.methyl_age_df_t.index.isin(self.sample_mut_counts_df['sample'])].index
+        # add each of samples_with_no_mutations to sample_mut_counts_df 0 each column
+        to_add_dict = {}
+        for i in range(len(samples_with_no_mutations)):
+            to_add_dict[i] = [samples_with_no_mutations[i],0, 0, 0, 0, 0]
+        to_add_df = pd.DataFrame.from_dict(to_add_dict, orient='index', columns=['sample', 'num_mutations', 'pos_expected_change', 'pos_standard_err', 'neg_expected_change', 'neg_standard_err'])
+        self.sample_mut_counts_df = self.sample_mut_counts_df.append(to_add_df)
+        # reset index
+        self.sample_mut_counts_df = self.sample_mut_counts_df.reset_index(drop=True)
+
+        return self.sample_mut_counts_df
 
 def main(corr_fns, illumina_cpg_locs_df, ct_mut_in_measured_cpg_w_methyl_df, all_meta_df, all_methyl_df_t, out_dir):
     # read correlations
     corr_df = read_correlations(corr_fns, illumina_cpg_locs_df)
-
 
     # join ages with mutations
     mut_in_measured_cpg_w_methyl_age_df, all_methyl_age_df_t = add_ages_to_methylation(ct_mut_in_measured_cpg_w_methyl_df, all_meta_df, all_methyl_df_t)
