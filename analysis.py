@@ -16,7 +16,6 @@ VALID_MUTATIONS = ["C>A", "C>G", "C>T", "T>A", "T>C", "T>G", "G>C","G>A", "A>T",
 JUST_CT = True
 DATA_SET = "TCGA"
 
-import get_data
 import utils
 
 def plot_mutations(all_mut_df, all_meta_df, dataset_names_list, out_dir, illumina_cpg_locs_df, all_methyl_df_t):
@@ -108,7 +107,6 @@ def compare_mf_site_of_mutation_vs_not(mutation_in_measured_cpg_df, all_methyl_d
         oddsr, p = stats.fisher_exact(table=contingency_table, alternative='less')
         f.write("Fisher p-value for dsitr. of average methylation fraction at non-mutated CpG sites has greater proportion <.5 than at mutated CpG sites in non-mutated samples: {}".format(p))
 
-
     # histogram of average methylation fraction at sites with C>T mutation vs without
     fig, axes = plt.subplots(facecolor="white", dpi=200)
     weights = np.ones_like(mutation_in_measured_cpg_df['avg_methyl_frac']) / len(mutation_in_measured_cpg_df['avg_methyl_frac'])
@@ -120,7 +118,17 @@ def compare_mf_site_of_mutation_vs_not(mutation_in_measured_cpg_df, all_methyl_d
     axes.set_xlabel("Mean methylation fraction")
     fig.savefig(os.path.join(out_dir, 'non_mut_vs_mut_site_mf.png'))
 
-def methylation_fraction_comparison(all_mut_df, illumina_cpg_locs_df, all_methyl_df_t, out_dir, all_meta_df):
+def get_same_age_tissue_means(mut_in_measured_cpg_w_methyl_age_df, all_methyl_age_df_t, age_bin_size = 10):
+    """
+    Get the average MF at the mutated sites in the same age bin range and tissue type as the sample where the mutation occured
+    """
+    # for each mutation in mut_in_measured_cpg_w_methyl_age_df, get the average MF at the same CpG site in the same age bin range and tissue type as the sample where the mutation occured
+    # get the average MF at the same CpG site in the same age bin range and tissue type as the sample where the mutation occured
+
+    mut_in_measured_cpg_w_methyl_age_df['avg_methyl_frac'] = mut_in_measured_cpg_w_methyl_age_df.apply(lambda mut_row: all_methyl_age_df_t[(np.abs(all_methyl_age_df_t['age_at_index'] - mut_row['age_at_index']) <= age_bin_size/2) & (all_methyl_age_df_t['dataset'] == mut_row['dataset'])][mut_row['#id']].mean(), axis=1)
+    return mut_in_measured_cpg_w_methyl_age_df
+
+def methylation_fraction_comparison(all_mut_df, illumina_cpg_locs_df, all_methyl_df_t, out_dir, all_meta_df, age_bin_size = 10):
     """
     Measure the effect a mutation has on MF at that site
     @ returns: pandas dataframe of all mutations in illumina measured CpG sites, their methylation fraction in mutated sample, and average methylation at that site across other samples (within 5 years of age)
@@ -131,24 +139,31 @@ def methylation_fraction_comparison(all_mut_df, illumina_cpg_locs_df, all_methyl
     else:
         mutations_df = all_mut_df
     #for each CpG with methylation data get genomic location of its C
-    mutation_in_measured_cpg_df = utils.join_df_with_illum_cpg(mutations_df, illumina_cpg_locs_df, all_methyl_df_t)
-    methyl_fractions = utils.get_methyl_fractions(mutation_in_measured_cpg_df, all_methyl_df_t)
-    mutation_in_measured_cpg_df['methyl_fraction'] = methyl_fractions
-    # get rid of samples that do not have methylayion data
-    mutation_in_measured_cpg_df = mutation_in_measured_cpg_df[mutation_in_measured_cpg_df['methyl_fraction'] != -1]
-    # get rid of samples that do not have age
-    mutation_in_measured_cpg_df = mutation_in_measured_cpg_df.loc[mutation_in_measured_cpg_df['sample'].isin(all_meta_df.index)]
-    # get means 
-    """mutation_in_measured_cpg_df['avg_methyl_frac'] = utils.get_same_age_means(mutation_in_measured_cpg_df, all_meta_df, all_methyl_df_t)"""
-    mutation_in_measured_cpg_df['avg_methyl_frac'] = all_methyl_df_t[mutation_in_measured_cpg_df['#id']].mean().values
-    # get difference between mean and mutated sample
-    mutation_in_measured_cpg_df['difference'] = mutation_in_measured_cpg_df['methyl_fraction'] - mutation_in_measured_cpg_df['avg_methyl_frac']
-    # test for a difference
-    compare_mf_mutated_sample_vs_avg(mutation_in_measured_cpg_df, out_dir, all_methyl_df_t)
-    """compare_mf_site_of_mutation_vs_not(mutation_in_measured_cpg_df, all_methyl_df_t, out_dir)"""
-    return mutation_in_measured_cpg_df
+    mut_in_measured_cpg_df = utils.join_df_with_illum_cpg(mutations_df, illumina_cpg_locs_df, all_methyl_df_t)
+    methyl_fractions = utils.get_methyl_fractions(mut_in_measured_cpg_df, all_methyl_df_t)
+    mut_in_measured_cpg_df['methyl_fraction'] = methyl_fractions
 
-def main(illumina_cpg_locs_df, out_dir, all_mut_df, all_methyl_df_t, all_meta_df, dataset_names_list):
+    # add ages and datasets to both dfs
+    mut_in_measured_cpg_w_methyl_age_df, all_methyl_age_df_t = utils.add_ages_to_mut_and_methyl(mut_in_measured_cpg_df, all_meta_df, all_methyl_df_t)
+
+    # get rid of samples that do not have methylayion data
+    mut_in_measured_cpg_w_methyl_age_df = mut_in_measured_cpg_w_methyl_age_df[mut_in_measured_cpg_w_methyl_age_df['methyl_fraction'] != -1]
+    # drop samples with nan age value
+    mut_in_measured_cpg_w_methyl_age_df = mut_in_measured_cpg_w_methyl_age_df.dropna(subset=['age_at_index'])
+    
+    # get means 
+    mut_in_measured_cpg_w_methyl_age_df = get_same_age_tissue_means(mut_in_measured_cpg_w_methyl_age_df, all_methyl_age_df_t, age_bin_size = 10)
+    """# old way
+    mutation_in_measured_cpg_df['avg_methyl_frac'] = all_methyl_df_t[mutation_in_measured_cpg_df['#id']].mean().values"""
+
+    # get difference between mean and mutated sample
+    mut_in_measured_cpg_w_methyl_age_df['difference'] = mut_in_measured_cpg_w_methyl_age_df['methyl_fraction'] - mut_in_measured_cpg_w_methyl_age_df['avg_methyl_frac']
+    # test for a difference
+    compare_mf_mutated_sample_vs_avg(mut_in_measured_cpg_w_methyl_age_df, out_dir, all_methyl_df_t)
+    """compare_mf_site_of_mutation_vs_not(mut_in_measured_cpg_w_methyl_age_df, all_methyl_df_t, out_dir)"""
+    return mut_in_measured_cpg_w_methyl_age_df, all_methyl_age_df_t
+
+def main(illumina_cpg_locs_df, out_dir, all_mut_df, all_methyl_df_t, all_meta_df, dataset_names_list, age_bin_size):
     # make output directories
     os.makedirs(out_dir, exist_ok=True)
     os.makedirs(os.path.join(out_dir, "bootstrap"), exist_ok=True)
@@ -158,8 +173,8 @@ def main(illumina_cpg_locs_df, out_dir, all_mut_df, all_methyl_df_t, all_meta_df
     # subset to only C>T mutations
     # TODO: remove this return if possible
     
-    mutation_in_measured_cpg_df = methylation_fraction_comparison(all_mut_df, illumina_cpg_locs_df, all_methyl_df_t, out_dir, all_meta_df)
+    mut_in_measured_cpg_w_methyl_age_df, all_methyl_age_df_t = methylation_fraction_comparison(all_mut_df, illumina_cpg_locs_df, all_methyl_df_t, out_dir, all_meta_df, age_bin_size = age_bin_size)
 
-    return mutation_in_measured_cpg_df
+    return mut_in_measured_cpg_w_methyl_age_df, all_methyl_age_df_t
     
     

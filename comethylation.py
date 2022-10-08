@@ -13,7 +13,7 @@ from rich.progress import track
 import random
 
 
-PERCENTILES = np.flip(np.linspace(0, 1, 6))
+PERCENTILES = [0]#np.flip(np.linspace(0, 1, 6))
 
 def select_corr_sites(in_cpg,
                             corr_df,
@@ -36,19 +36,19 @@ def select_corr_sites(in_cpg,
 def select_random_sites(cpgs_names, num):
     return np.random.choice(cpgs_names, num, replace=False)
 
-def select_random_same_mean_mf_sites(linked_sites, all_methyl_age_df_t):
+def select_random_same_mean_mf_sites(linked_sites, all_methyl_age_df_t, same_age_tissue_samples):
     """
     NOTE: Depending on random variation, may end up returning nonlinked sites with some duplicates.
     Select num_linked_sites nonlinked sites with the same mean methylation fraction as the linked sites
     @ linked_sites: list of linked sites
     @ all_methyl_age_df_t: df of methylation fraction for all sites
-    @ num_linked_sites: number of linked sites
+    @ same_age_tissue_samples: list of samples with same age and tissue as mutated sample
     @ returns: list of nonlinked sites
     """
     # get mean methylation fraction of the chosen linked sites
-    linked_sites_mean_mfs = all_methyl_age_df_t.loc[:, linked_sites].mean(axis=0, skipna=True)
+    linked_sites_mean_mfs = all_methyl_age_df_t.loc[same_age_tissue_samples, linked_sites].mean(axis=0, skipna=True)
     # subset all_methyl_age_df_t to only include sites not in linked sites
-    all_nonlinked_sites_means = all_methyl_age_df_t.loc[:, (~all_methyl_age_df_t.columns.isin(linked_sites)) & (~all_methyl_age_df_t.columns.isin(['age_at_index', 'dataset']))].mean(axis=0, skipna=True)
+    all_nonlinked_sites_means = all_methyl_age_df_t.loc[same_age_tissue_samples, (~all_methyl_age_df_t.columns.isin(linked_sites)) & (~all_methyl_age_df_t.columns.isin(['age_at_index', 'dataset']))].mean(axis=0, skipna=True)
     # for each of the linked sites, select the site with closest mean methylation fraction
     chosen_nonlinked_sites = []
     for mean_mf in linked_sites_mean_mfs.values:
@@ -57,9 +57,7 @@ def select_random_same_mean_mf_sites(linked_sites, all_methyl_age_df_t):
         chosen_nonlinked_sites.append(min_diff_site)
         # drop the chosen site from all_nonlinked_sites_means
         #all_nonlinked_sites_means = all_nonlinked_sites_means.drop(min_diff_site)
-
     return chosen_nonlinked_sites
-
 
 def select_closest_sites_2d_distance(in_cpg,
                          dist_df,
@@ -96,6 +94,7 @@ def select_closest_sites_hic_distance(in_cpg,
     # select num sites closest to q
     comparison_sites = dist_df.iloc[(dist_df[in_cpg] - q).abs().argsort().iloc[:num], 0].index
     return comparison_sites
+
 
 def test_linked_vs_nonlinked(linked_diff, nonlinked_diff):
     """
@@ -140,29 +139,36 @@ def effect_one_mutation(mut_linkage_df,
                             num_linked_sites,
                             age_bin_size,
                             mut_cpg):
-    # get chrom of this site and which sample had this cpg mutated
+    # get chrom of this site
     mut_cpg_chr = illumina_cpg_locs_df[illumina_cpg_locs_df['#id'] == mut_cpg]['chr'].iloc[0]
-    mut_sample = mut_in_measured_cpg_w_methyl_age_df[mut_in_measured_cpg_w_methyl_age_df['#id'] == mut_cpg]
     # limit comparison sites to cpgs on same chrom that are in all_methyl_age_df_t
     same_chr_cpgs = illumina_cpg_locs_df[(illumina_cpg_locs_df['chr'] == mut_cpg_chr) & (illumina_cpg_locs_df['#id'].isin(all_methyl_age_df_t.columns))]['#id'].to_list()
     same_chr_linkage_df = mut_linkage_df.loc[mut_linkage_df.index.isin(same_chr_cpgs)]
-    # drop mut_cpg from same_chr_linkage_df so it is not selected as a comparison site
+    # drop mut_cpg from same_chr_linkage_df so it is not selected as a comparison site 
     same_chr_linkage_df.drop(mut_cpg, axis=0, inplace=True)
+    # get the mutated sample  and the MF's of the same age samples
+    mut_sample, same_age_tissue_samples_mf_df = utils.get_same_age_and_tissue_samples(all_methyl_age_df_t, mut_in_measured_cpg_w_methyl_age_df, age_bin_size, mut_cpg)
+    this_sample_name = mut_sample['case_submitter_id'].to_numpy()[0]
+    # assert that this_sample_name is not in same_age_tissue_samples_mf_df index, and throw and error if it is
+    assert this_sample_name not in same_age_tissue_samples_mf_df.index.to_list(), \
+            f"this_sample_name {this_sample_name} is in same_age_tissue_samples_mf_df index"
     # get comparison sites based on method
     if linkage_type == 'methylation_corr':
         # get the positively correlated sites that are on the same chromosome as the mutated CpG
         linked_sites = select_corr_sites(mut_cpg, same_chr_linkage_df, num_linked_sites, percentile)
-        """# select a random set of num_linked_Sites non-linked sites from all sites on the same chromosome as the mutated CpG except those that are chosen as linked
+        # select a random set of non-linked sites from all sites on the same chromosome
         nonlinked_sites = select_random_sites(same_chr_linkage_df.drop(linked_sites, axis=0).index.to_list(), num_linked_sites)
-        # select randomly chosen nonlinked with approximately the same mean methylation as the linked sites, to control for this factor
-        nonlinked_sites = select_random_same_mean_mf_sites(linked_sites, all_methyl_age_df_t)"""
+        """# select randomly chosen nonlinked with approximately the same mean methylation as the linked sites, to control for this factor
+        nonlinked_sites = select_random_same_mean_mf_sites(linked_sites, all_methyl_age_df_t, same_age_tissue_samples_mf_df.index.to_list())
         # farthest sites are 0th percentile
-        nonlinked_sites = select_corr_sites(mut_cpg, same_chr_linkage_df, num_linked_sites, 0)
+        nonlinked_sites = select_corr_sites(mut_cpg, same_chr_linkage_df, num_linked_sites, 0)"""
     elif linkage_type == '2d_distance':
         # get the closest sites that are on the same chromosome as the mutated CpG
         linked_sites = select_closest_sites_2d_distance(mut_cpg, same_chr_linkage_df, num_linked_sites, percentile)
-        # farthest sites are 100th percentile
-        nonlinked_sites = select_closest_sites_2d_distance(mut_cpg, same_chr_linkage_df, num_linked_sites, 1)
+        """# farthest sites are 100th percentile
+        nonlinked_sites = select_closest_sites_2d_distance(mut_cpg, same_chr_linkage_df, num_linked_sites, 1)"""
+        # select a random set of non-linked sites from all sites on the same chromosome
+        nonlinked_sites = select_random_sites(same_chr_linkage_df.drop(linked_sites, axis=0).index.to_list(), num_linked_sites)
     elif linkage_type == 'hic_distance':
         # get the closest sites that are on the same chromosome as the mutated CpG
         linked_sites = select_closest_sites_hic_distance(mut_cpg, same_chr_linkage_df, num_linked_sites, percentile)
@@ -170,26 +176,25 @@ def effect_one_mutation(mut_linkage_df,
         nonlinked_sites = select_closest_sites_hic_distance(mut_cpg, same_chr_linkage_df, num_linked_sites, 0)
     else:
         raise ValueError("linkage_type must be either 'methylation_corr' or '2d_distance' or 'hic_distance'")
-    # get this sample's age and name
-    this_age = mut_sample['age_at_index'].to_list()[0]
-    this_sample_name = mut_sample['case_submitter_id']
-    # get the mf all other samples of within age_bin_size/2 years of age on either side
-    same_age_samples_mf_df = all_methyl_age_df_t[np.abs(all_methyl_age_df_t['age_at_index'] - this_age) <= age_bin_size/2]
+    # if there are not enough samples of the same age and tissue, warn and skip this site
+    if len(same_age_tissue_samples_mf_df) < 10:
+        print("WARNING: Not enough samples of the same age and tissue to calculate effect of mutation at site: ".format(mut_cpg), flush=True)
+        return None
     # get this mutated sample's MF at comparison sites
     mut_sample_linked_mfs_df = all_methyl_age_df_t.loc[this_sample_name, linked_sites] 
     # measure the change in methylation between linked sites in the mutated sample and in other non-mutated samples of the same age
     # linked_result_df is a dataframe with columns: MabsErr, MavgErr and rows: same age samples and entries the respective metric measuring distance between that sample and mutated sample across all linked sites
-    linked_diff = compare_sites(same_age_samples_mf_df.drop(index = this_sample_name)[linked_sites], mut_sample_linked_mfs_df)
+    linked_diff = compare_sites(same_age_tissue_samples_mf_df[linked_sites], mut_sample_linked_mfs_df)
     # do same comparison but seeing if unlinked sites also changed same amount
     mut_sample_nonlinked_mfs_df = all_methyl_age_df_t.loc[this_sample_name, nonlinked_sites]
     # nonlinked_result_df is a dataframe with columns: MabsErr, MavgErr and rows: same age samples and entries the respective metric measuring distance between that sample and mutated sample across all nonlinked sites
-    nonlinked_diff = compare_sites(same_age_samples_mf_df.drop(index = this_sample_name)[nonlinked_sites], mut_sample_nonlinked_mfs_df)
+    nonlinked_diff = compare_sites(same_age_tissue_samples_mf_df[nonlinked_sites], mut_sample_nonlinked_mfs_df)
     # compare mut_result_df to nonlinked_result_df to see if there are less significant differences in less linked CpGs
     this_mut_results = test_linked_vs_nonlinked(linked_diff[['delta_mf']], nonlinked_diff[['delta_mf']])
     # return lists to add to dictionaries
     return mut_cpg, this_mut_results, linked_sites, linked_diff['delta_mf'].to_list(), linked_diff['ztest_pval'].to_list(), nonlinked_sites, nonlinked_diff['delta_mf'].to_list(), nonlinked_diff['ztest_pval'].to_list()
 
-def measure_mut_eff_on_module(mut_linkage_df,
+def measure_mut_eff(mut_linkage_df,
                                 linkage_type,
                                 all_methyl_age_df_t, 
                                 mut_in_measured_cpg_w_methyl_age_df,
@@ -229,6 +234,8 @@ def measure_mut_eff_on_module(mut_linkage_df,
         each_perc_result_lists = []
         for mut_cpg in track(mut_linkage_df.columns, description="Analyzing each mutation"):
             each_perc_result_lists.append(effect_one_mutation(mut_linkage_df, linkage_type, all_methyl_age_df_t, mut_in_measured_cpg_w_methyl_age_df, illumina_cpg_locs_df, percentile, num_linked_sites, age_bin_size, mut_cpg))
+        # go through each result list and if it is == [None], remove it
+        each_perc_result_lists = [x for x in each_perc_result_lists if x != None]
     # put the result lists into dictionaries with key being mut_cpg
     for this_perc_result_list in each_perc_result_lists:
         mut_cpg = this_perc_result_list[0]
@@ -282,7 +289,7 @@ def mutation_eff_varying_linkage(mut_linkage_df,
     nonlinked_sites_z_pvals_dfs = []
     for percentile in PERCENTILES:
         print("Starting percentile: {}".format(percentile))
-        result_df, linked_sites_names_df, linked_sites_diffs_df, linked_sites_z_pvals_df, nonlinked_sites_names_df, nonlinked_sites_diffs_df, nonlinked_sites_z_pvals_df = measure_mut_eff_on_module(mut_linkage_df, linkage_type, all_methyl_age_df_t, mut_in_measured_cpg_w_methyl_age_df, illumina_cpg_locs_df, percentile, num_linked_sites, age_bin_size)
+        result_df, linked_sites_names_df, linked_sites_diffs_df, linked_sites_z_pvals_df, nonlinked_sites_names_df, nonlinked_sites_diffs_df, nonlinked_sites_z_pvals_df = measure_mut_eff(mut_linkage_df, linkage_type, all_methyl_age_df_t, mut_in_measured_cpg_w_methyl_age_df, illumina_cpg_locs_df, percentile, num_linked_sites, age_bin_size)
         result_dfs.append(result_df)
         linked_sites_names_dfs.append(linked_sites_names_df)
         linked_sites_diffs_dfs.append(linked_sites_diffs_df)
@@ -305,13 +312,6 @@ def read_correlations(corr_fns, illumina_cpg_locs_df):
     # remove cpgs on X and Y chromosomes
     corr_df = corr_df[corr_df.columns[~corr_df.columns.isin(illumina_cpg_locs_df[(illumina_cpg_locs_df['chr'] == 'X') | (illumina_cpg_locs_df['chr'] == 'Y')]['#id'])]]
     return corr_df
-
-def add_ages_to_methylation(ct_mut_in_measured_cpg_w_methyl_df, all_meta_df, all_methyl_df_t):
-    to_join_ct_mut_in_measured_cpg_w_methyl_df = ct_mut_in_measured_cpg_w_methyl_df.rename(columns={'sample':'case_submitter_id'})
-    mut_in_measured_cpg_w_methyl_age_df =  to_join_ct_mut_in_measured_cpg_w_methyl_df.join(all_meta_df, on =['case_submitter_id'], rsuffix='_r',how='inner')
-    # join ages with methylation
-    all_methyl_age_df_t = all_meta_df.join(all_methyl_df_t, on =['sample'], rsuffix='_r',how='inner')
-    return mut_in_measured_cpg_w_methyl_age_df, all_methyl_age_df_t
     
 
 def plot_eff_line(result_dfs, mut_in_measured_cpg_w_methyl_age_df, mut_linkage_df, sig_only, linkage_type):
@@ -417,7 +417,7 @@ def stack_and_merge(diffs_df, pvals_df):
     merged_df = pd.merge(diffs_df, pvals_df, on=['comparison_site', 'mut_site'])
     return merged_df
 
-def plot_eff_violin(result_dfs, mut_in_measured_cpg_w_methyl_age_df, mut_linkage_df, linkage_type, linked_sites_pvals_dfs, linked_sites_diffs_dfs, nonlinked_sites_pvals_dfs, nonlinked_sites_diffs_dfs,  sig_thresh=1):
+def plot_eff_violin(result_dfs, mut_in_measured_cpg_w_methyl_age_df, mut_linkage_df, linkage_type, linked_sites_pvals_dfs, linked_sites_diffs_dfs, nonlinked_sites_pvals_dfs, nonlinked_sites_diffs_dfs, sig_thresh=1, mean = False, absolut = False):
     """
     Plot the violin plots for mean avg err
     @ result_dfs: list of dataframes, each containing the results for a different percentile
@@ -433,12 +433,15 @@ def plot_eff_violin(result_dfs, mut_in_measured_cpg_w_methyl_age_df, mut_linkage
 
     # make a df with columns: linkage percentile, delta_mf, pval, and linkage_status
     to_plot_dfs = []
-    MEAN = False
-    if MEAN:
+    if mean:
         for i in range(len(PERCENTILES)):
             # get mean delta_mf for each mutation in linked and nonlinked sites
-            mean_linked_diff = linked_sites_diffs_dfs[i].mean(axis=1)
-            mean_nonlinked_diff = nonlinked_sites_diffs_dfs[i].mean(axis=1)
+            if absolut:
+                mean_linked_diff = np.abs(linked_sites_diffs_dfs[i]).mean(axis=1)
+                mean_nonlinked_diff = np.abs(nonlinked_sites_diffs_dfs[i]).mean(axis=1)
+            else:
+                mean_linked_diff = linked_sites_diffs_dfs[i].mean(axis=1)
+                mean_nonlinked_diff = nonlinked_sites_diffs_dfs[i].mean(axis=1)
             to_plot_dict = {'delta_mf': mean_linked_diff.to_list() + mean_nonlinked_diff.to_list(), 
                                 'Linkage percentile': [int(round(PERCENTILES[i], 1)*100) for j in range(len(result_dfs[i])*2)],
                                  'Linkage status': ["Linked CpGs" for j in range(len(result_dfs[i]))] + ["Non-linked CpGs" for j in range(len(result_dfs[i]))]}
@@ -465,7 +468,7 @@ def plot_eff_violin(result_dfs, mut_in_measured_cpg_w_methyl_age_df, mut_linkage
         to_plot_df = to_plot_df[to_plot_df['pval'] <= sig_thresh]
 
     # violin plot of the mean avg err for each linkage percentile
-    _, axes = plt.subplots(1, 2, figsize=(20, 5), gridspec_kw={'width_ratios': [1, 6]}, sharey=True, constrained_layout=True)
+    _, axes = plt.subplots(1, 2, figsize=(20, 5) if len(PERCENTILES) > 1 else (10, 5), gridspec_kw={'width_ratios': [1, 6]}, sharey=True, constrained_layout=True)
     my_pal = {"Linked CpGs": "steelblue", "Non-linked CpGs": "skyblue"}
     p = sns.violinplot(x="Linkage percentile", y="delta_mf", hue="Linkage status", data=to_plot_df, scale="area", scale_hue=False, palette=my_pal, ax=axes[1], split=True, cut=0, linewidth=2)
     p.set_ylabel(r"$\Delta$MF")
@@ -526,7 +529,7 @@ def plot_linked_site_distances(linked_sites_dfs, distances_df, log=True):
         to_plot_dfs.append(percent_df_stacked)
     to_plot_df = pd.concat(to_plot_dfs)
     # plot the distances as a violion plot for each percentile
-    fig, axes = plt.subplots(figsize=(10, 4), dpi=175)
+    fig, axes = plt.subplots(figsize=(10, 4), dpi=100)
     # log scale y axis
     to_plot_df['log_distance'] = np.log10(to_plot_df['distance'])
     # change to megabases
