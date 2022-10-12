@@ -463,9 +463,9 @@ def methylome_pca(all_methyl_df_t, illumina_cpg_locs_df, all_mut_df, num_pcs=5):
 
     return pca, methyl_chr1_tranf, pc_corrs_w_mut_counts
 
-def add_ages_to_mut_and_methyl(ct_mut_in_measured_cpg_w_methyl_df, all_meta_df, all_methyl_df_t):
-    to_join_ct_mut_in_measured_cpg_w_methyl_df = ct_mut_in_measured_cpg_w_methyl_df.rename(columns={'sample':'case_submitter_id'})
-    mut_in_measured_cpg_w_methyl_age_df =  to_join_ct_mut_in_measured_cpg_w_methyl_df.join(all_meta_df, on =['case_submitter_id'], rsuffix='_r',how='inner')
+def add_ages_to_mut_and_methyl(mut_in_measured_cpg_w_methyl_df, all_meta_df, all_methyl_df_t):
+    to_join_mut_in_measured_cpg_w_methyl_df = mut_in_measured_cpg_w_methyl_df.rename(columns={'sample':'case_submitter_id'})
+    mut_in_measured_cpg_w_methyl_age_df =  to_join_mut_in_measured_cpg_w_methyl_df.join(all_meta_df, on =['case_submitter_id'], rsuffix='_r',how='inner')
     # join ages with methylation
     all_methyl_age_df_t = all_meta_df.join(all_methyl_df_t, on =['sample'], rsuffix='_r',how='inner')
     return mut_in_measured_cpg_w_methyl_age_df, all_methyl_age_df_t
@@ -490,13 +490,13 @@ def get_same_age_and_tissue_samples(all_methyl_age_df_t, mut_in_measured_cpg_w_m
     same_age_dset_samples_mf_df = same_age_dset_samples_mf_df.drop(index = this_name)
     return mut_sample, same_age_dset_samples_mf_df
 
-def half_of_list(l, which_half):
+def half(l, which_half):
     if which_half == 'first':
         return l[:int(len(l)/2)]
     else:
         return l[int(len(l)/2):]
 
-def plot_heatmap(mut_site, linked_sites_names_df, nonlinked_sites_names_df, mut_in_measured_cpg_w_methyl_age_df, all_methyl_age_df_t, age_bin_size=4):
+def plot_heatmap(mut_site, linked_sites_names_df, nonlinked_sites_names_df, mut_in_measured_cpg_w_methyl_age_df, all_methyl_age_df_t, age_bin_size=10):
     """
     Given a set of linked sites, nonlinked sites, mutated sample, and mutated site, plots a heatmap of the methylation fraction of same age samples at the linked, nonlinked, and mutated sites
     @ mut_site: name of mutated site
@@ -520,9 +520,9 @@ def plot_heatmap(mut_site, linked_sites_names_df, nonlinked_sites_names_df, mut_
     nonlinked_sites = nonlinked_sites_names_df.loc[mut_site].to_numpy()
 
     # list of samples to plot
-    samples_to_plot = np.concatenate((half_of_list(same_age_tissue_samples, 'first'), [mut_sample], half_of_list(same_age_tissue_samples, 'second')))
+    samples_to_plot = np.concatenate((half(same_age_tissue_samples, 'first'), [mut_sample], half(same_age_tissue_samples, 'second')))
     # list of sites to plot
-    sites_to_plot = np.concatenate((half_of_list(nonlinked_sites, 'first'), half_of_list(linked_sites, 'first'), [mut_site], half_of_list(linked_sites, 'second'), half_of_list(nonlinked_sites, 'second')))
+    sites_to_plot = np.concatenate((half(nonlinked_sites, 'first'), half(linked_sites, 'first'), [mut_site], half(linked_sites, 'second'), half(nonlinked_sites, 'second')))
     # select cpgs and samples to plot
     to_plot_df = all_methyl_age_df_t.loc[samples_to_plot, sites_to_plot]
 
