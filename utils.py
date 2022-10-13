@@ -15,11 +15,22 @@ import seaborn as sns
 VALID_MUTATIONS = ["C>A", "C>G", "C>T", "T>A", "T>C", "T>G", "G>C","G>A", "A>T", "A>G" , "A>C", "G>T", "C>-"]
 JUST_CT = True
 DATA_SET = "TCGA"
-PERCENTILES = [0]#np.flip(np.linspace(0, 1, 6))
+
+PERCENTILES = [1]#np.flip(np.linspace(0, 1, 6))
 
 
 def get_percentiles():
     return PERCENTILES
+
+def drop_cpgs_by_chrom(all_methyl_df_t, chroms_to_drop_l, illumina_cpg_locs_df):
+    """
+    @ returns: all_methyl_df_t with cpgs in chroms_to_drop dropped
+    """
+    # get names of all CpGs in chroms_to_drop
+    cpgs_to_drop = illumina_cpg_locs_df[illumina_cpg_locs_df['chr'].isin(chroms_to_drop_l)]['#id']
+    cols_to_keep = set(all_methyl_df_t.columns.to_list()) - set(cpgs_to_drop.to_list())
+    return all_methyl_df_t.loc[:,cols_to_keep]
+
 
 # returns mut_df joined s.t. only mutations that are in measured CpG sites with methylation data remain
 # be aware that drop_duplicates first 
@@ -48,6 +59,24 @@ def join_df_with_illum_cpg(mut_df, illumina_cpg_locs_df, all_methyl_df_t):
     mutation_in_cpg_df = mutation_in_cpg_df[mutation_in_cpg_df['#id'].isin(all_methyl_df_t.columns)]
     mutation_in_cpg_df = mutation_in_cpg_df.loc[mutation_in_cpg_df['sample'].isin(all_methyl_df_t.index)]
     return mutation_in_cpg_df
+
+def site_characteristics(comparison_sites_df, all_methyl_age_df_t, mut_in_measured_cpg_w_methyl_age_df):
+    """
+    Return the methylation fraction of each site in sites_df unrolled
+    @ sites_df: dataframe with rows corresponding the linked or nonlinks sites for a given mutated site (index value), columns the linked site index, and entries the site name
+    """
+    mean_methyls = {}
+    for mut_site, comparison_sites in comparison_sites_df.iterrows():
+        # get the mean methylation across all samples at the comparison sites
+        mean_comp_methyl = all_methyl_age_df_t.loc[:, comparison_sites].mean(axis=0, skipna=True)
+        mean_methyls[mut_site] = mean_comp_methyl.values
+    mean_methyls_df = pd.DataFrame.from_dict(mean_methyls, orient='index')
+    # set mut_in_measured_cpg_w_methyl_age_df index to be #id
+    mut_in_measured_cpg_w_methyl_age_df = mut_in_measured_cpg_w_methyl_age_df.set_index('#id')
+    # merge the two dfs on index
+    mean_methyls_df = pd.merge(mut_in_measured_cpg_w_methyl_age_df['avg_methyl_frac'], mean_methyls_df, left_index=True, right_index=True)
+
+    return mean_methyls_df
 
 def plot_mutation_count_by_age(all_mut_df, all_meta_df, dataset_names_list, out_dir):
     """
@@ -490,50 +519,29 @@ def get_same_age_and_tissue_samples(all_methyl_age_df_t, mut_in_measured_cpg_w_m
     same_age_dset_samples_mf_df = same_age_dset_samples_mf_df.drop(index = this_name)
     return mut_sample, same_age_dset_samples_mf_df
 
+def stack_and_merge(diffs_df, pvals_df):
+    """
+    Take one diffs and one pvals df, stack them and merge
+    """
+    # stack the dfs
+    diffs_df = diffs_df.stack().reset_index()
+    pvals_df = pvals_df.stack().reset_index()
+    # rename the columns
+    diffs_df.columns = ['mut_site', 'comparison_site', 'delta_mf']
+    pvals_df.columns = ['mut_site', 'comparison_site', 'pval']
+    # set comparison site columns to be dytpe = int
+    diffs_df['comparison_site'] = diffs_df['comparison_site'].astype(int)
+    pvals_df['comparison_site'] = pvals_df['comparison_site'].astype(int)
+    # and mut site columns to be dytpe = str
+    diffs_df['mut_site'] = diffs_df['mut_site'].astype(str)
+    pvals_df['mut_site'] = pvals_df['mut_site'].astype(str)
+    # merge
+    merged_df = pd.merge(diffs_df, pvals_df, on=['comparison_site', 'mut_site'])
+    return merged_df
+
 def half(l, which_half):
     if which_half == 'first':
         return l[:int(len(l)/2)]
     else:
         return l[int(len(l)/2):]
 
-def plot_heatmap(mut_site, linked_sites_names_df, nonlinked_sites_names_df, mut_in_measured_cpg_w_methyl_age_df, all_methyl_age_df_t, age_bin_size=10):
-    """
-    Given a set of linked sites, nonlinked sites, mutated sample, and mutated site, plots a heatmap of the methylation fraction of same age samples at the linked, nonlinked, and mutated sites
-    @ mut_site: name of mutated site
-    @ linked_sites_names_df: dataframe of linked sites names
-    @ nonlinked_sites_names_df: dataframe of nonlinked sites names
-    @ mut_in_measured_cpg_w_methyl_age_df: dataframe of mutations in samples
-    @ all_methyl_age_df_t: dataframe of methylation data with ages attached
-    """
-
-    # get the MFs of the same age samples, find which sample had the mutation, and the dataset of this sample
-    mut_sample, same_age_dset_samples_mf_df = get_same_age_and_tissue_samples(all_methyl_age_df_t, 
-                                                                                mut_in_measured_cpg_w_methyl_age_df,
-                                                                                age_bin_size,
-                                                                                mut_site)
-    mut_sample = mut_sample.case_submitter_id.to_numpy()[0]
-    # get list of same age AND same dataset samples
-    same_age_tissue_samples = same_age_dset_samples_mf_df.index
-
-    # get the names of the linked sites and nonlinked sites
-    linked_sites = linked_sites_names_df.loc[mut_site].to_numpy()
-    nonlinked_sites = nonlinked_sites_names_df.loc[mut_site].to_numpy()
-
-    # list of samples to plot
-    samples_to_plot = np.concatenate((half(same_age_tissue_samples, 'first'), [mut_sample], half(same_age_tissue_samples, 'second')))
-    # list of sites to plot
-    sites_to_plot = np.concatenate((half(nonlinked_sites, 'first'), half(linked_sites, 'first'), [mut_site], half(linked_sites, 'second'), half(nonlinked_sites, 'second')))
-    # select cpgs and samples to plot
-    to_plot_df = all_methyl_age_df_t.loc[samples_to_plot, sites_to_plot]
-
-    _, axes = plt.subplots(figsize=(15,10))
-    ax = sns.heatmap(to_plot_df, annot=False, center=0.5, xticklabels=False, yticklabels=False, cmap="Blues", cbar_kws={'label': 'Methylation fraction'}, ax=axes)
-    # highlight the mutated cpg
-    ax.add_patch(Rectangle((int(len(linked_sites)/2) + int(len(nonlinked_sites)/2), int(len(same_age_tissue_samples)/2)), 1, 1, fill=False, edgecolor='red', lw=1.5))
-    axes.set_xlabel("Linked CpG sites")
-    axes.set_ylabel("Samples (same age as mutated sample)")
-    # seperate linked and nonlinked sites with vertical lines
-    axes.axvline(x=int(len(nonlinked_sites)/2), color='red', linestyle='-')
-    axes.axvline(x=int(len(nonlinked_sites)/2) + len(linked_sites), color='red', linestyle='-')
-
-    return
