@@ -394,6 +394,18 @@ def read_in_result_dfs(result_base_path, PERCENTILES=PERCENTILES):
         nonlinked_sites_z_pvals_dfs.append(pd.read_parquet(result_base_path + '_nonlinked_sites_pvals_' + str(PERCENTILES[i]) + '.parquet'))
     return result_dfs, linked_sites_names_dfs, linked_sites_diffs_dfs, linked_sites_z_pvals_dfs, nonlinked_sites_names_dfs, nonlinked_sites_diffs_dfs, nonlinked_sites_z_pvals_dfs
 
+def write_out_results_new(out_dir, name, linked_sites_names_dfs, linked_sites_diffs_dfs, linked_sites_z_pvals_dfs):
+    """
+    @ out_dir: path to directory to write out result dfs, linked_sites_names_dfs, and linked_sites_diffs_dfs
+    """
+    for i in range(len(PERCENTILES)):
+        linked_sites_names_dfs[i].columns = linked_sites_names_dfs[i].columns.astype(str)
+        linked_sites_names_dfs[i].to_parquet(out_dir + '/' + name + '_linked_sites_names_' + str(PERCENTILES[i]) + '.parquet')
+        linked_sites_diffs_dfs[i].columns = linked_sites_diffs_dfs[i].columns.astype(str)
+        linked_sites_diffs_dfs[i].to_parquet(out_dir + '/' + name + '_linked_sites_diffs_' + str(PERCENTILES[i]) + '.parquet')
+        linked_sites_z_pvals_dfs[i].columns = linked_sites_z_pvals_dfs[i].columns.astype(str)
+        linked_sites_z_pvals_dfs[i].to_parquet(out_dir + '/' + name + '_linked_sites_pvals_' + str(PERCENTILES[i]) + '.parquet')
+
 def write_out_results(out_dir, name, result_dfs, linked_sites_names_dfs, linked_sites_diffs_dfs, linked_sites_z_pvals_dfs, nonlinked_sites_names_dfs, nonlinked_sites_diffs_dfs, nonlinked_sites_z_pvals_dfs):
     """
     @ out_dir: path to directory to write out result dfs, linked_sites_names_dfs, and linked_sites_diffs_dfs
@@ -499,25 +511,21 @@ def add_ages_to_mut_and_methyl(mut_in_measured_cpg_w_methyl_df, all_meta_df, all
     all_methyl_age_df_t = all_meta_df.join(all_methyl_df_t, on =['sample'], rsuffix='_r',how='inner')
     return mut_in_measured_cpg_w_methyl_age_df, all_methyl_age_df_t
 
-def get_same_age_and_tissue_samples(all_methyl_age_df_t, mut_in_measured_cpg_w_methyl_age_df, age_bin_size, mut_cpg):
+def get_same_age_and_tissue_samples(methyl_age_df_t, mut_sample_name, age_bin_size = 10):
     """
     Get the sample that has the mutation in the mutated CpG and the samples of the same age as that sample
-    @ all_methyl_age_df_t: dataframe with columns=CpGs and rows=samples and entries=methylation fraction
-    @ mut_in_measured_cpg_w_methyl_age_df
+    @ methyl_age_df_t: dataframe with columns=CpGs and rows=samples and entries=methylation fraction
     @ age_bin_size: size of age bins to use (will be age_bin_size/2 on either side of the mutated sample's age)
-    @ mut_cpg: the mutated CpG
-    @ returns: the mutated sample name and the samples of the same age and dset as the mutated sample
+    @ returns: the methylation fraction for samples of the same age and dset as the mutated sample
     """
-    mut_sample = mut_in_measured_cpg_w_methyl_age_df[mut_in_measured_cpg_w_methyl_age_df['#id'] == mut_cpg]
     # get this sample's age
-    this_age = mut_sample['age_at_index'].to_numpy()[0]
-    this_dset = mut_sample['dataset'].to_numpy()[0]
-    this_name = mut_sample['case_submitter_id'].to_numpy()[0]
+    this_age = methyl_age_df_t.loc[mut_sample_name, 'age_at_index']
+    this_dset = methyl_age_df_t.loc[mut_sample_name, 'dataset']
     # get the mf all other samples of within age_bin_size/2 years of age on either side
-    same_age_dset_samples_mf_df = all_methyl_age_df_t[(np.abs(all_methyl_age_df_t['age_at_index'] - this_age) <= age_bin_size/2) & (all_methyl_age_df_t['dataset'] == this_dset)]
+    same_age_dset_samples_mf_df = methyl_age_df_t[(np.abs(methyl_age_df_t['age_at_index'] - this_age) <= age_bin_size/2) & (methyl_age_df_t['dataset'] == this_dset)]
     # drop the mutated sample
-    same_age_dset_samples_mf_df = same_age_dset_samples_mf_df.drop(index = this_name)
-    return mut_sample, same_age_dset_samples_mf_df
+    same_age_dset_samples_mf_df = same_age_dset_samples_mf_df.drop(index = mut_sample_name)
+    return same_age_dset_samples_mf_df
 
 def stack_and_merge(diffs_df, pvals_df):
     """

@@ -214,14 +214,10 @@ def measure_mut_eff(mut_linkage_df,
     """
     # for each mutated CpG that we have correlation for
     all_results = []
-    linked_sites_names_dict = {}
-    linked_site_diffs_dict = {}
-    linked_site_z_pvals_dict = {}
-    nonlinked_sites_names_dict = {}
-    nonlinked_site_diffs_dict = {}
-    nonlinked_site_z_pvals_dict = {}
+    linked_sites_names_dict, linked_site_diffs_dict, linked_site_z_pvals_dict, nonlinked_sites_names_dict, nonlinked_site_diffs_dict, nonlinked_site_z_pvals_dict = {}, {}, {}, {}, {}, {}
     
     each_perc_result_lists = []
+    # iterate across CpGs we are testing
     for mut_cpg in track(mut_linkage_df.columns, description="Analyzing each mutation"):
         each_perc_result_lists.append(
             effect_one_mutation(mut_linkage_df, linkage_type, all_methyl_age_df_t, mut_in_measured_cpg_w_methyl_age_df, illumina_cpg_locs_df, percentile, num_linked_sites, age_bin_size, mut_cpg)
@@ -238,9 +234,8 @@ def measure_mut_eff(mut_linkage_df,
         nonlinked_sites_names_dict[mut_cpg] = this_perc_result_list[5]
         nonlinked_site_diffs_dict[mut_cpg] = this_perc_result_list[6]
         nonlinked_site_z_pvals_dict[mut_cpg] = this_perc_result_list[7]
-
+    
     result_df = pd.DataFrame(all_results, columns = ['p_wilcoxon', 'p_barlett'] )
-    # create linked sites df from linked_sites_dict with keys as index
     linked_sites_names_df = pd.DataFrame.from_dict(linked_sites_names_dict, orient='index')
     linked_sites_diffs_df = pd.DataFrame.from_dict(linked_site_diffs_dict, orient='index')
     linked_sites_z_pvals_df = pd.DataFrame.from_dict(linked_site_z_pvals_dict, orient='index')
@@ -598,12 +593,12 @@ class mutationScanDistance:
         nearby_site_diffs_df = nearby_site_diffs_df.reset_index().rename(columns = {'index': 'measured_site'})
         return nearby_site_diffs_df
 
-    def look_for_disturbances(self, max_dist=50):
+    def look_for_disturbances(self, max_dist):
         # subset to only mutations that are C>T, non X and Y chromosomes, mutations only those that occured in samples with measured methylation, and select rows in largest 20 percentile of DNA_VAF
         self.mut_df = self.mut_df[self.mut_df['mutation'] == 'C>T']
         self.mut_df = self.mut_df[(self.mut_df['chr'] != 'X') & (self.mut_df['chr'] != 'Y')]
         self.mut_df = self.mut_df[self.mut_df['sample'].isin(self.all_methyl_age_df_t.index)]
-        self.mut_df = self.mut_df[self.mut_df['DNA_VAF'] >= np.percentile(self.mut_df['DNA_VAF'], 75)]
+        """self.mut_df = self.mut_df[self.mut_df['DNA_VAF'] >= np.percentile(self.mut_df['DNA_VAF'], 75)]"""
         # subset illumina_cpg_locs_df to only the CpGs that are measured
         self.illumina_cpg_locs_df = self.illumina_cpg_locs_df[self.illumina_cpg_locs_df['#id'].isin(self.all_methyl_age_df_t.columns)]
 
