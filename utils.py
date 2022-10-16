@@ -10,6 +10,8 @@ import statsmodels.api as sm
 import sys
 from collections import defaultdict
 import seaborn as sns
+from statsmodels.stats.multitest import fdrcorrection
+
 
 # CONSTANTS
 VALID_MUTATIONS = ["C>A", "C>G", "C>T", "T>A", "T>C", "T>G", "G>C","G>A", "A>T", "A>G" , "A>C", "G>T", "C>-"]
@@ -377,22 +379,14 @@ def read_in_result_dfs(result_base_path, PERCENTILES=PERCENTILES):
     @ result_base_path: path to file of result dfs without PERCENTILE suffix
     @ returns: list of result dataframes
     """
-    result_dfs = []
     linked_sites_names_dfs = []
     linked_sites_diffs_dfs = []
     linked_sites_z_pvals_dfs = [] 
-    nonlinked_sites_names_dfs = []
-    nonlinked_sites_diffs_dfs = []
-    nonlinked_sites_z_pvals_dfs = []
     for i in range(len(PERCENTILES)):
-        result_dfs.append(pd.read_parquet(result_base_path + '_' + str(PERCENTILES[i]) + '.parquet'))
         linked_sites_names_dfs.append(pd.read_parquet(result_base_path + '_linked_sites_names_' + str(PERCENTILES[i]) + '.parquet'))
         linked_sites_diffs_dfs.append(pd.read_parquet(result_base_path + '_linked_sites_diffs_' + str(PERCENTILES[i]) + '.parquet'))
         linked_sites_z_pvals_dfs.append(pd.read_parquet(result_base_path + '_linked_sites_pvals_' + str(PERCENTILES[i]) + '.parquet'))
-        nonlinked_sites_names_dfs.append(pd.read_parquet(result_base_path + '_nonlinked_sites_names_' + str(PERCENTILES[i]) + '.parquet'))
-        nonlinked_sites_diffs_dfs.append(pd.read_parquet(result_base_path + '_nonlinked_sites_diffs_' + str(PERCENTILES[i]) + '.parquet'))
-        nonlinked_sites_z_pvals_dfs.append(pd.read_parquet(result_base_path + '_nonlinked_sites_pvals_' + str(PERCENTILES[i]) + '.parquet'))
-    return result_dfs, linked_sites_names_dfs, linked_sites_diffs_dfs, linked_sites_z_pvals_dfs, nonlinked_sites_names_dfs, nonlinked_sites_diffs_dfs, nonlinked_sites_z_pvals_dfs
+    return linked_sites_names_dfs, linked_sites_diffs_dfs, linked_sites_z_pvals_dfs
 
 def write_out_results_new(out_dir, name, linked_sites_names_dfs, linked_sites_diffs_dfs, linked_sites_z_pvals_dfs):
     """
@@ -527,24 +521,36 @@ def get_same_age_and_tissue_samples(methyl_age_df_t, mut_sample_name, age_bin_si
     same_age_dset_samples_mf_df = same_age_dset_samples_mf_df.drop(index = mut_sample_name)
     return same_age_dset_samples_mf_df
 
-def stack_and_merge(diffs_df, pvals_df):
+def stack_and_merge(diffs_df, pvals_df, names_df = None):
     """
     Take one diffs and one pvals df, stack them and merge
     """
     # stack the dfs
     diffs_df = diffs_df.stack().reset_index()
     pvals_df = pvals_df.stack().reset_index()
+    if type(names_df) != type(None):
+        names_df = names_df.stack().reset_index()
     # rename the columns
     diffs_df.columns = ['mut_site', 'comparison_site', 'delta_mf']
     pvals_df.columns = ['mut_site', 'comparison_site', 'pval']
+    if type(names_df) != type(None):
+        names_df.columns = ['mut_site', 'comparison_site', 'linked_site']
     # set comparison site columns to be dytpe = int
     diffs_df['comparison_site'] = diffs_df['comparison_site'].astype(int)
     pvals_df['comparison_site'] = pvals_df['comparison_site'].astype(int)
+    if type(names_df) != type(None):
+        names_df['comparison_site'] = names_df['comparison_site'].astype(int)
     # and mut site columns to be dytpe = str
     diffs_df['mut_site'] = diffs_df['mut_site'].astype(str)
     pvals_df['mut_site'] = pvals_df['mut_site'].astype(str)
+    if type(names_df) != type(None):
+        names_df['mut_site'] = names_df['mut_site'].astype(str)
     # merge
-    merged_df = pd.merge(diffs_df, pvals_df, on=['comparison_site', 'mut_site'])
+    if type(names_df) == type(None):
+        merged_df = pd.merge(diffs_df, pvals_df, on=['comparison_site', 'mut_site'])
+    else:
+        merged_df = pd.merge(diffs_df, pvals_df, on=['comparison_site', 'mut_site'])
+        merged_df = pd.merge(merged_df, names_df, on=['comparison_site', 'mut_site'])
     return merged_df
 
 def half(l, which_half):
@@ -553,3 +559,7 @@ def half(l, which_half):
     else:
         return l[int(len(l)/2):]
 
+def fdr_correct(df, pval_col_name):
+    df = df.dropna(subset=[pval_col_name])
+    df['sig'], df['fdr_pval'] = fdrcorrection(df.loc[:, pval_col_name], alpha=0.05)
+    return df
