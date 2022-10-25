@@ -78,7 +78,7 @@ def effect_one_mutation(all_methyl_age_df_t,
     same_age_tissue_samples_mf_df = utils.get_same_age_and_tissue_samples(this_chr_methyl_age_df_t,mut_sample, age_bin_size)
     same_age_tissue_samples_mf_df.drop(columns=['age_at_index', 'dataset'], inplace=True)
     # if there are not enough samples of the same age and tissue, warn and skip this site
-    if len(same_age_tissue_samples_mf_df) < 10:
+    if len(same_age_tissue_samples_mf_df) <= 10:
         print("WARNING: Not enough samples of the same age and tissue to calculate effect of mutation at site: ".format(mut_cpg), flush=True)
         return None
     # in same_age_tissue_samples_mf_df (which does not include the mutated sample), get the correlation of the mutated site to all other sites

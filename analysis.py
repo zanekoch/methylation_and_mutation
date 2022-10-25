@@ -18,6 +18,21 @@ DATA_SET = "TCGA"
 
 import utils
 
+def plot_mutations_distributions(all_mut_df, out_dir, illumina_cpg_locs_df, all_methyl_df_t):
+    """
+    For each dataset plot distribtion of mutation types, also for just mutations in illumina measured CpG sites
+    """
+    # plot distribution of mutation type all together
+    fig, axes = plt.subplots(figsize=(7,6), facecolor="white")
+    axes = (all_mut_df['mutation'].value_counts() / len(all_mut_df['mutation'])).plot.bar(ax=axes, xlabel="Mutation type", color='maroon', alpha=0.7, ylabel="Proportion of mutations")
+    fig.savefig(os.path.join(out_dir, 'mut_type_count_all_datasets.png'))
+    # plot distribution of just mutations in measured CpG sites
+    fig2, axes2 = plt.subplots(figsize=(7,6), facecolor="white")
+    mut_in_measured_cpg_df = utils.join_df_with_illum_cpg(all_mut_df, illumina_cpg_locs_df, all_methyl_df_t)
+    axes2 = (mut_in_measured_cpg_df['mutation'].value_counts() / len(mut_in_measured_cpg_df['mutation'])).plot.bar(ax=axes2, xlabel="Mutations in measured CpG sites", color='maroon', alpha=0.7,ylabel="Proportion of mutations")
+    fig2.savefig(os.path.join(out_dir, 'mut_type_count_in_measured_cpg_datasets.png'))
+    return mut_in_measured_cpg_df
+
 def plot_mutations(all_mut_df, all_meta_df, dataset_names_list, out_dir, illumina_cpg_locs_df, all_methyl_df_t):
     """
     @ all_mut_df: pandas dataframe of all mutations
@@ -29,7 +44,7 @@ def plot_mutations(all_mut_df, all_meta_df, dataset_names_list, out_dir, illumin
     @ returns: pandas dataframe of all mutations in illumina measured CpG sites
     """
     # for each dataset plot distribtion of all mutations, mutations in CpG sites, and C>T mutations in CpG sites
-    mut_in_measured_cpg_df = utils.plot_mutations_distributions(all_mut_df, out_dir, illumina_cpg_locs_df, all_methyl_df_t)
+    mut_in_measured_cpg_df = plot_mutations_distributions(all_mut_df, out_dir, illumina_cpg_locs_df, all_methyl_df_t)
     # for each dataset plot # of C>T mutations by age
     # TODO: fix plot_mutation_count_by_age to work with PANCAN
     """utils.plot_mutation_count_by_age(all_mut_df, all_meta_df, dataset_names_list, out_dir)"""
@@ -42,16 +57,14 @@ def compare_mf_mutated_sample_vs_avg(mutation_in_measured_cpg_df, out_dir, all_m
     # output plots of avg vs not as seaborn kde's
     fig, axes = plt.subplots(dpi=200)
     non_mutated_methyl_df_t = all_methyl_df_t[all_methyl_df_t.columns[~all_methyl_df_t.columns.isin(mutation_in_measured_cpg_df['#id'])]]
-    # create df of columns methylation, type (avg non mutated, average mutated not mutated site, mutated site)
+    
+    # limit to only big DNA_VAF mutations
+    mutation_in_measured_cpg_df = mutation_in_measured_cpg_df[mutation_in_measured_cpg_df['DNA_VAF'] >.5]
     to_plot_df = pd.DataFrame(pd.concat([mutation_in_measured_cpg_df['avg_methyl_frac'], mutation_in_measured_cpg_df['methyl_fraction'], non_mutated_methyl_df_t.mean(axis=0)], axis=0)).reset_index(drop=True)
     to_plot_df.columns = ['Methylation Fraction']
     to_plot_df['Type'] = ['Non mutated CpGs'] * len(mutation_in_measured_cpg_df['avg_methyl_frac']) +  ['Mutated CpGs'] * len(mutation_in_measured_cpg_df['methyl_fraction']) + ['Site of no CpG mutation'] * len(non_mutated_methyl_df_t.mean(axis=0))
     # seaborn kde plot
-    p = sns.kdeplot(data=to_plot_df, x='Methylation Fraction', hue='Type', fill=True, common_norm=False, clip=[0,1], palette = ['steelblue', 'maroon', 'grey'], ax=axes)
-    sns.move_legend(p, "upper center")
-    """# second option
-    fig, axes = plt.subplots(dpi=200)
-    p2 = sns.histplot(data=to_plot_df, x='Methylation Fraction', hue='Type',stat="probability", kde=True, common_norm=False, bins=20, palette = ['steelblue', 'maroon', 'grey'], ax = axes)"""
+    p = sns.kdeplot(data=to_plot_df, x='Methylation Fraction', hue='Type', fill=True, common_norm=False, clip=[0,1], palette = ['steelblue', 'maroon', 'grey'], ax=axes, legend=False)
 
     fig.savefig(os.path.join(out_dir, '{}_methylation_fraction_comparison.png'.format(dataset)))
 

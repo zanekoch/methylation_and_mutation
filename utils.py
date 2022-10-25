@@ -250,20 +250,6 @@ def plot_mutation_count_by_age(all_mut_df, all_meta_df, dataset_names_list, out_
         fig.savefig(os.path.join(out_dir, 'ct_mut_count_by_age_each_dataset.png'))
     return
 
-def plot_mutations_distributions(all_mut_df, out_dir, illumina_cpg_locs_df, all_methyl_df_t):
-    """
-    For each dataset plot distribtion of mutation types, also for just mutations in illumina measured CpG sites
-    """
-    # plot distribution of mutation type all together
-    fig, axes = plt.subplots(figsize=(7,6), facecolor="white")
-    axes = all_mut_df['mutation'].value_counts().plot.bar(ax=axes, xlabel="Mutation in any sample", color='steelblue', alpha=0.7, ylabel="Count")
-    fig.savefig(os.path.join(out_dir, 'mut_type_count_all_datasets.png'))
-    # plot distribution of just mutations in measured CpG sites
-    fig2, axes2 = plt.subplots(figsize=(7,6), facecolor="white")
-    mut_in_measured_cpg_df = join_df_with_illum_cpg(all_mut_df, illumina_cpg_locs_df, all_methyl_df_t)
-    axes2 = mut_in_measured_cpg_df['mutation'].value_counts().plot.bar(ax=axes2, xlabel="Mutation in any sample in measured CpG", color='steelblue', alpha=0.7,ylabel="Count")
-    fig2.savefig(os.path.join(out_dir, 'mut_type_count_in_measured_cpg_datasets.png'))
-    return mut_in_measured_cpg_df
 
 def get_methyl_fractions(ct_mutation_in_measured_cpg_df, all_methyl_df_t):
     methyl_fractions = []
