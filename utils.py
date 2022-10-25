@@ -1,6 +1,8 @@
+from random import Random
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.patches import Rectangle
 plt.style.use("seaborn-deep")
 import os 
 from scipy import stats
@@ -8,17 +10,29 @@ import statsmodels.api as sm
 import sys
 from collections import defaultdict
 import seaborn as sns
+from statsmodels.stats.multitest import fdrcorrection
 
 
 # CONSTANTS
 VALID_MUTATIONS = ["C>A", "C>G", "C>T", "T>A", "T>C", "T>G", "G>C","G>A", "A>T", "A>G" , "A>C", "G>T", "C>-"]
 JUST_CT = True
 DATA_SET = "TCGA"
-PERCENTILES = np.flip(np.linspace(0, 1, 11))
+
+PERCENTILES = [1]#np.flip(np.linspace(0, 1, 6))
 
 
 def get_percentiles():
     return PERCENTILES
+
+def drop_cpgs_by_chrom(all_methyl_df_t, chroms_to_drop_l, illumina_cpg_locs_df):
+    """
+    @ returns: all_methyl_df_t with cpgs in chroms_to_drop dropped
+    """
+    # get names of all CpGs in chroms_to_drop
+    cpgs_to_drop = illumina_cpg_locs_df[illumina_cpg_locs_df['chr'].isin(chroms_to_drop_l)]['#id']
+    cols_to_keep = set(all_methyl_df_t.columns.to_list()) - set(cpgs_to_drop.to_list())
+    return all_methyl_df_t.loc[:,cols_to_keep]
+
 
 # returns mut_df joined s.t. only mutations that are in measured CpG sites with methylation data remain
 # be aware that drop_duplicates first 
@@ -47,6 +61,24 @@ def join_df_with_illum_cpg(mut_df, illumina_cpg_locs_df, all_methyl_df_t):
     mutation_in_cpg_df = mutation_in_cpg_df[mutation_in_cpg_df['#id'].isin(all_methyl_df_t.columns)]
     mutation_in_cpg_df = mutation_in_cpg_df.loc[mutation_in_cpg_df['sample'].isin(all_methyl_df_t.index)]
     return mutation_in_cpg_df
+
+def site_characteristics(comparison_sites_df, all_methyl_age_df_t, mut_in_measured_cpg_w_methyl_age_df):
+    """
+    Return the methylation fraction of each site in sites_df unrolled
+    @ sites_df: dataframe with rows corresponding the linked or nonlinks sites for a given mutated site (index value), columns the linked site index, and entries the site name
+    """
+    mean_methyls = {}
+    for mut_site, comparison_sites in comparison_sites_df.iterrows():
+        # get the mean methylation across all samples at the comparison sites
+        mean_comp_methyl = all_methyl_age_df_t.loc[:, comparison_sites].mean(axis=0, skipna=True)
+        mean_methyls[mut_site] = mean_comp_methyl.values
+    mean_methyls_df = pd.DataFrame.from_dict(mean_methyls, orient='index')
+    # set mut_in_measured_cpg_w_methyl_age_df index to be #id
+    mut_in_measured_cpg_w_methyl_age_df = mut_in_measured_cpg_w_methyl_age_df.set_index('#id')
+    # merge the two dfs on index
+    mean_methyls_df = pd.merge(mut_in_measured_cpg_w_methyl_age_df['avg_methyl_frac'], mean_methyls_df, left_index=True, right_index=True)
+
+    return mean_methyls_df
 
 def plot_mutation_count_by_age(all_mut_df, all_meta_df, dataset_names_list, out_dir):
     """
@@ -218,20 +250,6 @@ def plot_mutation_count_by_age(all_mut_df, all_meta_df, dataset_names_list, out_
         fig.savefig(os.path.join(out_dir, 'ct_mut_count_by_age_each_dataset.png'))
     return
 
-def plot_mutations_distributions(all_mut_df, out_dir, illumina_cpg_locs_df, all_methyl_df_t):
-    """
-    For each dataset plot distribtion of mutation types, also for just mutations in illumina measured CpG sites
-    """
-    # plot distribution of mutation type all together
-    fig, axes = plt.subplots(figsize=(7,6), facecolor="white")
-    axes = all_mut_df['mutation'].value_counts().plot.bar(ax=axes, xlabel="Mutation in any sample", color='steelblue', alpha=0.7, ylabel="Count")
-    fig.savefig(os.path.join(out_dir, 'mut_type_count_all_datasets.png'))
-    # plot distribution of just mutations in measured CpG sites
-    fig2, axes2 = plt.subplots(figsize=(7,6), facecolor="white")
-    mut_in_measured_cpg_df = join_df_with_illum_cpg(all_mut_df, illumina_cpg_locs_df, all_methyl_df_t)
-    axes2 = mut_in_measured_cpg_df['mutation'].value_counts().plot.bar(ax=axes2, xlabel="Mutation in any sample in measured CpG", color='steelblue', alpha=0.7,ylabel="Count")
-    fig2.savefig(os.path.join(out_dir, 'mut_type_count_in_measured_cpg_datasets.png'))
-    return mut_in_measured_cpg_df
 
 def get_methyl_fractions(ct_mutation_in_measured_cpg_df, all_methyl_df_t):
     methyl_fractions = []
@@ -244,7 +262,6 @@ def get_methyl_fractions(ct_mutation_in_measured_cpg_df, all_methyl_df_t):
             #print("{} in sample {} not present".format(cpg, samp))
             methyl_fractions.append(-1)
     return methyl_fractions
-
 
 def get_same_age_means(ct_mutation_in_measured_cpg_df, all_meta_df, all_methyl_df_t):
     means = []
@@ -270,26 +287,19 @@ def calc_correlation(ct_mut_in_measured_cpg_w_methyl_df, all_methyl_df_t, num, c
         corr_matrix_dict[row['#id']] = this_cpg_corr_matrix
     return corr_matrix_dict
 
-def test_sig(results_dfs):
+def test_sig(results_dfs, test='p_wilcoxon'):
     """
-    @ returns: dict of effect sizes for each signfiicant result and metrics
+    @ returns: dict of counts of mutations with significant effects
     """
     # initialize dict of lists
     result_metrics_dict = defaultdict(list)
-
+    # iterate over percentiles, finding mutations with pvalue of impact on linked sites below cutoff
     for i in range(len(PERCENTILES)):
         this_result_df = results_dfs[i]
         bonf_p_val = 0.05/len(this_result_df)
-        result_metrics_dict['m_avg_err_p'].append(len(this_result_df[this_result_df['p_mean_avg_err'] < bonf_p_val]))
-        result_metrics_dict['m_avg_errs_eff'].append(this_result_df[this_result_df['p_mean_avg_err'] < bonf_p_val]['eff_mean_avg_err'].mean())
-        result_metrics_dict['m_linked_mean_avg_err'].append(this_result_df[this_result_df['p_mean_avg_err'] < bonf_p_val]['linked_mean_avg_err'].mean())
-        result_metrics_dict['m_non_linked_mean_avg_err'].append(this_result_df[this_result_df['p_mean_avg_err'] < bonf_p_val]['non_linked_mean_avg_err'].mean())
-        result_metrics_dict['m_abs_err_p'].append(len(this_result_df[this_result_df['p_mean_abs_err'] < bonf_p_val]))
-        result_metrics_dict['m_abs_errs_eff'].append(this_result_df[this_result_df['p_mean_abs_err'] < bonf_p_val]['eff_mean_abs_err'].mean())
-        result_metrics_dict['m_linked_mean_abs_err'].append(this_result_df['linked_mean_abs_err'].mean())
-        result_metrics_dict['m_non_linked_mean_abs_err'].append(this_result_df['non_linked_mean_abs_err'].mean())
-        result_metrics_dict['stdev_linked_mean_abs_err'].append(this_result_df[this_result_df['p_mean_abs_err'] < bonf_p_val]['linked_mean_abs_err'].std())
-        result_metrics_dict['stdev_non_linked_mean_abs_err'].append(this_result_df[this_result_df['p_mean_abs_err'] < bonf_p_val]['non_linked_mean_abs_err'].std())
+        result_metrics_dict['p_wilcoxon'].append(len(this_result_df[this_result_df[test] < bonf_p_val]))
+        result_metrics_dict['p_barlett'].append(len(this_result_df[this_result_df[test] < bonf_p_val]))
+        result_metrics_dict['sig_mean_linked_delta_mf'].append(this_result_df[this_result_df[test] < bonf_p_val]['mean_linked_delta_mf'].mean())
     return result_metrics_dict
 
 def calc_correlation(ct_mut_in_measured_cpg_w_methyl_df, all_methyl_df_t, chr=''):
@@ -305,7 +315,6 @@ def calc_correlation(ct_mut_in_measured_cpg_w_methyl_df, all_methyl_df_t, chr=''
         corr_matrix_dict[row['#id']] = this_cpg_corr_matrix
     corr_df = pd.DataFrame(corr_matrix_dict)
     return corr_df
-
 
 def EWAS(X, y, out_fn):
     """
@@ -327,7 +336,6 @@ def EWAS(X, y, out_fn):
     out_df.index = X.index
     out_df.to_parquet(out_fn)
     return out_df
-
 
 def get_distances_one_chrom(chrom_name,
                             illumina_cpg_locs_df):
@@ -357,17 +365,45 @@ def read_in_result_dfs(result_base_path, PERCENTILES=PERCENTILES):
     @ result_base_path: path to file of result dfs without PERCENTILE suffix
     @ returns: list of result dataframes
     """
-    result_dfs = []
+    linked_sites_names_dfs = []
+    linked_sites_diffs_dfs = []
+    linked_sites_z_pvals_dfs = [] 
     for i in range(len(PERCENTILES)):
-        result_dfs.append(pd.read_parquet(result_base_path + '_' + str(PERCENTILES[i]) + '.parquet'))
-    return result_dfs
+        linked_sites_names_dfs.append(pd.read_parquet(result_base_path + '_linked_sites_names_' + str(PERCENTILES[i]) + '.parquet'))
+        linked_sites_diffs_dfs.append(pd.read_parquet(result_base_path + '_linked_sites_diffs_' + str(PERCENTILES[i]) + '.parquet'))
+        linked_sites_z_pvals_dfs.append(pd.read_parquet(result_base_path + '_linked_sites_pvals_' + str(PERCENTILES[i]) + '.parquet'))
+    return linked_sites_names_dfs, linked_sites_diffs_dfs, linked_sites_z_pvals_dfs
 
-def write_out_result_dfs(out_dir, name, result_dfs):
+def write_out_results_new(out_dir, name, linked_sites_names_dfs, linked_sites_diffs_dfs, linked_sites_z_pvals_dfs):
     """
-    @ out_dir: path to directory to write out result dfs
+    @ out_dir: path to directory to write out result dfs, linked_sites_names_dfs, and linked_sites_diffs_dfs
+    """
+    for i in range(len(PERCENTILES)):
+        linked_sites_names_dfs[i].columns = linked_sites_names_dfs[i].columns.astype(str)
+        linked_sites_names_dfs[i].to_parquet(out_dir + '/' + name + '_linked_sites_names_' + str(PERCENTILES[i]) + '.parquet')
+        linked_sites_diffs_dfs[i].columns = linked_sites_diffs_dfs[i].columns.astype(str)
+        linked_sites_diffs_dfs[i].to_parquet(out_dir + '/' + name + '_linked_sites_diffs_' + str(PERCENTILES[i]) + '.parquet')
+        linked_sites_z_pvals_dfs[i].columns = linked_sites_z_pvals_dfs[i].columns.astype(str)
+        linked_sites_z_pvals_dfs[i].to_parquet(out_dir + '/' + name + '_linked_sites_pvals_' + str(PERCENTILES[i]) + '.parquet')
+
+def write_out_results(out_dir, name, result_dfs, linked_sites_names_dfs, linked_sites_diffs_dfs, linked_sites_z_pvals_dfs, nonlinked_sites_names_dfs, nonlinked_sites_diffs_dfs, nonlinked_sites_z_pvals_dfs):
+    """
+    @ out_dir: path to directory to write out result dfs, linked_sites_names_dfs, and linked_sites_diffs_dfs
     """
     for i in range(len(PERCENTILES)):
         result_dfs[i].to_parquet(out_dir + '/' + name + '_' + str(PERCENTILES[i]) + '.parquet')
+        linked_sites_names_dfs[i].columns = linked_sites_names_dfs[i].columns.astype(str)
+        linked_sites_names_dfs[i].to_parquet(out_dir + '/' + name + '_linked_sites_names_' + str(PERCENTILES[i]) + '.parquet')
+        linked_sites_diffs_dfs[i].columns = linked_sites_diffs_dfs[i].columns.astype(str)
+        linked_sites_diffs_dfs[i].to_parquet(out_dir + '/' + name + '_linked_sites_diffs_' + str(PERCENTILES[i]) + '.parquet')
+        linked_sites_z_pvals_dfs[i].columns = linked_sites_z_pvals_dfs[i].columns.astype(str)
+        linked_sites_z_pvals_dfs[i].to_parquet(out_dir + '/' + name + '_linked_sites_pvals_' + str(PERCENTILES[i]) + '.parquet')
+        nonlinked_sites_names_dfs[i].columns = nonlinked_sites_names_dfs[i].columns.astype(str)
+        nonlinked_sites_names_dfs[i].to_parquet(out_dir + '/' + name + '_nonlinked_sites_names_' + str(PERCENTILES[i]) + '.parquet')
+        nonlinked_sites_diffs_dfs[i].columns = nonlinked_sites_diffs_dfs[i].columns.astype(str)
+        nonlinked_sites_diffs_dfs[i].to_parquet(out_dir + '/' + name + '_nonlinked_sites_diffs_' + str(PERCENTILES[i]) + '.parquet')
+        nonlinked_sites_z_pvals_dfs[i].columns = nonlinked_sites_z_pvals_dfs[i].columns.astype(str)
+        nonlinked_sites_z_pvals_dfs[i].to_parquet(out_dir + '/' + name + '_nonlinked_sites_pvals_' + str(PERCENTILES[i]) + '.parquet')
 
 def get_diff_from_mean(methyl_df_t):
     """
@@ -402,6 +438,7 @@ def plot_corr_dist_boxplots(corr_dist_df):
     axes.set_xlabel("Distance between CpG sites (bp)")
     axes.set_ylabel("Pearson correlation of methylation fraction")
 
+
     fig2, axes2 = plt.subplots(figsize=(7,5), dpi=175)
     bin_edges = [0, 10, 10**3, 10**5, 10**7, 10**9]
 
@@ -409,3 +446,106 @@ def plot_corr_dist_boxplots(corr_dist_df):
     corr_dist_df['dists_binned'] = pd.cut(corr_dist_df['dists'], bin_edges, labels=[r"$0-10$", r"$10-10^3$", r"$10^3-10^5$", r"$10^5-10^7$", r"$10^7-10^9$"])
 
     sns.violinplot(data=corr_dist_df, x='dists_binned', y='corrs', ax=axes2, palette='Reds')
+
+
+def methylome_pca(all_methyl_df_t, illumina_cpg_locs_df, all_mut_df, num_pcs=5):
+    """
+    @ all_methyl_df: dataframe of methylation data
+    @ returns: pca object
+    """
+    # import PCA and standard scaler
+    from sklearn.decomposition import PCA
+    from sklearn.preprocessing import StandardScaler
+
+    # subset all_methyl_df_t to only include cpgs on chromosome 1
+    methyl_chr1 = all_methyl_df_t.loc[:,set(illumina_cpg_locs_df[illumina_cpg_locs_df['chr'] == '1']['#id'].values) & set(all_methyl_df_t.columns.values)]
+    # scale
+    methyl_chr1_scaled = StandardScaler().fit_transform(methyl_chr1)
+    # pca
+    pca = PCA(n_components=num_pcs)
+    methyl_chr1_tranf = pca.fit_transform(methyl_chr1_scaled)
+    
+    # count c>T mutations for each sample on chr 1, and fill in missing samples with 0
+    mut_counts_by_sample = all_mut_df[(all_mut_df.chr == '1') & (all_mut_df.mutation == 'C>T')]['sample'].value_counts().reindex(all_methyl_df_t.index.values).fillna(0)
+    print(mut_counts_by_sample)
+    # put in same order as methyl_chr1
+    mut_counts_by_sample = mut_counts_by_sample.loc[set(methyl_chr1.index.values) & set(mut_counts_by_sample.index.values)]
+    # measure correlation of each sample projected onto each pc with mut_counts_by_sample
+    pc_corrs_w_mut_counts = [np.corrcoef(mut_counts_by_sample, methyl_chr1_tranf[:,i])[0,1] for i in range(num_pcs)]
+
+    fig, axes = plt.subplots(1,2 , figsize=(12,5), dpi=175)
+    per_var = np.round(pca.explained_variance_ratio_ * 100, decimals=1)
+    labels = ['PC' + str(x) for x in range(1, len(per_var) + 1)]
+    axes[0].bar(x=range(1, len(per_var)+1), height=per_var, tick_label=labels)
+    axes[0].set_ylabel('percentange of explained variance')
+    axes[0].set_xlabel('principal component')
+    # plot correlation of each pc with mut_counts_by_sample
+    axes[1].bar(x=range(1, len(pc_corrs_w_mut_counts)+1), height=pc_corrs_w_mut_counts, tick_label=labels)
+
+    return pca, methyl_chr1_tranf, pc_corrs_w_mut_counts
+
+def add_ages_to_mut_and_methyl(mut_in_measured_cpg_w_methyl_df, all_meta_df, all_methyl_df_t):
+    to_join_mut_in_measured_cpg_w_methyl_df = mut_in_measured_cpg_w_methyl_df.rename(columns={'sample':'case_submitter_id'})
+    mut_in_measured_cpg_w_methyl_age_df =  to_join_mut_in_measured_cpg_w_methyl_df.join(all_meta_df, on =['case_submitter_id'], rsuffix='_r',how='inner')
+    # join ages with methylation
+    all_methyl_age_df_t = all_meta_df.join(all_methyl_df_t, on =['sample'], rsuffix='_r',how='inner')
+    return mut_in_measured_cpg_w_methyl_age_df, all_methyl_age_df_t
+
+def get_same_age_and_tissue_samples(methyl_age_df_t, mut_sample_name, age_bin_size = 10):
+    """
+    Get the sample that has the mutation in the mutated CpG and the samples of the same age as that sample
+    @ methyl_age_df_t: dataframe with columns=CpGs and rows=samples and entries=methylation fraction
+    @ age_bin_size: size of age bins to use (will be age_bin_size/2 on either side of the mutated sample's age)
+    @ returns: the methylation fraction for samples of the same age and dset as the mutated sample
+    """
+    # get this sample's age
+    this_age = methyl_age_df_t.loc[mut_sample_name, 'age_at_index']
+    this_dset = methyl_age_df_t.loc[mut_sample_name, 'dataset']
+    # get the mf all other samples of within age_bin_size/2 years of age on either side
+    same_age_dset_samples_mf_df = methyl_age_df_t[(np.abs(methyl_age_df_t['age_at_index'] - this_age) <= age_bin_size/2) & (methyl_age_df_t['dataset'] == this_dset)]
+    # drop the mutated sample
+    same_age_dset_samples_mf_df = same_age_dset_samples_mf_df.drop(index = mut_sample_name)
+    return same_age_dset_samples_mf_df
+
+def stack_and_merge(diffs_df, pvals_df, names_df = None):
+    """
+    Take one diffs and one pvals df, stack them and merge
+    """
+    # stack the dfs
+    diffs_df = diffs_df.stack().reset_index()
+    pvals_df = pvals_df.stack().reset_index()
+    if type(names_df) != type(None):
+        names_df = names_df.stack().reset_index()
+    # rename the columns
+    diffs_df.columns = ['mut_site', 'comparison_site', 'delta_mf']
+    pvals_df.columns = ['mut_site', 'comparison_site', 'pval']
+    if type(names_df) != type(None):
+        names_df.columns = ['mut_site', 'comparison_site', 'linked_site']
+    # set comparison site columns to be dytpe = int
+    diffs_df['comparison_site'] = diffs_df['comparison_site'].astype(int)
+    pvals_df['comparison_site'] = pvals_df['comparison_site'].astype(int)
+    if type(names_df) != type(None):
+        names_df['comparison_site'] = names_df['comparison_site'].astype(int)
+    # and mut site columns to be dytpe = str
+    diffs_df['mut_site'] = diffs_df['mut_site'].astype(str)
+    pvals_df['mut_site'] = pvals_df['mut_site'].astype(str)
+    if type(names_df) != type(None):
+        names_df['mut_site'] = names_df['mut_site'].astype(str)
+    # merge
+    if type(names_df) == type(None):
+        merged_df = pd.merge(diffs_df, pvals_df, on=['comparison_site', 'mut_site'])
+    else:
+        merged_df = pd.merge(diffs_df, pvals_df, on=['comparison_site', 'mut_site'])
+        merged_df = pd.merge(merged_df, names_df, on=['comparison_site', 'mut_site'])
+    return merged_df
+
+def half(l, which_half):
+    if which_half == 'first':
+        return l[:int(len(l)/2)]
+    else:
+        return l[int(len(l)/2):]
+
+def fdr_correct(df, pval_col_name):
+    df = df.dropna(subset=[pval_col_name])
+    df['sig'], df['fdr_pval'] = fdrcorrection(df.loc[:, pval_col_name], alpha=0.05)
+    return df
