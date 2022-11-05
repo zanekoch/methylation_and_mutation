@@ -484,12 +484,12 @@ def methylome_pca(all_methyl_df_t, illumina_cpg_locs_df, all_mut_df, num_pcs=5):
 
     return pca, methyl_chr1_tranf, pc_corrs_w_mut_counts
 
-def add_ages_to_mut_and_methyl(mut_in_measured_cpg_w_methyl_df, all_meta_df, all_methyl_df_t):
-    to_join_mut_in_measured_cpg_w_methyl_df = mut_in_measured_cpg_w_methyl_df.rename(columns={'sample':'case_submitter_id'})
-    mut_in_measured_cpg_w_methyl_age_df =  to_join_mut_in_measured_cpg_w_methyl_df.join(all_meta_df, on =['case_submitter_id'], rsuffix='_r',how='inner')
+def add_ages_to_mut_and_methyl(mut_df, all_meta_df, all_methyl_df_t):
+    to_join_mut_df = mut_df.rename(columns={'sample':'case_submitter_id'})
+    mut_w_methyl_age_df =  to_join_mut_df.join(all_meta_df, on =['case_submitter_id'], rsuffix='_r',how='inner')
     # join ages with methylation
     all_methyl_age_df_t = all_meta_df.join(all_methyl_df_t, on =['sample'], rsuffix='_r',how='inner')
-    return mut_in_measured_cpg_w_methyl_age_df, all_methyl_age_df_t
+    return mut_w_methyl_age_df, all_methyl_age_df_t
 
 def get_same_age_and_tissue_samples(methyl_age_df_t, mut_sample_name, age_bin_size = 10):
     """
@@ -548,4 +548,16 @@ def half(l, which_half):
 def fdr_correct(df, pval_col_name):
     df = df.dropna(subset=[pval_col_name])
     df['sig'], df['fdr_pval'] = fdrcorrection(df.loc[:, pval_col_name], alpha=0.05)
+    return df
+
+def fdr_correct_split(df, pval_col_name = 'ztest_pval', split_col = 'mutated'):
+    df.dropna(subset=[pval_col_name], inplace=True)
+    # split on split_col
+    df1 = df[df[split_col] == True]
+    df2 = df[df[split_col] == False]
+    # correct
+    df1.loc[:, 'sig'], df1.loc[:, 'fdr_pval'] = fdrcorrection(df1.loc[:, pval_col_name], alpha=0.05)
+    df2.loc[:, 'sig'], df2.loc[:, 'fdr_pval'] = fdrcorrection(df2.loc[:, pval_col_name], alpha=0.05)
+    # merge on index
+    df = pd.concat([df1, df2])
     return df

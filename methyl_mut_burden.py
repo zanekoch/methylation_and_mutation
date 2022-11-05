@@ -6,8 +6,95 @@ from rich.progress import track
 import random
 import matplotlib.pyplot as plt
 
-
 class methylomeMutationalBurden:
+
+    def __init__(self, all_mut_df, all_methyl_age_df_t, age_bin_size = 5):
+        self.all_mut_df = all_mut_df
+        self.all_methyl_age_df_t = all_methyl_age_df_t
+        self.age_bin_size = age_bin_size
+
+        self.preproc()
+
+    def preproc(self):
+        """
+        Reformat and fdr correct correlation-based measured sites and distance-based comparison sites
+        """
+        # get mutation counts by sample
+        self.mut_counts_df = self.all_mut_df['sample'].value_counts()
+        self.ct_mut_counts_df = self.all_mut_df[self.all_mut_df['mutation'] == 'C>T']['sample'].value_counts()
+
+    def _observed_methyl_change(self, sample, comparison_samples):
+        """
+        Get the observed change/Manhattan distance of the methylome between sample and the comparison samples
+        """
+        # exclude age and dataset columns
+        cpg_cols = self.all_methyl_age_df_t.columns[2:]
+        # subtract the methylome of sample from comparison samples
+        comp_samples_df = self.all_methyl_age_df_t.loc[comparison_samples, :]
+        methylome_diffs = comp_samples_df.loc[:, cpg_cols].subtract(self.all_methyl_age_df_t.loc[sample, cpg_cols])
+        # switch sign so that neg diff means sample 1 is lower
+        neg_diff_sum = methylome_diffs[methylome_diffs > 0].sum(axis=1)
+        pos_diff_sum = methylome_diffs[methylome_diffs < 0].abs().sum(axis=1)
+        abs_diff_sum = neg_diff_sum.add(pos_diff_sum, fill_value=0)
+        # combine        
+        diff_sum_df = pd.concat([abs_diff_sum, neg_diff_sum, pos_diff_sum, comp_samples_df['age_at_index'], comp_samples_df.index.to_series()], axis=1)
+        diff_sum_df.columns = ['abs_diff_sum', 'neg_diff_sum', 'pos_diff_sum', 'comp_age', 'comp_sample']
+        return diff_sum_df
+
+    def compare_pairs(self, num_samples = -1, same_age = True):
+        """
+        For every pair of samples 
+        """
+        all_results = []
+        samples_done = 0
+        for dset in self.all_methyl_age_df_t['dataset'].unique():
+            print(dset)
+            dset_methyl_age_df_t = self.all_methyl_age_df_t[self.all_methyl_age_df_t['dataset'] == dset]
+            # list of valid samples to choose from, must have at least 1 ct mutation and methylation data
+            samples_w_mut_and_methyl = list(set(dset_methyl_age_df_t.index) & set(self.ct_mut_counts_df.index))
+            for sample in track(samples_w_mut_and_methyl, total=len(samples_w_mut_and_methyl), description="Comparing pairs"):
+                # choose a random sample from self.methyl_age_df_t.index
+                age = dset_methyl_age_df_t.loc[sample, 'age_at_index']
+                # get all other samples that can be compared to rand_sample (same dataset, same age bin)
+                if same_age:
+                    same_age_dset_samples = dset_methyl_age_df_t[(dset_methyl_age_df_t['age_at_index'] >= age - self.age_bin_size/2) & (dset_methyl_age_df_t['age_at_index'] <= age + self.age_bin_size/2)]
+                    same_age_dset_samples = same_age_dset_samples.drop(sample)
+                    comparison_samples = list(set(same_age_dset_samples.index.to_list()) & set(samples_w_mut_and_methyl))
+                    if len(comparison_samples) == 0:
+                        continue
+                else:
+                    comparison_samples = list(set(dset_methyl_age_df_t.index.to_list()) & set(samples_w_mut_and_methyl))
+                    if len(comparison_samples) == 0:
+                        continue
+                    comparison_samples.remove(sample)
+                    # choose at most 50 random samples from comparison_samples no replacement
+                    #comparison_samples = random.sample(comparison_samples, min(len(comparison_samples), 50))
+                # get the observed change in methylome sample and the comparison samples
+                methylome_diffs = self._observed_methyl_change(sample, comparison_samples)
+                # get the number of mutations in each sample
+                methylome_diffs['mut_diff'] = np.abs(
+                    self.mut_counts_df.loc[comparison_samples]
+                    - self.mut_counts_df.loc[sample])
+                methylome_diffs['ct_mut_diff'] = np.abs(
+                    self.ct_mut_counts_df.loc[comparison_samples]
+                    - self.ct_mut_counts_df.loc[sample])
+                methylome_diffs.reset_index(inplace=True)
+                methylome_diffs = methylome_diffs.rename(columns={'index': 'comp_sample'})
+                methylome_diffs['age'] = age
+                methylome_diffs['age_diff'] = np.abs(methylome_diffs['comp_age'] - methylome_diffs['age'])
+                methylome_diffs['sample'] = sample
+                methylome_diffs['dataset'] = dset
+                all_results.append(methylome_diffs)
+                samples_done += 1
+                if num_samples > 0 and samples_done >= num_samples:
+                    break
+        # make a df from all_results
+        pair_comp_df = pd.concat(all_results, axis=0)
+        return pair_comp_df
+
+
+
+class methylomeMutationalBurden_old:
     def __init__(
         self, linked_sites_names_dfs, linked_sites_diffs_dfs, linked_sites_z_pvals_dfs, mut_nearby_measured_df, nearby_diffs_df, all_methyl_age_df_t, all_mut_df,mut_in_measured_cpg_w_methyl_age_df, cpg_in_body, age_bin_size = 10):
         self.linked_sites_names_df = linked_sites_names_dfs[0]

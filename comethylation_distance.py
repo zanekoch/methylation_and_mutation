@@ -8,6 +8,7 @@ import utils
 import seaborn as sns
 from statsmodels.stats.weightstats import ztest as ztest
 from rich.progress import track
+import sys
 
 
 PERCENTILES = [1]#np.flip(np.linspace(0, 1, 6))
@@ -27,42 +28,89 @@ class mutationScanDistance:
         nearby_site_diffs_df['log10_pval'] = nearby_site_diffs_df['fdr_pval'].apply(lambda x: -np.log10(x))
         # get the log2 of the fold change
         # color points orange if they are significant
+        # put legend in upper left
         sns.scatterplot(y = 'log10_pval', x = 'delta_mf', data = nearby_site_diffs_df, alpha=0.3, hue = 'sig', palette = {True: 'orange', False: 'grey'})
+        plt.legend(loc='upper left')
         plt.xlabel(r"$\Delta$MF")
         plt.ylabel('-log10 FDR pval')
-        plt.show(dpi=100)
+        plt.show()
 
-    def effect_violin(self, nearby_diffs_w_illum_df, mut_in_measured_cpg_w_methyl_age_df, pval,  sig_thresh = .05, groupby_dist = False):
+    def effect_violin(self, nearby_diffs_w_illum_df, mut_in_measured_cpg_w_methyl_age_df, pval,  sig_thresh = .05):
         """
         Make a violin plot of the effect of mutations on the nearby measured cpgs
         """
         fig, axes = plt.subplots(1,2, figsize=(14, 5), dpi=100, gridspec_kw={'width_ratios': [1, 5]}, sharey=True, constrained_layout=True)
         # subset to only significant sites
         nearby_diffs_w_illum_df = nearby_diffs_w_illum_df[nearby_diffs_w_illum_df[pval] < sig_thresh]
-        if groupby_dist:
-            # create 5 equal width bins of distances and assign each row to a distance bin
-            nearby_diffs_w_illum_df.loc[:,'measured_site_dist'] = np.abs(nearby_diffs_w_illum_df['measured_site_dist'])
-            nearby_diffs_w_illum_df.loc[:,'dist_bin'] = pd.cut(nearby_diffs_w_illum_df['measured_site_dist'], bins=5, labels=['0-500', '500-1000', '1000-1500', '1500-2000', '2000-2500'])
-            # create a violin plot of the effect of mutations on the nearby measured cpgs
-            sns.violinplot(data=nearby_diffs_w_illum_df, x='dist_bin', y='delta_mf', cut=0, inner="quartile", scale="count", color='steelblue', axes=axes[1])
-            sp = sns.stripplot(data=nearby_diffs_w_illum_df, x='dist_bin', y='delta_mf', color="black", edgecolor="black", alpha=0.2,axes=axes[1])
-            axes[1].set_xlabel('Distance of effected CpG from mutation (bp)')
-            axes[1].tick_params(axis='y', labelleft=True)
-            axes[1].set_ylabel(r"$\Delta$MF significantly (FDR<.05) effected nearby CpGs")
+        # create 5 equal width bins of distances and assign each row to a distance bin
+        nearby_diffs_w_illum_df.loc[:,'measured_site_dist'] = np.abs(nearby_diffs_w_illum_df['measured_site_dist'])
+        nearby_diffs_w_illum_df.loc[:,'dist_bin'] = pd.cut(nearby_diffs_w_illum_df['measured_site_dist'], bins=5, labels=['1-500', '500-1000', '1000-1500', '1500-2000', '2000-2500'])
+        #nearby_diffs_w_illum_df.loc[:,'dist_bin'] = pd.cut(nearby_diffs_w_illum_df['measured_site_dist'], bins=5, labels=['1-100', '101-200', '201-300', '301-400', '401-500'])
 
-            mut_mf_change = mut_in_measured_cpg_w_methyl_age_df[mut_in_measured_cpg_w_methyl_age_df['DNA_VAF'] >= np.percentile(self.mut_df['DNA_VAF'], 90)]['difference'].reset_index(drop=True)
-            p2 = sns.violinplot(data=mut_mf_change, ax=axes[0], color='maroon', cut=0, inner="quartile")
-            sp2 = sns.stripplot(data=mut_mf_change, color="black", edgecolor="black", alpha=0.2, ax=axes[0])
-            # remove x ticks and x tick labels
-            p2.set_xticks([])
-            p2.set_xticklabels([])
-            p2.set_ylabel(r"$\Delta$MF of mutated CpGs")
+        # create a violin plot of the effect of mutations on the nearby measured cpgs
+        sns.violinplot(data=nearby_diffs_w_illum_df, x='dist_bin', y='delta_mf', hue = 'mutated', split=True, cut=0, inner="quartile", palette=['steelblue', 'maroon'], axes=axes[1])
+        #_ = sns.stripplot(data=nearby_diffs_w_illum_df, x='dist_bin', y='delta_mf', color="black", edgecolor="black", alpha=0.2,axes=axes[1])
+        axes[1].tick_params(axis='y', labelleft=True)
+        axes[1].set_ylabel(r"$\Delta$MF significantly (FDR<.05) affected nearby CpGs")
+        axes[1].set_xlabel("")
 
+        # select the rows of mut_in_measured_cpg_w_methyl_age_df that 
+        # rename case_submitter_id to sample
+        mut_in_measured_cpg_w_methyl_age_df_tm = mut_in_measured_cpg_w_methyl_age_df.rename(columns={'case_submitter_id': 'sample'})
+        # get tested muts that are in measured cpgs
+        tested_mut_in_measured_cpg = nearby_diffs_w_illum_df.loc[~nearby_diffs_w_illum_df['#id'].isna()]
+        # merge mut_in_measured with mut_in_measured_cpg_w_methyl_age_df on #id and sample at the same time
+        tested_mut_in_measured_cpg = tested_mut_in_measured_cpg.merge(mut_in_measured_cpg_w_methyl_age_df_tm, on=['#id', 'sample'], how='inner')
 
-        else:
-            sns.violinplot(y="delta_mf", data=nearby_diffs_w_illum_df, cut=0, inner="quartile", axes=axes[0])
-            sns.stripplot(y="delta_mf", data=nearby_diffs_w_illum_df, color="black", edgecolor="black", alpha=0.3, axes=axes[0])
-            axes[1].set_ylabel(r"$\Delta$MF")
+        tested_mut_in_measured_cpg = tested_mut_in_measured_cpg[tested_mut_in_measured_cpg[pval] < sig_thresh]
+
+        p2 = sns.violinplot(data=tested_mut_in_measured_cpg, y='difference', ax=axes[0], color='maroon', cut=0, inner="quartile")
+        #_ = sns.stripplot(data=tested_mut_in_measured_cpg, y='difference', color="black", edgecolor="black", alpha=0.2, ax=axes[0])
+        # remove x ticks and x tick labels
+        p2.set_xticks([0])
+        p2.set_xticklabels(["0"])
+        p2.set_ylabel(r"$\Delta$MF of mutated CpGs")
+
+        # set sup x label
+        fig.text(0.5, -0.05, 'Distance of affected site from mutation', ha='center')        
+
+    def effect_violin_new(self, cumul_eff_by_dist):
+        """
+        Make a violin plot of the effect of mutations on the nearby measured cpgs
+        """
+        _, axes = plt.subplots(figsize=(10, 5), dpi=100)
+        # create a violin plot of the effect of mutations on the nearby measured cpgs
+        sns.violinplot(
+            data=cumul_eff_by_dist, x='dist_bin', y='cumul_delta_mf', hue='mutated', cut=0, inner="quartile",
+            split=False, color='steelblue', axes=axes, scale='width'
+            )
+        axes.tick_params(axis='y', labelleft=True)
+        axes.set_ylabel(r"$\Delta$MF significantly (FDR<.05) affected nearby CpGs")
+        axes.set_xlabel("")
+
+    def prop_proximal_effected(self, nearby_diffs_w_illum_df):
+        """prop_nearby_effected = nearby_diffs_w_illum_df.groupby(['mut_cpg', 'mutated'])['sig'].mean().reset_index()
+        prop_nearby_effected.columns = ['mut_cpg', 'Mutated Sample', 'prop_sig']"""
+        prop_nearby_effected = nearby_diffs_w_illum_df.groupby(['mut_cpg', 'mutated', 'sample'])['sig'].mean().reset_index()
+        prop_nearby_effected.columns = ['mut_cpg', 'Mutated Sample', 'sample', 'prop_sig']
+        # plot each as a seaborn distplot
+        fig, axes = plt.subplots(1, 2, figsize=(12,5), dpi=100, tight_layout=True)
+        sns.kdeplot(
+            data=prop_nearby_effected, x="prop_sig", hue="Mutated Sample",
+            common_norm=False, ax = axes[0], fill=True, clip=[0,1], palette=['steelblue', 'maroon'], alpha=.5, legend=False, bw_method=0.5
+            )
+        axes[0].set_ylabel('Density')
+        axes[0].legend(title=None, loc='upper right', labels=['Mutated sample', 'Non-mutated sample'])
+        # same plot but small y limit
+        sns.kdeplot(
+            data=prop_nearby_effected, x="prop_sig", hue="Mutated Sample",
+            common_norm=False, ax = axes[1], fill=True, clip=[0,1], palette=['steelblue', 'maroon'], alpha=.5, legend=False, bw_method=0.5
+            )
+        axes[1].set_ylabel('Density')
+        axes[1].legend(title=None, loc='upper right', labels=['Mutated sample', 'Non-mutated sample'])
+        axes[1].set_ylim(0, .1)
+        # set super x label
+        fig.text(0.5, -0.05, 'Proportion of CpGs proximal (+- 2.5kbp) to mutation with significant change', ha='center')
 
     def mut_nearby_methyl_status_effect(self, nearby_site_diffs_df):
         """
@@ -129,17 +177,21 @@ class mutationScanDistance:
             samples_to_exclude = np.append(samples_to_exclude, to_exlude)
         return samples_to_exclude
 
-    def _join_with_illum(self, df):
+    def _join_with_illum(self, in_df):
         """
         Join the dataframe with the illumina_cpg_locs_df
         """
-        df[['sample', 'mut_cpg_chr_start']] = df['mut_cpg'].str.split('_', expand=True)
+        df = in_df.copy(deep=True)
+        df[['sample2', 'mut_cpg_chr_start']] = df['mut_cpg'].str.split('_', expand=True)
         df[['chr', 'start']] = df['mut_cpg_chr_start'].str.split(':', expand=True)
-        df['start'] = df['start'].astype(int)
+        # convert start column to int with to_numeric
+        df['start'] = pd.to_numeric(df['start'])
         df_w_illum = df.merge(self.illumina_cpg_locs_df, on=['chr', 'start'], how='left')
+        # drop the sample2 and mut_cpg_chr_start columns
+        df_w_illum = df_w_illum.drop(columns=['sample2', 'mut_cpg_chr_start'])
         return df_w_illum
 
-    def plot_heatmap(self, mut_sample_cpg, nearby_site_diffs_df, mut_nearby_measured_df, remove_other_muts=True):
+    def plot_heatmap(self, mut_sample_cpg, nearby_site_diffs_w_illum_df, mut_nearby_measured_w_illum_df, remove_other_muts=True):
         """
         Given a set of linked sites, nonlinked sites, mutated sample, and mutated site, plots a heatmap of the methylation fraction of same age samples at the linked, nonlinked, and mutated sites
         @ mut_sample_cpg: sample_chr:start
@@ -149,12 +201,12 @@ class mutationScanDistance:
         @ all_methyl_age_df_t: dataframe of methylation data with ages attached
         """
         # join with illumina_cpg_locs_df to get the CpG names of mutated CpGs if they were in a measured site
-        nearby_site_diffs_w_illum_df = self._join_with_illum(nearby_site_diffs_df)
-        mut_nearby_measured_w_illum_df = self._join_with_illum(mut_nearby_measured_df)
+        """nearby_site_diffs_w_illum_df = self._join_with_illum(nearby_site_diffs_df)
+        mut_nearby_measured_w_illum_df = self._join_with_illum(mut_nearby_measured_df)"""
         # get sample name and position of mutation
         mut_sample_name = mut_sample_cpg.split('_')[0]
         # get the names of the nearby sites
-        nearby_sites = mut_nearby_measured_df[mut_nearby_measured_df['mut_cpg'] == mut_sample_cpg]['close_measured'].values[0]
+        nearby_sites = mut_nearby_measured_w_illum_df[mut_nearby_measured_w_illum_df['mut_cpg'] == mut_sample_cpg]['close_measured'].values[0]
         # get which of the nearby sites were signficant
         sig_status = nearby_site_diffs_w_illum_df[(nearby_site_diffs_w_illum_df['mut_cpg'] == mut_sample_cpg)]['sig'].to_list()
         # get the same age and dataset samples
@@ -171,7 +223,7 @@ class mutationScanDistance:
         print("{} samples excluded".format(len(same_age_tissue_samples_all) - len(same_age_tissue_samples)))
 
         # get the distances of each site from the mutated site
-        distances = mut_nearby_measured_df[mut_nearby_measured_df['mut_cpg'] == mut_sample_cpg]['close_measured_dists'].values[0]
+        distances = mut_nearby_measured_w_illum_df[mut_nearby_measured_w_illum_df['mut_cpg'] == mut_sample_cpg]['close_measured_dists'].values[0]
         # sort nearby_sites and sig_status by distances, then sort distances in the same way
         nearby_sites = [x for _, x in sorted(zip(distances, nearby_sites))]
         sig_status = [x for _, x in sorted(zip(distances, sig_status))]
@@ -239,7 +291,7 @@ class mutationScanDistance:
         ax.tick_params(axis='both', which='major', labelsize=13)
         axes.xaxis.label.set_size(15)
         axes.yaxis.label.set_size(15)
-        return
+        return to_plot_df
 
     def _compare_sites(self, same_age_tissue_methyl_df, mut_sample_methyl_df):
         """
@@ -249,7 +301,7 @@ class mutationScanDistance:
         @ returns: Dataframe with rows being comparison sites, columns delta_mf (average difference of mutated sample and non mutated sample at the comparison site that is the row) and ztest_pval (which says if the mutated sample was significantly different from the other samples at that site)
         """
         # subtract mut_sample_comparison_mfs_df from every row (sample) in same_age_samples_mf_df
-        difference_at_comparison_sites = same_age_tissue_methyl_df.subtract(mut_sample_methyl_df.iloc[0])
+        difference_at_comparison_sites = same_age_tissue_methyl_df.subtract(mut_sample_methyl_df)
         # switch the sign to make delta_mf = mut_sample_mf - same_age_sample_mf
         difference_at_comparison_sites = difference_at_comparison_sites.mul(-1)
         # get mean average difference (delta_mf) at each site
@@ -262,6 +314,80 @@ class mutationScanDistance:
         mean_diff_each_comparison_site['ztest_pval'] = stats.norm.sf(abs(mean_diff_each_comparison_site['zscore']))*2
         return mean_diff_each_comparison_site[['delta_mf', 'ztest_pval']]
 
+    def all_mwu(self, col):
+        """
+        @ col: column of dataframe
+        @ returns: mwu pvalue for each value in the column vs the rest of the values except for the value itself
+        """
+        pvals = []
+        for i in range(len(col)):
+            pvals.append(stats.mannwhitneyu(col[i], col.drop(col.index[i]), alternative='two-sided').pvalue)
+        return pvals
+
+    def _compare_sites_new(self, same_age_tissue_methyl_df, mut_sample_methyl_df):
+        """
+        Get the delta_mf and ztest pvalue for each site in each sample, mutated and non-mutated
+        @returns:
+            - all_samples_diff: samples X sites dataframe with delta_mf for each site and sample
+            - pvals: samples X sites dataframe with ztest pvalue for each site and sample
+        """
+        # create a new dataframe all_samples_at_comparison_sites with same_age_tissue_methyl_df as first rows and mut_sample_methyl_df as last row
+        all_samples_at_comparison_sites = same_age_tissue_methyl_df.append(mut_sample_methyl_df)
+
+        # matrix of z scores of each sample at each site being different from the other samples
+        zscores = all_samples_at_comparison_sites.apply(lambda col: stats.zscore(col, nan_policy='omit'), axis=0)
+        # convert to 2 sided pvalues
+        ztest_pvals = stats.norm.sf(abs(zscores))*2
+        ztest_pvals = pd.DataFrame(ztest_pvals, index=all_samples_at_comparison_sites.index, columns=all_samples_at_comparison_sites.columns)
+
+        # median absolute deviation
+        consistency_const = 0.6745
+        modified_zscores = all_samples_at_comparison_sites.apply(lambda col: consistency_const * (col - col.median())/ stats.median_absolute_deviation(col, nan_policy='omit'), axis=0)
+
+        # mann whitney U test
+        mwu_pvals = all_samples_at_comparison_sites.apply(lambda col: self.all_mwu(col), axis=0)
+
+        # get difference of each sample from the mean and median
+        mean = all_samples_at_comparison_sites.mean(axis=0)
+        mean_diff = all_samples_at_comparison_sites.subtract(mean)
+        median = all_samples_at_comparison_sites.median(axis=0)
+        median_diff = all_samples_at_comparison_sites.subtract(median)
+
+        # if any are not dataframes, convert them to dataframes
+        if not isinstance(mean_diff, pd.DataFrame):
+            mean_diff = pd.DataFrame(mean_diff)
+        if not isinstance(median_diff, pd.DataFrame):
+            median_diff = pd.DataFrame(median_diff)
+        if not isinstance(ztest_pvals, pd.DataFrame):
+            ztest_pvals = pd.DataFrame(ztest_pvals)
+        if not isinstance(zscores, pd.DataFrame):
+            zscores = pd.DataFrame(zscores)
+        if not isinstance(modified_zscores, pd.DataFrame):
+            modified_zscores = pd.DataFrame(modified_zscores)
+        if not isinstance(mwu_pvals, pd.DataFrame):
+            mwu_pvals = pd.DataFrame(mwu_pvals)
+
+        # stack each of these dataframes and then join them together
+        mean_diff = mean_diff.stack().reset_index()
+        mean_diff.columns = ['sample', 'measured_site', 'delta_mf']
+        median_diff = median_diff.stack().reset_index()
+        median_diff.columns = ['sample', 'measured_site', 'delta_mf_median']
+        ztest_pvals = ztest_pvals.stack().reset_index()
+        ztest_pvals.columns = ['sample', 'measured_site', 'ztest_pval']
+        zscores = zscores.stack().reset_index()
+        zscores.columns = ['sample', 'measured_site', 'zscore']
+        modified_zscores = modified_zscores.stack().reset_index()
+        modified_zscores.columns = ['sample', 'measured_site', 'modified_zscore']
+        mwu_pvals = mwu_pvals.stack().reset_index()
+        mwu_pvals.columns = ['sample', 'measured_site', 'mwu_pval']
+        # merge all together on sample and measured_site
+        all_metrics = mean_diff.merge(median_diff, on=['sample', 'measured_site'])
+        all_metrics = all_metrics.merge(ztest_pvals, on=['sample', 'measured_site'])
+        all_metrics = all_metrics.merge(zscores, on=['sample', 'measured_site'])
+        all_metrics = all_metrics.merge(modified_zscores, on=['sample', 'measured_site'])
+        all_metrics = all_metrics.merge(mwu_pvals, on=['sample', 'measured_site'])
+        return all_metrics
+        
 
     def effect_on_each_site(self, mut_nearby_measured_df):
         """
@@ -270,8 +396,9 @@ class mutationScanDistance:
         @ returns: df with columns=[measured_site, mut_cpg, delta_mf, ztest_pval] and rows=[each mut_cpg, measured_site pair]
         """
         mut_nearby_measured_w_illum_df = self._join_with_illum(mut_nearby_measured_df)
-
-        nearby_site_diffs = []
+        
+        num_skipped = 0
+        all_metrics_dfs = []
         for _, mut_row in track(mut_nearby_measured_df.iterrows(), description="Analyzing each mutation", total=len(mut_nearby_measured_df)):
         #for _, mut_row in mut_nearby_measured_df.iterrows():
             # get the mutated sample  and the MF's of the same age samples
@@ -283,24 +410,27 @@ class mutationScanDistance:
                 print("{} samples excluded".format(len(same_age_tissue_samples_mf_df.index.values) - len(same_age_tissue_non_mut_samples)))
             same_age_tissue_samples_mf_df = same_age_tissue_samples_mf_df.loc[same_age_tissue_non_mut_samples]
             if len(same_age_tissue_samples_mf_df) <= 10:
-                print("WARNING: Not enough samples of the same age and tissue to calculate effect of mutation", flush=True)
-                continue            
+                num_skipped += 1
+                continue       
             # get this mutated sample's MF at comparison sites
             nearby_sites = mut_row['close_measured']
             mut_sample_nearby_mfs = self.all_methyl_age_df_t.loc[mut_row['sample'], nearby_sites] 
             # measure the change in methylation between sites in the mutated sample and in other non-mutated samples of the same age
             # returns df with rows being comparison sites, columns delta_mf and ztest_pval 
-            nearby_diff = self._compare_sites(same_age_tissue_samples_mf_df[nearby_sites], mut_sample_nearby_mfs)
+            metrics = self._compare_sites_new(same_age_tissue_samples_mf_df[nearby_sites], mut_sample_nearby_mfs)
+            
+            metrics['mut_cpg'] = mut_row['sample'] + '_' + mut_row['chr'] + ':' + str(mut_row['start'])
+            # create column called 'mutated' that is True if the sample is the mutated sample
+            metrics['mutated'] = metrics['sample'] == mut_row['sample']
+            cpg_to_dist_dict = dict(zip(mut_row['close_measured'], mut_row['close_measured_dists']))
+            metrics['measured_site_dist'] = metrics['measured_site'].map(cpg_to_dist_dict)
+
             # add to output
-            nearby_diff['mut_cpg'] = mut_row['sample'] + '_' + mut_row['chr'] + ':' + str(mut_row['start'])
-            nearby_diff['measured_site_dist'] = mut_row['close_measured_dists']
-            nearby_diff['sample'] = mut_row['sample']
-            nearby_site_diffs.append(nearby_diff)
-        # concat all the dfs in nearby_site_diffs into one df
-        nearby_site_diffs_df = pd.concat(nearby_site_diffs)
-        # reset index and make old index a column called measured_site
-        nearby_site_diffs_df = nearby_site_diffs_df.reset_index().rename(columns = {'index': 'measured_site'})
-        return nearby_site_diffs_df
+            all_metrics_dfs.append(metrics)
+        all_metrics_df = pd.concat(all_metrics_dfs)
+
+        print("WARNING: Not enough samples of the same age and tissue to calculate effect of mutation for {} mutations".format(num_skipped), flush=True)
+        return all_metrics_df
 
     def find_nearby_measured_cpgs(self, max_dist):
         """
@@ -322,12 +452,17 @@ class mutationScanDistance:
         mut_nearby_measured_df['mut_cpg'] = mut_nearby_measured_df['sample'] + '_' + mut_nearby_measured_df['chr'] + ':' + mut_nearby_measured_df['start'].astype(str)
         return mut_nearby_measured_df
 
-    def look_for_disturbances(self, max_dist):
+    def look_for_disturbances(self, max_dist, min_VAF_percentile):
+        """
+        Driver for the analysis. Finds mutations with VAF >= min_VAF_percentile that have a measured CpG within max_dist of the mutation and then looks for disturbances in the methylation of these CpGs.
+        @ max_dist: maximum distance between mutation and measured CpG to be considered
+        @ min_VAF: minimum VAF of mutation to be considered
+        """
         # subset to only mutations that are C>T, non X and Y chromosomes, and that occured in samples with measured methylation
         self.mut_df = self.mut_df[self.mut_df['mutation'] == 'C>T']
         self.mut_df = self.mut_df[(self.mut_df['chr'] != 'X') & (self.mut_df['chr'] != 'Y')]
         self.mut_df = self.mut_df[self.mut_df['sample'].isin(self.all_methyl_age_df_t.index)]
-        self.mut_df = self.mut_df[self.mut_df['DNA_VAF'] >= np.percentile(self.mut_df['DNA_VAF'], 90)]
+        self.mut_df = self.mut_df[self.mut_df['DNA_VAF'] >= np.percentile(self.mut_df['DNA_VAF'], min_VAF_percentile)]
         # subset illumina_cpg_locs_df to only the CpGs that are measured
         self.illumina_cpg_locs_df = self.illumina_cpg_locs_df[self.illumina_cpg_locs_df['#id'].isin(self.all_methyl_age_df_t.columns)]
 
@@ -335,10 +470,10 @@ class mutationScanDistance:
         mut_nearby_measured_df = self.find_nearby_measured_cpgs(max_dist)
 
         # for each mutation with nearby measured site, compare the methylation of the nearby measured sites in the mutated sample to the other samples of same age and dataset
-        nearby_site_diffs_df = self.effect_on_each_site(mut_nearby_measured_df)
+        all_metrics_df = self.effect_on_each_site(mut_nearby_measured_df)
         # fdr correct pvals
-        nearby_site_diffs_df = utils.fdr_correct(nearby_site_diffs_df, pval_col_name='ztest_pval')
+        all_metrics_df = utils.fdr_correct_split(all_metrics_df, pval_col_name = 'ztest_pval', split_col = 'mutated')
+        all_metrics_df.reset_index(inplace=True, drop=True)
+        self.all_metrics_df = all_metrics_df
 
-        self.nearby_site_diffs_df = nearby_site_diffs_df
-
-        return mut_nearby_measured_df, nearby_site_diffs_df
+        return mut_nearby_measured_df, all_metrics_df
