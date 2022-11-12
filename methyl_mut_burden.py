@@ -25,10 +25,10 @@ class methylomeMutationalBurden:
 
     def _observed_methyl_change(self, sample, comparison_samples):
         """
-        Get the observed change/Manhattan distance of the methylome between sample and the comparison samples
+        Get the observed change (Manhattan distance) of the methylome between sample and the comparison samples
         """
-        # exclude age and dataset columns
-        cpg_cols = self.all_methyl_age_df_t.columns[2:]
+        # exclude age dataset, and gender columns from all_methyl_age_df_t
+        cpg_cols = self.all_methyl_age_df_t.columns[3:]
         # subtract the methylome of sample from comparison samples
         comp_samples_df = self.all_methyl_age_df_t.loc[comparison_samples, :]
         methylome_diffs = comp_samples_df.loc[:, cpg_cols].subtract(self.all_methyl_age_df_t.loc[sample, cpg_cols])
@@ -47,29 +47,32 @@ class methylomeMutationalBurden:
         """
         all_results = []
         samples_done = 0
+        # iterate across each dataset in order
         for dset in self.all_methyl_age_df_t['dataset'].unique():
             print(dset)
             dset_methyl_age_df_t = self.all_methyl_age_df_t[self.all_methyl_age_df_t['dataset'] == dset]
-            # list of valid samples to choose from, must have at least 1 ct mutation and methylation data
+            # get a list of valid samples from this dataset to choose from, must have at least 1 ct mutation and methylation data
             samples_w_mut_and_methyl = list(set(dset_methyl_age_df_t.index) & set(self.ct_mut_counts_df.index))
             for sample in track(samples_w_mut_and_methyl, total=len(samples_w_mut_and_methyl), description="Comparing pairs"):
-                # choose a random sample from self.methyl_age_df_t.index
+            #for sample in samples_w_mut_and_methyl:
                 age = dset_methyl_age_df_t.loc[sample, 'age_at_index']
+                gender = dset_methyl_age_df_t.loc[sample, 'gender']
                 # get all other samples that can be compared to rand_sample (same dataset, same age bin)
+                # TODO: add same sex to both of these
                 if same_age:
-                    same_age_dset_samples = dset_methyl_age_df_t[(dset_methyl_age_df_t['age_at_index'] >= age - self.age_bin_size/2) & (dset_methyl_age_df_t['age_at_index'] <= age + self.age_bin_size/2)]
+                    same_age_dset_samples = dset_methyl_age_df_t[(dset_methyl_age_df_t['age_at_index'] >= age - self.age_bin_size/2)
+                                                                & (dset_methyl_age_df_t['age_at_index'] <= age + self.age_bin_size/2)
+                                                                & (dset_methyl_age_df_t['gender'] == gender)]
                     same_age_dset_samples = same_age_dset_samples.drop(sample)
                     comparison_samples = list(set(same_age_dset_samples.index.to_list()) & set(samples_w_mut_and_methyl))
                     if len(comparison_samples) == 0:
                         continue
                 else:
-                    comparison_samples = list(set(dset_methyl_age_df_t.index.to_list()) & set(samples_w_mut_and_methyl))
+                    comparison_samples = list(set(dset_methyl_age_df_t[dset_methyl_age_df_t['gender'] == gender].index.to_list()) & set(samples_w_mut_and_methyl))
                     if len(comparison_samples) == 0:
                         continue
                     comparison_samples.remove(sample)
-                    # choose at most 50 random samples from comparison_samples no replacement
-                    #comparison_samples = random.sample(comparison_samples, min(len(comparison_samples), 50))
-                # get the observed change in methylome sample and the comparison samples
+                # get the observed change in methylome between sample and the comparison samples
                 methylome_diffs = self._observed_methyl_change(sample, comparison_samples)
                 # get the number of mutations in each sample
                 methylome_diffs['mut_diff'] = np.abs(

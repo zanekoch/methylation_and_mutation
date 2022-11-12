@@ -40,8 +40,6 @@ def infer_fns_from_data_dirs(data_dirs):
         data_files_by_name[data_set_name] = this_files_dict
     return data_files_by_name, dataset_names_list
 
-
-
 def get_mutations(mut_fn):
     """
     @ data_files_by_name: dict of dicts of filenames
@@ -102,8 +100,6 @@ def get_methylation(methylation_dir):
     methyl_df = methyl_dd.compute()
     return methyl_df
 
-
-
 def get_metadata(meta_fn):
     """
     @ metadata_fn: filename of metadata
@@ -113,14 +109,13 @@ def get_metadata(meta_fn):
     """
     # get metadata
     meta_df = pd.read_csv(meta_fn, sep='\t')
-    meta_df = meta_df[['sample', 'age_at_initial_pathologic_diagnosis', 'cancer type abbreviation']].drop_duplicates()
+    meta_df = meta_df[['sample', 'age_at_initial_pathologic_diagnosis', 'cancer type abbreviation', 'gender']].drop_duplicates()
     meta_df['sample'] = meta_df['sample'].str[:-3]
     meta_df.set_index('sample', inplace=True)
     # drop nans
     meta_df.dropna(inplace=True)
     # rename to TCGA names
-    meta_df = meta_df.rename(columns={"age_at_initial_pathologic_diagnosis":"age_at_index"})
-    meta_df = meta_df.rename(columns={"cancer type abbreviation":"dataset"})
+    meta_df = meta_df.rename(columns={"age_at_initial_pathologic_diagnosis":"age_at_index", "cancer type abbreviation":"dataset"})
     # drop ages that can't be formated as ints
     meta_df['age_at_index'] = meta_df['age_at_index'].astype(str)
     meta_df['age_at_index'] = meta_df[meta_df['age_at_index'].str.contains(r'\d+')]['age_at_index']

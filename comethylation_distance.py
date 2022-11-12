@@ -339,13 +339,11 @@ class mutationScanDistance:
         Join the dataframe with the illumina_cpg_locs_df
         """
         df = in_df.copy(deep=True)
-        df[['sample2', 'mut_cpg_chr_start']] = df['mut_cpg'].str.split('_', expand=True)
-        df[['chr', 'start']] = df['mut_cpg_chr_start'].str.split(':', expand=True)
+        # split 'mut_cpg' into 'chr' and 'start'
+        df[['chr', 'start']] = df['mut_cpg'].str.split(':', expand=True)
         # convert start column to int with to_numeric
         df['start'] = pd.to_numeric(df['start'])
         df_w_illum = df.merge(self.illumina_cpg_locs_df, on=['chr', 'start'], how='left')
-        # drop the sample2 and mut_cpg_chr_start columns
-        df_w_illum = df_w_illum.drop(columns=['sample2', 'mut_cpg_chr_start'])
         return df_w_illum
 
     def plot_heatmap(self, mut_sample_cpg, nearby_site_diffs_w_illum_df, mut_nearby_measured_w_illum_df, remove_other_muts=True):
@@ -549,7 +547,7 @@ class mutationScanDistance:
         num_dropped = 0
         all_metrics_dfs = []
         for _, mut_row in track(mut_nearby_measured_df.iterrows(), description="Analyzing each mutation", total=len(mut_nearby_measured_df)):
-        #for _, mut_row in mut_nearby_measured_df.iloc[:50].iterrows():
+        #for _, mut_row in mut_nearby_measured_df.iterrows():
             # get the same age and dataset samples
             same_age_dset_samples = self._same_age_and_tissue_samples(mut_row['case_submitter_id'])
             # exclude samples that have ANY mutations within max_dist of a close_measured site
@@ -574,6 +572,7 @@ class mutationScanDistance:
             metrics['measured_site_dist'] = metrics['measured_site'].map(cpg_to_dist_dict)
             # add to output
             all_metrics_dfs.append(metrics)
+    
         all_metrics_df = pd.concat(all_metrics_dfs)
         print("WARNING: Not enough samples of the same age and tissue to calculate effect of mutation for {} mutations".format(num_skipped), flush=True)
         print("WARNING: Dropped {} samples due to colliding mutation".format(num_dropped), flush=True)
