@@ -24,12 +24,12 @@ def plot_mutations_distributions(all_mut_df, out_dir, illumina_cpg_locs_df, all_
     """
     # plot distribution of mutation type all together
     fig, axes = plt.subplots(figsize=(7,6), facecolor="white")
-    axes = (all_mut_df['mutation'].value_counts() / len(all_mut_df['mutation'])).plot.bar(ax=axes, xlabel="Mutation type", color='maroon', alpha=0.7, ylabel="Proportion of mutations")
+    axes = (all_mut_df['mutation'].value_counts() / len(all_mut_df['mutation'])).plot.bar(ax=axes, xlabel="Mutation type", color='maroon', alpha=0.7, ylabel="Pan-cancer frequency of mutation")
     fig.savefig(os.path.join(out_dir, 'mut_type_count_all_datasets.png'))
     # plot distribution of just mutations in measured CpG sites
     fig2, axes2 = plt.subplots(figsize=(7,6), facecolor="white")
     mut_in_measured_cpg_df = utils.join_df_with_illum_cpg(all_mut_df, illumina_cpg_locs_df, all_methyl_df_t)
-    axes2 = (mut_in_measured_cpg_df['mutation'].value_counts() / len(mut_in_measured_cpg_df['mutation'])).plot.bar(ax=axes2, xlabel="Mutations in measured CpG sites", color='maroon', alpha=0.7,ylabel="Proportion of mutations")
+    axes2 = (mut_in_measured_cpg_df['mutation'].value_counts() / len(mut_in_measured_cpg_df['mutation'])).plot.bar(ax=axes2, xlabel="Mutations in measured CpG sites", color='maroon', alpha=0.7,ylabel="Pan-cancer frequency of mutation")
     fig2.savefig(os.path.join(out_dir, 'mut_type_count_in_measured_cpg_datasets.png'))
     return mut_in_measured_cpg_df
 
