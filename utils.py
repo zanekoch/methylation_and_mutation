@@ -250,7 +250,6 @@ def plot_mutation_count_by_age(all_mut_df, all_meta_df, dataset_names_list, out_
         fig.savefig(os.path.join(out_dir, 'ct_mut_count_by_age_each_dataset.png'))
     return
 
-
 def get_methyl_fractions(ct_mutation_in_measured_cpg_df, all_methyl_df_t):
     methyl_fractions = []
     for _, row in ct_mutation_in_measured_cpg_df.iterrows():
@@ -418,7 +417,6 @@ def convert_csv_to_parquet(in_fn):
     out_fn = in_fn.split('.')[0] + '.parquet'
     table = csv.read_csv(in_fn, parse_options=csv.ParseOptions(delimiter="\t"))
     parquet.write_table(table, out_fn)
-
 
 def plot_corr_dist_boxplots(corr_dist_df):
     """

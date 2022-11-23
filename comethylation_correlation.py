@@ -34,7 +34,6 @@ def select_corr_sites(corr_df,
     @ percentile: percentile of sites to select
     @ returns: list of sites to select
     """
-    # get the value of the qth percentile cpg site in absolute value so negatively correlated sites are included
     q = corr_df.quantile(percentile, interpolation='lower')
     # select num sites closest to q
     comparison_sites = corr_df.iloc[(corr_df - q).abs().argsort().iloc[:num]].index
@@ -89,15 +88,22 @@ def effect_one_mutation(all_methyl_age_df_t,
 
     # exclude samples that have a mutation in any of the linked sites
     samples_to_exclude = detect_effect_in_other_samples(linked_sites.to_list(), mut_in_measured_cpg_w_methyl_age_df)
+
     same_age_tissue_non_mut_samples = np.setdiff1d(same_age_tissue_samples_mf_df.index.values, samples_to_exclude)
     if (len(same_age_tissue_samples_mf_df.index.values) - len(same_age_tissue_non_mut_samples)) > 0:
                 print("{} samples excluded".format(len(same_age_tissue_samples_mf_df.index.values) - len(same_age_tissue_non_mut_samples)))
     same_age_tissue_samples_mf_df = same_age_tissue_samples_mf_df.loc[same_age_tissue_non_mut_samples]
 
     # measure the change in methylation between linked sites in the mutated sample and in other non-mutated samples of the same age and tissue
-    linked_diff = compare_sites(same_age_tissue_methyl_df = same_age_tissue_samples_mf_df[linked_sites], mut_sample_methyl_df = this_chr_methyl_age_df_t.loc[mut_sample, linked_sites] )
+    metrics = compare_sites(same_age_tissue_methyl_df = same_age_tissue_samples_mf_df[linked_sites], mut_sample_methyl_df = this_chr_methyl_age_df_t.loc[mut_sample, linked_sites] )
+    print(metrics)
+    metrics['mut_cpg'] = mut_cpg
+    # create column called 'mutated' that is True if the sample is the mutated sample
+    metrics['mutated'] = metrics['sample'] == mut_sample
+    metrics['measured_site_corr_perc'] = percentile
+
     # return lists to add to dictionaries
-    return mut_cpg, linked_sites, linked_diff['delta_mf'].to_list(), linked_diff['ztest_pval'].to_list()
+    return mut_cpg, linked_sites, metrics
 
 def measure_mut_eff(muts_to_test,
                     all_methyl_age_df_t,
@@ -118,12 +124,12 @@ def measure_mut_eff(muts_to_test,
     @ returns: a dataframe of pvals and effect sizes comparing linked sites in mutated sample to linked sites in non-mutated (within age_bin_size/2 year age) samples, for: MabsErr, MavgErr, pearson r, and WilcoxonP 
     """
     # for each mutated CpG that we have correlation for
-    linked_sites_names_dict, linked_site_diffs_dict, linked_site_z_pvals_dict = {}, {}, {}
+    linked_sites_names_dict, metrics_dict = {}, {}
     
     each_perc_result_lists = []
     # iterate across CpGs we are testing
-    for mut_tup in track(muts_to_test, description="Analyzing each mutation"):
-    #for mut_tup in muts_to_test:
+    #for mut_tup in track(muts_to_test, description="Analyzing each mutation"):
+    for mut_tup in muts_to_test:
         each_perc_result_lists.append(
             effect_one_mutation(all_methyl_age_df_t, illumina_cpg_locs_df, mut_in_measured_cpg_w_methyl_age_df, percentile, num_linked_sites, age_bin_size, mut_sample = mut_tup[0], mut_cpg = mut_tup[1])
             )
@@ -133,21 +139,20 @@ def measure_mut_eff(muts_to_test,
     for this_perc_result_list in each_perc_result_lists:
         mut_cpg = this_perc_result_list[0]
         linked_sites_names_dict[mut_cpg] = this_perc_result_list[1]
-        linked_site_diffs_dict[mut_cpg] = this_perc_result_list[2]
-        linked_site_z_pvals_dict[mut_cpg] = this_perc_result_list[3]
+        metrics_dict[mut_cpg] = this_perc_result_list[2]
+        
     
     linked_sites_names_df = pd.DataFrame.from_dict(linked_sites_names_dict, orient='index')
-    linked_sites_diffs_df = pd.DataFrame.from_dict(linked_site_diffs_dict, orient='index')
-    linked_sites_z_pvals_df = pd.DataFrame.from_dict(linked_site_z_pvals_dict, orient='index')
+    metrics_df = pd.DataFrame.from_dict(metrics_dict, orient='index')
     
-    return linked_sites_names_df, linked_sites_diffs_df, linked_sites_z_pvals_df
+    return linked_sites_names_df, metrics_df
 
 def mutation_eff_varying_linkage_perc(muts_to_test,
                                 all_methyl_age_df_t,
                                 illumina_cpg_locs_df,
                                 mut_in_measured_cpg_w_methyl_age_df,
                                 num_linked_sites,
-                                age_bin_size = 10):
+                                age_bin_size = 5):
     """
     For each percentile of comparison sites, get the effect size of the mutation in the mutated sample compared to the effect size of the mutation in the non-mutated samples of the same age.
     @ muts_to_test: list of tuples of (mutated sample, mutated CpG)
@@ -158,11 +163,10 @@ def mutation_eff_varying_linkage_perc(muts_to_test,
     @ age_bin_size: age bin size to use for selected samples to compare at comparison sites
     """ 
     # calculate results varying percentile of linked CpG sites, only chr1 sites
-    linked_sites_names_dfs, linked_sites_diffs_dfs, linked_sites_z_pvals_dfs = [], [], []
+    linked_sites_names_dfs, metrics_dfs = [], []
     for percentile in PERCENTILES:
         print("Starting percentile: {}".format(percentile))
-        linked_sites_names_df, linked_sites_diffs_df, linked_sites_z_pvals_df = measure_mut_eff(muts_to_test, all_methyl_age_df_t, illumina_cpg_locs_df, mut_in_measured_cpg_w_methyl_age_df, percentile, num_linked_sites, age_bin_size)
+        linked_sites_names_df, metrics_df = measure_mut_eff(muts_to_test, all_methyl_age_df_t, illumina_cpg_locs_df, mut_in_measured_cpg_w_methyl_age_df, percentile, num_linked_sites, age_bin_size)
         linked_sites_names_dfs.append(linked_sites_names_df)
-        linked_sites_diffs_dfs.append(linked_sites_diffs_df)
-        linked_sites_z_pvals_dfs.append(linked_sites_z_pvals_df)
-    return linked_sites_names_dfs, linked_sites_diffs_dfs, linked_sites_z_pvals_dfs
+        metrics_dfs.append(metrics_df)
+    return linked_sites_names_dfs, metrics_dfs
