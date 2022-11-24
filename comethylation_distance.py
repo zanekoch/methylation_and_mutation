@@ -162,7 +162,7 @@ class mutationScanDistance:
         axes.set_ylabel(r"$\Delta$MF")
         return
 
-    def _join_with_illum(self, in_df):
+    def _join_with_illum(self, in_df, different_illum = None):
         """
         Join the dataframe with the illumina_cpg_locs_df
         """
@@ -171,7 +171,10 @@ class mutationScanDistance:
         df[['chr', 'start']] = df['mut_cpg'].str.split(':', expand=True)
         # convert start column to int with to_numeric
         df['start'] = pd.to_numeric(df['start'])
-        df_w_illum = df.merge(self.illumina_cpg_locs_df, on=['chr', 'start'], how='left')
+        if different_illum is None:
+            df_w_illum = df.merge(self.illumina_cpg_locs_df, on=['chr', 'start'], how='left')
+        else:
+            df_w_illum = df.merge(different_illum, on=['chr', 'start'], how='left')
         return df_w_illum
 
     def plot_heatmap(self, mut_sample_cpg, nearby_site_diffs_w_illum_df, mut_nearby_measured_w_illum_df, remove_other_muts=True):
@@ -416,25 +419,29 @@ class mutationScanDistance:
                 print(chrom, dset, flush=True)
 
     def _select_correl_sites(self,
-        methyl_df,
-        mut_cpg,
-        percentile) -> list:
+        methyl_df: pd.DataFrame,
+        mut_cpg: str,
+        corr_direction: str) -> list:
         """
-        Gets the num sites that are in the top Percentile percentile of most positively correlated sites with in_cpg
-        @ in_cpg: cpg to get correlated sites for
-        @ corr_df: df of correlation between sites and in_cpg
-        @ num: number of sites to select
-        @ percentile: percentile of sites to select
-        @ returns: list of sites to select
+        Gets the num sites that are either the most positively or negativelty correlated sites with in_cpg
+        @ methyl_df: df with columns=[cpg1, cpg2, ..., cpgN, dataset] and rows=[samples]
+        @ mut_cpg: the cpg that we are interested in correlating with
+        @ corr_direction: 'pos' or 'neg' for positive or negative correlation
+        @ returns: list of sites
         """
         # get the correlation between each CpG in this dataset and chrom with mut_cpg
         corr_df = methyl_df.loc[:, methyl_df.columns != mut_cpg].corrwith(methyl_df[mut_cpg], axis=0)
         # get the value of the 'percentile' highest correlation
-        q = corr_df.quantile(percentile, interpolation='lower')
-        # select num sites closest to this value (q)
-        return corr_df.iloc[(corr_df - q).abs().argsort().iloc[:self.num_correl_sites]].index.to_list()
+        if corr_direction == 'pos':
+            q = corr_df.quantile(1, interpolation='lower')
+            # select num sites closest to q
+            return corr_df.iloc[(corr_df - q).abs().argsort().iloc[:self.num_correl_sites]].index
+        elif corr_direction == 'neg':
+            q = corr_df.quantile(0, interpolation='higher')
+            # select num sites closest to q
+            return corr_df.iloc[(corr_df - q).abs().argsort().iloc[:self.num_correl_sites]].index
 
-    def _find_correl_measured_cpgs(self, min_VAF_percentile):
+    def _find_correl_measured_cpgs(self, min_VAF_percentile, corr_direction):
         mut_correl_measured_l = []
         for chrom in self.all_mut_w_age_df['chr'].unique():
             # illum is already subset to measured cpgs
@@ -450,9 +457,9 @@ class mutationScanDistance:
             for _, mut_row in mut_locs.iterrows():
                 this_dset_methyl_df = this_chr_methyl_df.loc[this_chr_methyl_df['dataset'] == mut_row['dataset'], :]
                 correl_sites.append(self._select_correl_sites(
-                    this_dset_methyl_df,
+                    methyl_df = this_dset_methyl_df,
                     mut_cpg = mut_row['#id'],
-                    percentile = 1))
+                    corr_direction = corr_direction))
             mut_locs['close_measured_dists'] = [[i for i in range(self.num_correl_sites)] for _ in range(len(mut_locs))]
             mut_locs['close_measured'] = correl_sites
             mut_correl_measured_l.append(mut_locs)
@@ -485,21 +492,24 @@ class mutationScanDistance:
         mut_nearby_measured_df.loc[:, 'mut_cpg'] = mut_nearby_measured_df['chr'] + ':' + mut_nearby_measured_df['start'].astype(str)
         return mut_nearby_measured_df 
 
-    def look_for_disturbances(self, min_VAF_percentile, linkage_method = 'dist'):
+    def look_for_disturbances(self, 
+        min_VAF_percentile, 
+        linkage_method,
+        mut_nearby_measured_df = None,
+        corr_direction = 'pos'):
         """
         Driver for the analysis. Finds mutations with VAF >= min_VAF_percentile that have a measured CpG within max_dist of the mutation and then looks for disturbances in the methylation of these CpGs.
         @ max_dist: maximum distance between mutation and measured CpG to be considered
         @ min_VAF: minimum VAF of mutation to be considered
         """
-
         # for each mutation, get a list of the CpGs #id in illum_locs that are within max_dist of the mutation 'start'
-        if linkage_method == 'dist':
-            mut_nearby_measured_df = self._find_nearby_measured_cpgs(min_VAF_percentile)
-        elif linkage_method == 'correl':
-            mut_nearby_measured_df = self._find_correl_measured_cpgs(min_VAF_percentile)
-        else:
-            raise ValueError('linkage_method must be "dist" or "correl"')
-        print(mut_nearby_measured_df)
+        if mut_nearby_measured_df is None:
+            if linkage_method == 'dist':
+                mut_nearby_measured_df = self._find_nearby_measured_cpgs(min_VAF_percentile, corr_direction)
+            elif linkage_method == 'correl':
+                mut_nearby_measured_df = self._find_correl_measured_cpgs(min_VAF_percentile, corr_direction)
+            else:
+                raise ValueError('linkage_method must be "dist" or "correl"')
         # for each mutation with nearby measured site, compare the methylation of the nearby measured sites in the mutated sample to the other samples of same age and dataset
         all_metrics_df = self.effect_on_each_site(mut_nearby_measured_df)
         # fdr correct pvals
@@ -508,6 +518,107 @@ class mutationScanDistance:
         self.all_metrics_df = all_metrics_df
 
         return mut_nearby_measured_df, all_metrics_df
+
+
+def max_prop_effected(
+    to_search_in: pd.DataFrame, 
+    window_size: int, 
+    windows: list
+    ) -> pd.DataFrame:
+    # calculate a props df for each 1000bp window
+    props_dfs = {}
+    for window_start in windows:
+        this_window_df = to_search_in.loc[(to_search_in['measured_site_dist'] >= window_start)
+                        & (to_search_in['measured_site_dist'] < window_start + window_size)]
+        props_mut = {}
+        delta_mf_step = .2
+        delta_mf_bins = [i/10 for i in range(-10, 10, 2)]
+        for bin_start in delta_mf_bins:
+            num_sites_this_window = len(this_window_df[this_window_df['mutated'] == True]['delta_mf_median'])
+            if num_sites_this_window == 0:
+                proportion = np.nan
+            else: 
+                proportion = len(this_window_df[(this_window_df['delta_mf_median'] >= bin_start)
+                            & (this_window_df['delta_mf_median'] < bin_start + delta_mf_step)
+                            & (this_window_df['mutated'] == True)]) / num_sites_this_window
+            props_mut[bin_start] = proportion
+        props_nonmut = {}
+        for bin_start in delta_mf_bins:
+            num_sites_this_window = len(this_window_df[this_window_df['mutated'] == False]['delta_mf_median'])
+            if num_sites_this_window == 0:
+                proportion = np.nan
+            else:
+                proportion = len(this_window_df[(this_window_df['delta_mf_median'] >= bin_start)
+                            & (this_window_df['delta_mf_median'] < bin_start + delta_mf_step)
+                            & (this_window_df['mutated'] == False)]) / num_sites_this_window
+            props_nonmut[bin_start] = proportion
+        # combine these dicts into a dataframe
+        props_df = pd.DataFrame.from_dict(props_mut, orient='index', columns=['mutated'])
+        props_df['nonmutated'] = props_nonmut.values()
+        props_df['Ratio of probability'] = props_df['mutated'] / props_df['nonmutated']
+        props_df.index = [round(i, 1) for i in props_df.index.to_list()]
+        props_dfs[window_start] = props_df
+    # combine all the props dfs into one
+    props_df = pd.concat(props_dfs, axis=0).reset_index()
+    props_df.columns = ['Distance', 'Delta MF', 'mutated', 'nonmutated', 'Ratio of probability']
+    return props_df
+
+
+def prop_effected_distr(
+    dists: list, 
+    metrics_df: pd.DataFrame
+    ) -> None:
+
+    axes_int = 0
+    fig, axes = plt.subplots(3, len(dists), figsize=(5*len(dists), 10), dpi=100, gridspec_kw={'height_ratios': [2, 1, 1.5]}, sharey='row')
+    axes = axes.flatten()
+
+    for i in range(len(dists)):
+        close_diffs_df = metrics_df.loc[(metrics_df['measured_site_dist'].abs() >= dists[i][0])
+                        & (metrics_df['measured_site_dist'].abs() < dists[i][1])]
+
+        props_mut = {}
+        delta_mf_step = .2
+        delta_mf_bins = [i/10 for i in range(-10, 10, 2)]
+        for bin_start in delta_mf_bins:
+            proportion = len(close_diffs_df[(close_diffs_df['delta_mf_median'] >= bin_start)
+                            & (close_diffs_df['delta_mf_median'] < bin_start + delta_mf_step)
+                            & (close_diffs_df['mutated'] == True)]) / len(close_diffs_df[close_diffs_df['mutated'] == True]['delta_mf_median'])
+            props_mut[bin_start] = proportion
+        props_nonmut = {}
+        for bin_start in delta_mf_bins:
+            proportion = len(close_diffs_df[(close_diffs_df['delta_mf_median'] >= bin_start)
+                            & (close_diffs_df['delta_mf_median'] < bin_start + delta_mf_step)
+                            & (close_diffs_df['mutated'] == False)]) / len(close_diffs_df[close_diffs_df['mutated'] == False]['delta_mf_median'])
+            props_nonmut[bin_start] = proportion
+        # combine these dicts into a dataframe
+        props_df = pd.DataFrame.from_dict(props_mut, orient='index', columns=['mutated'])
+        props_df['nonmutated'] = props_nonmut.values()
+        props_df['Ratio of probability'] = props_df['mutated'] / props_df['nonmutated']
+        props_df.index = [round(j, 1) for j in props_df.index.to_list()]
+        sns.histplot(data=close_diffs_df, x='delta_mf_median', hue='mutated', palette=['maroon', 'steelblue'],
+            bins=[i/10 for i in range(-10, 11, 2)], log_scale=[False, True], common_norm=False, common_bins=True,
+            stat='probability', kde=True, kde_kws={'bw_adjust': 3}, alpha=.3, ax = axes[axes_int])
+        axes[axes_int].set_xlim(-1, 1)
+        axes[axes_int].set_title(f'Positively correlated sites: {dists[i][0]} - {dists[i][1]}')
+        # set x label
+        axes[axes_int].set_xlabel(r"$\Delta$MF")
+        axes[axes_int].xaxis.set_tick_params(labelbottom=True)
+        axes[axes_int].yaxis.set_tick_params(labelleft=True)
+        # ratio of pdfs
+        sns.lineplot(data=props_df, x=props_df.index + .05, y='Ratio of probability',
+                    palette=['maroon'], ax = axes[axes_int + len(dists)],
+                    color='black', marker='o')
+        # set x lim
+        axes[axes_int + len(dists)].set_xlim(-1, 1)
+        axes[axes_int + len(dists)].axhline(y=1, color='black', linestyle='--')
+        axes[axes_int + len(dists)].set_xlabel(r"$\Delta$MF")
+        axes[axes_int + len(dists)].yaxis.set_tick_params(labelleft=True)
+
+        sns.histplot(data=close_diffs_df, x='distance', bins=10, log_scale=[True, False], color='grey', ax = axes[axes_int + 2*len(dists)])
+        axes[axes_int + 2*len(dists)].set_xlabel('Distance (bp)')
+        axes[axes_int + 2*len(dists)].set_ylabel('Count of sites')
+        axes_int += 1
 
 
 
@@ -520,14 +631,17 @@ class mutationScanDistanceMulti:
         self.age_bin_size = age_bin_size
         self.max_dist = max_dist
 
-    def _join_with_illum(self, in_df):
+    def _join_with_illum(self, in_df, different_illum = None):
         """
         Join the dataframe with the illumina_cpg_locs_df
         """
         df = in_df.copy(deep=True)
         # convert start column to int with to_numeric
         df['start'] = pd.to_numeric(df['start'])
-        df_w_illum = df.merge(self.illumina_cpg_locs_df, on=['chr', 'start'], how='left')
+        if different_illum is not None:
+            df_w_illum = df.merge(self.illumina_cpg_locs_df, on=['chr', 'start'], how='left')
+        else:
+            df_w_illum = df.merge(different_illum, on=['chr', 'start'], how='left')
         return df_w_illum
 
     def _fdr_correct(self, all_metrics_df):

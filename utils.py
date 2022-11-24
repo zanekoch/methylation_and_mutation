@@ -464,14 +464,13 @@ def methylome_pca(all_methyl_df_t, illumina_cpg_locs_df, all_mut_df, num_pcs=5):
     methyl_chr1_tranf = pca.fit_transform(methyl_chr1_scaled)
     
     # count c>T mutations for each sample on chr 1, and fill in missing samples with 0
-    mut_counts_by_sample = all_mut_df[(all_mut_df.chr == '1') & (all_mut_df.mutation == 'C>T')]['sample'].value_counts().reindex(all_methyl_df_t.index.values).fillna(0)
-    print(mut_counts_by_sample)
+    mut_counts_by_sample = all_mut_df[(all_mut_df.chr == '1') & (all_mut_df.mutation == 'C>T')]['case_submitter_id'].value_counts().reindex(all_methyl_df_t.index.values).fillna(0)
     # put in same order as methyl_chr1
     mut_counts_by_sample = mut_counts_by_sample.loc[set(methyl_chr1.index.values) & set(mut_counts_by_sample.index.values)]
     # measure correlation of each sample projected onto each pc with mut_counts_by_sample
     pc_corrs_w_mut_counts = [np.corrcoef(mut_counts_by_sample, methyl_chr1_tranf[:,i])[0,1] for i in range(num_pcs)]
 
-    fig, axes = plt.subplots(1,2 , figsize=(12,5), dpi=175)
+    fig, axes = plt.subplots(1,2 , figsize=(12,5), dpi=100)
     per_var = np.round(pca.explained_variance_ratio_ * 100, decimals=1)
     labels = ['PC' + str(x) for x in range(1, len(per_var) + 1)]
     axes[0].bar(x=range(1, len(per_var)+1), height=per_var, tick_label=labels)
@@ -479,6 +478,26 @@ def methylome_pca(all_methyl_df_t, illumina_cpg_locs_df, all_mut_df, num_pcs=5):
     axes[0].set_xlabel('principal component')
     # plot correlation of each pc with mut_counts_by_sample
     axes[1].bar(x=range(1, len(pc_corrs_w_mut_counts)+1), height=pc_corrs_w_mut_counts, tick_label=labels)
+
+
+    # same but with age
+    # reindex 
+    ages = all_methyl_df_t.loc[all_methyl_df_t.index.isin(mut_counts_by_sample.index), 'age_at_index']
+    # put in same order as methyl_chr1
+    ages = ages.loc[set(methyl_chr1.index.values) & set(ages.index.values)]
+
+    # measure correlation of each sample projected onto each pc with mut_counts_by_sample
+    pc_corrs_w_ages = [np.corrcoef(ages, methyl_chr1_tranf[:,i])[0,1] for i in range(num_pcs)]
+    fig, axes = plt.subplots(1,2 , figsize=(12,5), dpi=100)
+    per_var = np.round(pca.explained_variance_ratio_ * 100, decimals=1)
+    labels = ['PC' + str(x) for x in range(1, len(per_var) + 1)]
+    axes[0].bar(x=range(1, len(per_var)+1), height=per_var, tick_label=labels)
+    axes[0].set_ylabel('percentange of explained variance')
+    axes[0].set_xlabel('principal component')
+    # plot correlation of each pc with mut_counts_by_sample
+    axes[1].bar(x=range(1, len(pc_corrs_w_ages)+1), height=pc_corrs_w_ages, tick_label=labels)
+
+
 
     return pca, methyl_chr1_tranf, pc_corrs_w_mut_counts
 
