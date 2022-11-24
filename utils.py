@@ -250,7 +250,6 @@ def plot_mutation_count_by_age(all_mut_df, all_meta_df, dataset_names_list, out_
         fig.savefig(os.path.join(out_dir, 'ct_mut_count_by_age_each_dataset.png'))
     return
 
-
 def get_methyl_fractions(ct_mutation_in_measured_cpg_df, all_methyl_df_t):
     methyl_fractions = []
     for _, row in ct_mutation_in_measured_cpg_df.iterrows():
@@ -419,7 +418,6 @@ def convert_csv_to_parquet(in_fn):
     table = csv.read_csv(in_fn, parse_options=csv.ParseOptions(delimiter="\t"))
     parquet.write_table(table, out_fn)
 
-
 def plot_corr_dist_boxplots(corr_dist_df):
     """
     Plots distance vs correlation boxplots
@@ -466,14 +464,13 @@ def methylome_pca(all_methyl_df_t, illumina_cpg_locs_df, all_mut_df, num_pcs=5):
     methyl_chr1_tranf = pca.fit_transform(methyl_chr1_scaled)
     
     # count c>T mutations for each sample on chr 1, and fill in missing samples with 0
-    mut_counts_by_sample = all_mut_df[(all_mut_df.chr == '1') & (all_mut_df.mutation == 'C>T')]['sample'].value_counts().reindex(all_methyl_df_t.index.values).fillna(0)
-    print(mut_counts_by_sample)
+    mut_counts_by_sample = all_mut_df[(all_mut_df.chr == '1') & (all_mut_df.mutation == 'C>T')]['case_submitter_id'].value_counts().reindex(all_methyl_df_t.index.values).fillna(0)
     # put in same order as methyl_chr1
     mut_counts_by_sample = mut_counts_by_sample.loc[set(methyl_chr1.index.values) & set(mut_counts_by_sample.index.values)]
     # measure correlation of each sample projected onto each pc with mut_counts_by_sample
     pc_corrs_w_mut_counts = [np.corrcoef(mut_counts_by_sample, methyl_chr1_tranf[:,i])[0,1] for i in range(num_pcs)]
 
-    fig, axes = plt.subplots(1,2 , figsize=(12,5), dpi=175)
+    fig, axes = plt.subplots(1,2 , figsize=(12,5), dpi=100)
     per_var = np.round(pca.explained_variance_ratio_ * 100, decimals=1)
     labels = ['PC' + str(x) for x in range(1, len(per_var) + 1)]
     axes[0].bar(x=range(1, len(per_var)+1), height=per_var, tick_label=labels)
@@ -482,14 +479,34 @@ def methylome_pca(all_methyl_df_t, illumina_cpg_locs_df, all_mut_df, num_pcs=5):
     # plot correlation of each pc with mut_counts_by_sample
     axes[1].bar(x=range(1, len(pc_corrs_w_mut_counts)+1), height=pc_corrs_w_mut_counts, tick_label=labels)
 
+
+    # same but with age
+    # reindex 
+    ages = all_methyl_df_t.loc[all_methyl_df_t.index.isin(mut_counts_by_sample.index), 'age_at_index']
+    # put in same order as methyl_chr1
+    ages = ages.loc[set(methyl_chr1.index.values) & set(ages.index.values)]
+
+    # measure correlation of each sample projected onto each pc with mut_counts_by_sample
+    pc_corrs_w_ages = [np.corrcoef(ages, methyl_chr1_tranf[:,i])[0,1] for i in range(num_pcs)]
+    fig, axes = plt.subplots(1,2 , figsize=(12,5), dpi=100)
+    per_var = np.round(pca.explained_variance_ratio_ * 100, decimals=1)
+    labels = ['PC' + str(x) for x in range(1, len(per_var) + 1)]
+    axes[0].bar(x=range(1, len(per_var)+1), height=per_var, tick_label=labels)
+    axes[0].set_ylabel('percentange of explained variance')
+    axes[0].set_xlabel('principal component')
+    # plot correlation of each pc with mut_counts_by_sample
+    axes[1].bar(x=range(1, len(pc_corrs_w_ages)+1), height=pc_corrs_w_ages, tick_label=labels)
+
+
+
     return pca, methyl_chr1_tranf, pc_corrs_w_mut_counts
 
-def add_ages_to_mut_and_methyl(mut_in_measured_cpg_w_methyl_df, all_meta_df, all_methyl_df_t):
-    to_join_mut_in_measured_cpg_w_methyl_df = mut_in_measured_cpg_w_methyl_df.rename(columns={'sample':'case_submitter_id'})
-    mut_in_measured_cpg_w_methyl_age_df =  to_join_mut_in_measured_cpg_w_methyl_df.join(all_meta_df, on =['case_submitter_id'], rsuffix='_r',how='inner')
+def add_ages_to_mut_and_methyl(mut_df, all_meta_df, all_methyl_df_t):
+    to_join_mut_df = mut_df.rename(columns={'sample':'case_submitter_id'})
+    mut_w_methyl_age_df =  to_join_mut_df.join(all_meta_df, on =['case_submitter_id'], rsuffix='_r',how='inner')
     # join ages with methylation
     all_methyl_age_df_t = all_meta_df.join(all_methyl_df_t, on =['sample'], rsuffix='_r',how='inner')
-    return mut_in_measured_cpg_w_methyl_age_df, all_methyl_age_df_t
+    return mut_w_methyl_age_df, all_methyl_age_df_t
 
 def get_same_age_and_tissue_samples(methyl_age_df_t, mut_sample_name, age_bin_size = 10):
     """
@@ -545,7 +562,19 @@ def half(l, which_half):
     else:
         return l[int(len(l)/2):]
 
-def fdr_correct(df, pval_col_name):
+def fdr_correct(df, pval_col_name = 'ztest_pval'):
     df = df.dropna(subset=[pval_col_name])
     df['sig'], df['fdr_pval'] = fdrcorrection(df.loc[:, pval_col_name], alpha=0.05)
+    return df
+
+def fdr_correct_split(df, pval_col_name = 'ztest_pval', split_col = 'mutated'):
+    df.dropna(subset=[pval_col_name], inplace=True)
+    # split on split_col
+    df1 = df[df[split_col] == True]
+    df2 = df[df[split_col] == False]
+    # correct
+    df1.loc[:, 'sig'], df1.loc[:, 'fdr_pval'] = fdrcorrection(df1.loc[:, pval_col_name], alpha=0.05)
+    df2.loc[:, 'sig'], df2.loc[:, 'fdr_pval'] = fdrcorrection(df2.loc[:, pval_col_name], alpha=0.05)
+    # merge on index
+    df = pd.concat([df1, df2])
     return df

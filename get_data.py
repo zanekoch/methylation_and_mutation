@@ -40,8 +40,6 @@ def infer_fns_from_data_dirs(data_dirs):
         data_files_by_name[data_set_name] = this_files_dict
     return data_files_by_name, dataset_names_list
 
-
-
 def get_mutations(mut_fn):
     """
     @ data_files_by_name: dict of dicts of filenames
@@ -60,32 +58,33 @@ def get_mutations(mut_fn):
 
 def preprocess_methylation(methyl_fn, all_meta_df, illumina_cpg_locs_df, out_dir):
     """
-    Takes in a .parquet methylation file to pre-process and outputs a directory of .parquet processed methylation files with only samples with ages in all_meta_df and CpG sites in illumina_cpg_locs_df
+    Takes in a .csv methylation file to pre-process and outputs a directory of .parquet processed methylation files with only samples with ages in all_meta_df and CpG sites in illumina_cpg_locs_df
     @ methyl_fn: filename of methylation file
     @ all_meta_df: pandas dataframe of metadata for all samples 
     @ illumina_cpg_locs_df: pandas dataframe of CpG sites in illumina
     @ out_dir: directory to output processed methylation files to
     """
-    # read in with dask
-    methyl_dd = dd.read_parquet(methyl_fn)
-    # change sample names to not have '-01' at end
-    new_column_names = [col[:-3] for col in methyl_dd.columns]
-    new_column_names[0] = "sample"
-    methyl_dd.columns = new_column_names
+    from pyarrow import csv
+    table = csv.read_csv(methyl_fn, parse_options=csv.ParseOptions(delimiter="\t"))
     # drop duplicate columns
-    methyl_dd = methyl_dd.loc[:,~methyl_dd.columns.duplicated()]
-    # convert to pandas
-    methyl_df = methyl_dd.compute()
+    methyl_df = table.to_pandas()
+    #methyl_df = pd.read_parquet(methyl_fn)
+    # change sample names to not have '-01' at end
+    new_column_names = [col[:-3] for col in methyl_df.columns]
+    new_column_names[0] = "sample"
+    methyl_df.columns = new_column_names
+    # drop duplicate columns
+    methyl_df = methyl_df.loc[:,~methyl_df.columns.duplicated()]
     # rename sample to cpg and then make it the index
     methyl_df = methyl_df.rename(columns={"sample":"cpg_name"})
     methyl_df = methyl_df.set_index(['cpg_name'])
     # dropna
-    methyl_df = methyl_df.dropna(how='any')
+    #methyl_df = methyl_df.dropna(how='any')
     # subset to only samples with ages in all_meta_df
     methyl_df = methyl_df[methyl_df.columns[methyl_df.columns.isin(all_meta_df.index)]]
     # subset to only CpG sites in illumina_cpg_locs_df
     methyl_df = methyl_df[methyl_df.index.isin(illumina_cpg_locs_df['#id'])]
-    # convert back to dask to output as 200 parquets
+    # convert to dask to output as 200 parquets
     proc_methyl_dd = dd.from_pandas(methyl_df, npartitions=200)
     # output as parquet
     proc_methyl_dd.to_parquet(out_dir)
@@ -102,8 +101,6 @@ def get_methylation(methylation_dir):
     methyl_df = methyl_dd.compute()
     return methyl_df
 
-
-
 def get_metadata(meta_fn):
     """
     @ metadata_fn: filename of metadata
@@ -113,14 +110,13 @@ def get_metadata(meta_fn):
     """
     # get metadata
     meta_df = pd.read_csv(meta_fn, sep='\t')
-    meta_df = meta_df[['sample', 'age_at_initial_pathologic_diagnosis', 'cancer type abbreviation']].drop_duplicates()
+    meta_df = meta_df[['sample', 'age_at_initial_pathologic_diagnosis', 'cancer type abbreviation', 'gender']].drop_duplicates()
     meta_df['sample'] = meta_df['sample'].str[:-3]
     meta_df.set_index('sample', inplace=True)
     # drop nans
     meta_df.dropna(inplace=True)
     # rename to TCGA names
-    meta_df = meta_df.rename(columns={"age_at_initial_pathologic_diagnosis":"age_at_index"})
-    meta_df = meta_df.rename(columns={"cancer type abbreviation":"dataset"})
+    meta_df = meta_df.rename(columns={"age_at_initial_pathologic_diagnosis":"age_at_index", "cancer type abbreviation":"dataset"})
     # drop ages that can't be formated as ints
     meta_df['age_at_index'] = meta_df['age_at_index'].astype(str)
     meta_df['age_at_index'] = meta_df[meta_df['age_at_index'].str.contains(r'\d+')]['age_at_index']
