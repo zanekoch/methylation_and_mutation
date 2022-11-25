@@ -16,12 +16,12 @@ import os
 class mutationScan:
     def __init__(
         self,
-        all_mut_w_age_df,
-        illumina_cpg_locs_df, 
-        all_methyl_age_df_t,
-        age_bin_size, 
-        max_dist,
-        num_correl_sites 
+        all_mut_w_age_df: pd.DataFrame,
+        illumina_cpg_locs_df: pd.DataFrame, 
+        all_methyl_age_df_t: pd.DataFrame,
+        age_bin_size: int, 
+        max_dist: int,
+        num_correl_sites: float 
         ) -> None:
 
         self.all_mut_w_age_df = all_mut_w_age_df
@@ -30,7 +30,6 @@ class mutationScan:
         self.age_bin_size = age_bin_size
         self.max_dist = max_dist
         self.num_correl_sites = num_correl_sites
-
         # Preprocessing: subset to only mutations that are C>T, non X and Y chromosomes, and that occured in samples with measured methylation
         self.all_mut_w_age_df = self.all_mut_w_age_df.loc[(self.all_mut_w_age_df['mutation'] == 'C>T')
          & (self.all_mut_w_age_df['chr'] != 'X') & (self.all_mut_w_age_df['chr'] != 'Y')
@@ -273,12 +272,30 @@ class mutationScan:
         axes.yaxis.label.set_size(15)
         return to_plot_df
 
-    def _same_age_and_tissue_samples(self, sample_name: str) -> list:
+    def preproc_correls(
+        self, 
+        out_dir
+        ) -> None:
         """
-        Get the sample that has the mutation in the mutated CpG and the samples of the same age as that sample
-        @ all_methyl_age_df_t: dataframe with columns=CpGs and rows=samples and entries=methylation fraction
-        @ mut_cpg: the mutated CpG
-        @ returns: the mutated sample name and the samples of the same age and dset as the mutated sample
+        Calculate the correlation matrix for each dataset within each chromosome and output to file
+        """
+        for chrom in self.all_mut_w_age_df['chr'].unique():
+            this_chr_measured_cpgs = self.illumina_cpg_locs_df[self.illumina_cpg_locs_df['chr'] == chrom]
+            for dset in self.all_mut_w_age_df['dataset'].unique():
+                this_chr_dset_methyl_df = self.all_methyl_age_df_t.loc[:, this_chr_measured_cpgs['#id'].to_list() + ['dataset']]
+                this_chr_dset_methyl_df = this_chr_dset_methyl_df[this_chr_dset_methyl_df['dataset'] == dset]
+                corr_df = this_chr_dset_methyl_df.corr()
+                corr_df.to_parquet(os.path.join(out_dir, 'chr{}_{}.parquet'.format(chrom, dset)))
+                print(chrom, dset, flush=True)
+
+    def _same_age_and_tissue_samples(
+        self, 
+        sample_name: str
+        ) -> list:
+        """
+        Return a list of samples with matched age and tissue as the sample_name
+        @ sample_name
+        @ returns: list of sample names
         """
         # get this sample's age and dataset
         this_age = self.all_methyl_age_df_t.loc[sample_name]['age_at_index']
@@ -289,8 +306,13 @@ class mutationScan:
         same_age_dset_samples = same_age_dset_samples.drop(sample_name)
         return same_age_dset_samples.to_list()
 
-    def _detect_effect_in_other_samples(self, sites_to_test: list, mut_row: pd.Series) -> list:
+    def _detect_effect_in_other_samples(
+        self, 
+        sites_to_test: list, 
+        mut_row: pd.Series
+        ) -> list:
         """
+        Detect samples that may have been affected by a mutation in the same region as the mutation we are testing, to discard these samples as they are a bad comparison
         @ sites_to_test: list of sites to test, cg######### format
         @ mut_row: the row from mut_nearby_measured specifying the mutation
         @ returns: list of samples that do not have any C>T mutations in max_dist from any of the sites in sites_to_test
@@ -309,15 +331,15 @@ class mutationScan:
 
         # detect samples that have a mutation in the mut_cpg or within max_dist of it
         have_illegal_muts = have_illegal_muts.append(relevant_mutations.loc[(relevant_mutations['mut_cpg'] == mut_row['mut_cpg']) | (np.abs(relevant_mutations['start'] - mut_row['start']) <= self.max_dist)])
-        
         return have_illegal_muts['case_submitter_id'].to_list()
 
-    def _compare_sites(self, same_age_tissue_methyl_df, mut_sample_methyl_df):
+    def _compare_sites(
+        self, 
+        same_age_tissue_methyl_df, 
+        mut_sample_methyl_df
+        ) -> pd.DataFrame:
         """
-        Get the delta_mf and ztest pvalue for each site in each sample, mutated and non-mutated
-        @returns:
-            - all_samples_diff: samples X sites dataframe with delta_mf for each site and sample
-            - pvals: samples X sites dataframe with ztest pvalue for each site and sample
+        Calculate effect size and pvalue for each comparison
         """
         # create a new dataframe all_samples_at_comparison_sites with same_age_tissue_methyl_df as first rows and mut_sample_methyl_df as last row
         all_samples_at_comparison_sites = same_age_tissue_methyl_df.append(mut_sample_methyl_df)
@@ -363,19 +385,22 @@ class mutationScan:
         all_metrics = all_metrics.merge(modified_zscores, on=['sample', 'measured_site'])
         return all_metrics
 
-    def effect_on_each_site(self, mut_nearby_measured_df):
+    def effect_on_each_site(
+        self, 
+        comparison_sites_df: pd.DataFrame
+        ) -> pd.DataFrame:
         """
         For each mutation, get the effect of the mutation on each measured CpG within max_dist of the mutation
-        @ mut_nearby_measured_df
-        @ returns: df with columns=[measured_site, mut_cpg, delta_mf, ztest_pval] and rows=[each mut_cpg, measured_site pair]
+        @ comparison_sites_df
+        @ returns: df with statistical test and effect sizes
         """        
         num_skipped = 0
         num_dropped = 0
         all_metrics_dfs = []
-        #for _, mut_row in track(mut_nearby_measured_df.iterrows(), description="Analyzing each mutation", total=len(mut_nearby_measured_df)):
+        #for _, mut_row in track(comparison_sites_df.iterrows(), description="Analyzing each mutation", total=len(comparison_sites_df)):
         i = 0
-        total = len(mut_nearby_measured_df)
-        for _, mut_row in mut_nearby_measured_df.iterrows():
+        total = len(comparison_sites_df)
+        for _, mut_row in comparison_sites_df.iterrows():
             # get the same age and dataset samples
             same_age_dset_samples = self._same_age_and_tissue_samples(mut_row['case_submitter_id'])
             # exclude samples that have ANY mutations within max_dist of a close_measured site
@@ -408,20 +433,11 @@ class mutationScan:
         print("WARNING: Dropped {} samples due to colliding mutation".format(num_dropped), flush=True)
         return all_metrics_df
 
-    def preproc_correls(self, out_dir):
-        for chrom in self.all_mut_w_age_df['chr'].unique():
-            this_chr_measured_cpgs = self.illumina_cpg_locs_df[self.illumina_cpg_locs_df['chr'] == chrom]
-            for dset in self.all_mut_w_age_df['dataset'].unique():
-                this_chr_dset_methyl_df = self.all_methyl_age_df_t.loc[:, this_chr_measured_cpgs['#id'].to_list() + ['dataset']]
-                this_chr_dset_methyl_df = this_chr_dset_methyl_df[this_chr_dset_methyl_df['dataset'] == dset]
-                corr_df = this_chr_dset_methyl_df.corr()
-                corr_df.to_parquet(os.path.join(out_dir, 'chr{}_{}.parquet'.format(chrom, dset)))
-                print(chrom, dset, flush=True)
-
     def _select_correl_sites(self,
         methyl_df: pd.DataFrame,
         mut_cpg: str,
-        corr_direction: str) -> list:
+        corr_direction: str
+        ) -> list:
         """
         Gets the num sites that are either the most positively or negativelty correlated sites with in_cpg
         @ methyl_df: df with columns=[cpg1, cpg2, ..., cpgN, dataset] and rows=[samples]
@@ -441,7 +457,17 @@ class mutationScan:
             # select num sites closest to q
             return corr_df.iloc[(corr_df - q).abs().argsort().iloc[:self.num_correl_sites]].index
 
-    def _find_correl_measured_cpgs(self, min_VAF_percentile, corr_direction):
+    def _find_correl_measured_cpgs(
+        self, 
+        min_VAF_percentile: float, 
+        corr_direction: str
+        ) -> pd.DataFrame:
+        """
+        Finds the num_correl_sites most positively or negatively correlated sites with each mutation
+        @ min_VAF_percentile: the minimum VAF percentile that a mutation must have to be considered
+        @ corr_direction: 'pos' or 'neg' for positive or negative correlation
+        @ returns: df of mutations and correlated site pairs
+        """
         mut_correl_measured_l = []
         for chrom in self.all_mut_w_age_df['chr'].unique():
             # illum is already subset to measured cpgs
@@ -468,9 +494,13 @@ class mutationScan:
         mut_correl_measured_df.loc[:, 'mut_cpg'] = mut_correl_measured_df['chr'] + ':' + mut_correl_measured_df['start'].astype(str)
         return mut_correl_measured_df
 
-    def _find_nearby_measured_cpgs(self, min_VAF_percentile):
+    def _find_nearby_measured_cpgs(
+        self, 
+        min_VAF_percentile: float
+        ) -> pd.DataFrame:
         """
         Find the measured cpgs within max_dist of each mutation
+        @ min_VAF_percentile: the minimum VAF percentile that a mutation must have to be considered
         @ returns: df of mutations that have at least one measured CpG within max_dist of the mutation. 'close_measured' column is a list of the measured cpgs within max_dist of the mutation.
         """
         mut_nearby_measured_l = []
@@ -488,36 +518,38 @@ class mutationScan:
             # drop all rows of mut_locs where close_measured is empty
             mut_locs = mut_locs[mut_locs['close_measured'].apply(lambda x: len(x) > 0)]
             mut_nearby_measured_l.append(mut_locs)
-        mut_nearby_measured_df = pd.concat(mut_nearby_measured_l)
-        mut_nearby_measured_df.loc[:, 'mut_cpg'] = mut_nearby_measured_df['chr'] + ':' + mut_nearby_measured_df['start'].astype(str)
-        return mut_nearby_measured_df 
+        comparison_sites_df = pd.concat(mut_nearby_measured_l)
+        comparison_sites_df.loc[:, 'mut_cpg'] = comparison_sites_df['chr'] + ':' + comparison_sites_df['start'].astype(str)
+        return comparison_sites_df 
 
-    def look_for_disturbances(self, 
-        min_VAF_percentile, 
-        linkage_method,
-        mut_nearby_measured_df = None,
-        corr_direction = 'pos'):
+    def look_for_disturbances(
+        self, 
+        min_VAF_percentile: float, 
+        linkage_method: str,
+        comparison_sites_df = None,
+        corr_direction: str = 'pos'
+        ) -> tuple:
         """
         Driver for the analysis. Finds mutations with VAF >= min_VAF_percentile that have a measured CpG within max_dist of the mutation and then looks for disturbances in the methylation of these CpGs.
         @ max_dist: maximum distance between mutation and measured CpG to be considered
         @ min_VAF: minimum VAF of mutation to be considered
         """
         # for each mutation, get a list of the CpGs #id in illum_locs that are within max_dist of the mutation 'start'
-        if mut_nearby_measured_df is None:
+        if comparison_sites_df is None:
             if linkage_method == 'dist':
-                mut_nearby_measured_df = self._find_nearby_measured_cpgs(min_VAF_percentile, corr_direction)
+                comparison_sites_df = self._find_nearby_measured_cpgs(min_VAF_percentile, corr_direction)
             elif linkage_method == 'correl':
-                mut_nearby_measured_df = self._find_correl_measured_cpgs(min_VAF_percentile, corr_direction)
+                comparison_sites_df = self._find_correl_measured_cpgs(min_VAF_percentile, corr_direction)
             else:
                 raise ValueError('linkage_method must be "dist" or "correl"')
         # for each mutation with nearby measured site, compare the methylation of the nearby measured sites in the mutated sample to the other samples of same age and dataset
-        all_metrics_df = self.effect_on_each_site(mut_nearby_measured_df)
+        all_metrics_df = self.effect_on_each_site(comparison_sites_df)
         # fdr correct pvals
         all_metrics_df = utils.fdr_correct(all_metrics_df, pval_col_name = 'ztest_pval')
         all_metrics_df.reset_index(inplace=True, drop=True)
         self.all_metrics_df = all_metrics_df
 
-        return mut_nearby_measured_df, all_metrics_df
+        return comparison_sites_df, all_metrics_df
 
 
 def max_prop_effected(
