@@ -33,13 +33,16 @@ class mutationScan:
         self.max_dist = max_dist
         self.num_correl_sites = num_correl_sites
         # Preprocessing: subset to only mutations that are C>T, non X and Y chromosomes, and that occured in samples with measured methylation
-        self.all_mut_w_age_df = self.all_mut_w_age_df.loc[(self.all_mut_w_age_df['mutation'] == 'C>T')
-         & (self.all_mut_w_age_df['chr'] != 'X') & (self.all_mut_w_age_df['chr'] != 'Y')
-         & (self.all_mut_w_age_df['case_submitter_id'].isin(self.all_methyl_age_df_t.index))]
-        self.all_mut_w_age_df.loc[:, 'mut_cpg'] = self.all_mut_w_age_df['chr'] + ':' + self.all_mut_w_age_df['start'].astype(str)
+        self.all_mut_w_age_df['mut_cpg'] = self.all_mut_w_age_df['chr'] + ':' + self.all_mut_w_age_df['start'].astype(str)
+        self.all_mut_w_age_df = self.all_mut_w_age_df.loc[
+            (self.all_mut_w_age_df['mutation'] == 'C>T')
+            & (self.all_mut_w_age_df['chr'] != 'X') 
+            & (self.all_mut_w_age_df['chr'] != 'Y')
+            & (self.all_mut_w_age_df['case_submitter_id'].isin(self.all_methyl_age_df_t.index)),
+            :]
         # join self.all_mut_w_age_df with the illumina_cpg_locs_df
         all_mut_w_age_illum_df = self.all_mut_w_age_df.copy(deep=True)
-        all_mut_w_age_illum_df.loc[:, 'start'] = pd.to_numeric(self.all_mut_w_age_df.loc[:, 'start'])
+        all_mut_w_age_illum_df['start'] = pd.to_numeric(self.all_mut_w_age_df['start'])
         self.all_mut_w_age_illum_df = all_mut_w_age_illum_df.merge(
                                         self.illumina_cpg_locs_df, on=['chr', 'start'], how='left')
         # subset illumina_cpg_locs_df to only the CpGs that are measured
@@ -332,60 +335,37 @@ class mutationScan:
         have_illegal_muts = relevant_mutations.loc[relevant_mutations.apply(lambda row: any(np.abs(row['start'] - sites_to_test_locs['start']) <= self.max_dist), axis=1)]
 
         # detect samples that have a mutation in the mut_cpg or within max_dist of it
-        have_illegal_muts = have_illegal_muts.append(relevant_mutations.loc[(relevant_mutations['mut_cpg'] == mut_row['mut_cpg']) | (np.abs(relevant_mutations['start'] - mut_row['start']) <= self.max_dist)])
+        have_illegal_muts = pd.concat([have_illegal_muts, relevant_mutations.loc[(relevant_mutations['mut_cpg'] == mut_row['mut_cpg']) | (np.abs(relevant_mutations['start'] - mut_row['start']) <= self.max_dist)]])
         return have_illegal_muts['case_submitter_id'].to_list()
 
+    # TODO: could make it so pvalue is calculated at increasing numbers of sites, so can see how many sites are needed to get a significant result, and when significance is lost again
     def _compare_sites(
         self, 
-        same_age_tissue_methyl_df, 
-        mut_sample_methyl_df
+        comparison_site_mfs: pd.DataFrame, 
+        mut_sample_name: str
         ) -> pd.DataFrame:
         """
         Calculate effect size and pvalue for each comparison
         """
-        # create a new dataframe all_samples_at_comparison_sites with same_age_tissue_methyl_df as first rows and mut_sample_methyl_df as last row
-        all_samples_at_comparison_sites = same_age_tissue_methyl_df.append(mut_sample_methyl_df)
-        # matrix of z scores of each sample at each site being different from the other samples
-        zscores = all_samples_at_comparison_sites.apply(lambda col: stats.zscore(col, nan_policy='omit'), axis=0)
-        # convert to 2 sided pvalues
-        ztest_pvals = stats.norm.sf(abs(zscores))*2
-        ztest_pvals = pd.DataFrame(ztest_pvals, index=all_samples_at_comparison_sites.index, columns=all_samples_at_comparison_sites.columns)
-        # median absolute deviation
-        CONSISTENCY_CONST = 0.6745
-        modified_zscores = all_samples_at_comparison_sites.apply(lambda col: CONSISTENCY_CONST * (col - col.median())/ stats.median_absolute_deviation(col, nan_policy='omit'), axis=0)
-        # get difference of each sample from the mean and median
-        mean = all_samples_at_comparison_sites.mean(axis=0)
-        mean_diff = all_samples_at_comparison_sites.subtract(mean)
-        median = all_samples_at_comparison_sites.median(axis=0)
-        median_diff = all_samples_at_comparison_sites.subtract(median)
-        # if any are not dataframes, convert them to dataframes
-        if not isinstance(mean_diff, pd.DataFrame):
-            mean_diff = pd.DataFrame(mean_diff)
-        if not isinstance(median_diff, pd.DataFrame):
-            median_diff = pd.DataFrame(median_diff)
-        if not isinstance(ztest_pvals, pd.DataFrame):
-            ztest_pvals = pd.DataFrame(ztest_pvals)
-        if not isinstance(zscores, pd.DataFrame):
-            zscores = pd.DataFrame(zscores)
-        if not isinstance(modified_zscores, pd.DataFrame):
-            modified_zscores = pd.DataFrame(modified_zscores)
-        # stack each of these dataframes and then join them together
-        mean_diff = mean_diff.stack().reset_index()
-        mean_diff.columns = ['sample', 'measured_site', 'delta_mf']
-        median_diff = median_diff.stack().reset_index()
-        median_diff.columns = ['sample', 'measured_site', 'delta_mf_median']
-        ztest_pvals = ztest_pvals.stack().reset_index()
-        ztest_pvals.columns = ['sample', 'measured_site', 'ztest_pval']
-        zscores = zscores.stack().reset_index()
-        zscores.columns = ['sample', 'measured_site', 'zscore']
-        modified_zscores = modified_zscores.stack().reset_index()
-        modified_zscores.columns = ['sample', 'measured_site', 'modified_zscore']
-        # merge all together on sample and measured_site
-        all_metrics = mean_diff.merge(median_diff, on=['sample', 'measured_site'])
-        all_metrics = all_metrics.merge(ztest_pvals, on=['sample', 'measured_site'])
-        all_metrics = all_metrics.merge(zscores, on=['sample', 'measured_site'])
-        all_metrics = all_metrics.merge(modified_zscores, on=['sample', 'measured_site'])
-        return all_metrics
+        median_diffs = comparison_site_mfs.apply(
+            lambda row: row - np.nanmedian(comparison_site_mfs.drop(row.name), axis = 0),
+            axis=1
+            )
+        abs_median_diffs = np.abs(median_diffs)
+        if not isinstance(median_diffs, pd.DataFrame):
+            median_diffs = pd.DataFrame(median_diffs)
+        metrics = median_diffs.stack().reset_index()
+        metrics.columns = ['sample', 'measured_site', 'delta_mf_median']
+        # create column called 'mutated' that is True if the sample is the mutated sample
+        metrics['mutated'] = metrics['sample'] == mut_sample_name
+        # wilcoxon rank sum test of absolute median difference between mutated sample and matched samples
+        pval = stats.mannwhitneyu(
+            x = abs_median_diffs.loc[mut_sample_name],
+            y = abs_median_diffs.drop(mut_sample_name),
+            alternative = 'greater', axis = None
+            ).pvalue
+        metrics['mwu_pval'] = pval
+        return metrics
 
     def effect_on_each_site(
         self, 
@@ -415,13 +395,11 @@ class mutationScan:
             if len(matched_samples) <= 10:
                 num_skipped += 1
                 continue
-            mut_sample_comparison_sites = self.all_methyl_age_df_t.loc[mut_row['case_submitter_id'], mut_row['comparison_sites']]
-            matched_comparison_sites = self.all_methyl_age_df_t.loc[matched_samples, mut_row['comparison_sites']]
+            matched_samples.append(mut_row['case_submitter_id'])
+            comparison_site_mfs = self.all_methyl_age_df_t.loc[matched_samples, mut_row['comparison_sites']]
             # measure the change in methylation between sites in the mutated samples and in other non-mutated samples of the same age
-            metrics = self._compare_sites(matched_comparison_sites, mut_sample_comparison_sites)
+            metrics = self._compare_sites(comparison_site_mfs, mut_sample_name = mut_row['case_submitter_id'])
             metrics['mut_cpg'] = mut_row['mut_cpg']
-            # create column called 'mutated' that is True if the sample is the mutated sample
-            metrics['mutated'] = metrics['sample'] == mut_row['case_submitter_id']
             cpg_to_dist_dict = dict(zip(mut_row['comparison_sites'], mut_row['comparison_dists']))
             metrics['measured_site_dist'] = metrics['measured_site'].map(cpg_to_dist_dict)
             # add to output
@@ -468,6 +446,8 @@ class mutationScan:
         @ corr_direction: 'pos' or 'neg' for positive or negative correlation
         @ returns: df of mutations and correlated site pairs
         """
+        pd.options.mode.chained_assignment = None  # default='warn'
+
         mut_correl_measured_l = []
         for chrom in self.all_mut_w_age_df['chr'].unique():
             # illum is already subset to measured cpgs, so just choose the chrom
@@ -476,16 +456,17 @@ class mutationScan:
             mut_locs = self.all_mut_w_age_illum_df.loc[
                 (self.all_mut_w_age_illum_df['chr'] == chrom) & (self.all_mut_w_age_illum_df['DNA_VAF'] 
                 >= np.percentile(self.all_mut_w_age_illum_df['DNA_VAF'], min_VAF_percentile))
-                & (self.all_mut_w_age_illum_df['#id'].isin(this_chr_measured_cpgs['#id']))
+                & (self.all_mut_w_age_illum_df['#id'].isin(this_chr_measured_cpgs['#id'])), :
                 ]
             # set empty columns of type list
-            mut_locs.loc[:, 'comparison_sites'] = [[] for _ in range(len(mut_locs))]
-            mut_locs.loc[:, 'comparison_dists'] = [[] for _ in range(len(mut_locs))]
+            mut_locs['comparison_sites'] = [[] for _ in range(len(mut_locs))]
+            mut_locs['comparison_dists'] = [[] for _ in range(len(mut_locs))]
             for dset in mut_locs['dataset'].unique():
                 print(chrom, dset)
                 # read in precomputed correlation matrix for this chrom and dataset
                 corr_df = pd.read_parquet(
-                    os.path.join(self.corr_dir, 'chr{}_{}.parquet'.format(chrom, dset)))
+                    os.path.join(self.corr_dir, 'chr{}_{}.parquet'.format(chrom, dset))
+                    )
                 # find the CpGs on the same chr with highest/lowest correlation of methylation fraction
                 correl_sites = []
                 for _, mut_row in mut_locs.loc[mut_locs['dataset'] == dset, :].iterrows():
@@ -507,6 +488,8 @@ class mutationScan:
             break
         mut_correl_measured_df = pd.concat(mut_correl_measured_l)
         mut_correl_measured_df.loc[:, 'mut_cpg'] = mut_correl_measured_df['chr'] + ':' + mut_correl_measured_df['start'].astype(str)
+
+        pd.options.mode.chained_assignment = 'warn'
         return mut_correl_measured_df
 
     def _find_nearby_measured_cpgs(
@@ -559,11 +542,10 @@ class mutationScan:
                 raise ValueError('linkage_method must be "dist" or "correl"')
         # drop rows of comparison_sites_df where comparison_sites has length 0
         comparison_sites_df = comparison_sites_df[comparison_sites_df['comparison_sites'].apply(lambda x: len(x) > 0)]
-        print(comparison_sites_df)
         # for each mutation with nearby measured site, compare the methylation of the nearby measured sites in the mutated sample to the other samples of same age and dataset
         all_metrics_df = self.effect_on_each_site(comparison_sites_df)
         # fdr correct pvals
-        all_metrics_df = utils.fdr_correct(all_metrics_df, pval_col_name = 'ztest_pval')
+        all_metrics_df = utils.fdr_correct(all_metrics_df, pval_col_name = 'mwu_pval')
         all_metrics_df.reset_index(inplace=True, drop=True)
         self.all_metrics_df = all_metrics_df
 
