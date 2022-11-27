@@ -1,8 +1,6 @@
-from random import Random
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.patches import Rectangle
 plt.style.use("seaborn-deep")
 import os 
 from scipy import stats

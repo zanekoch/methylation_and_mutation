@@ -3,13 +3,11 @@ from scipy import stats
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
-import matplotlib.patches as mpatches
 import utils
 import seaborn as sns
 from statsmodels.stats.weightstats import ztest as ztest
 from rich.progress import track
 import sys
-from statsmodels.stats.multitest import fdrcorrection
 import os
 
 
@@ -303,8 +301,8 @@ class mutationScan:
         @ returns: list of sample names
         """
         # get this sample's age and dataset
-        this_age = self.all_methyl_age_df_t.loc[sample_name]['age_at_index']
-        this_dset = self.all_methyl_age_df_t.loc[sample_name]['dataset']
+        this_age = self.all_methyl_age_df_t.loc[sample_name, 'age_at_index']
+        this_dset = self.all_methyl_age_df_t.loc[sample_name, 'dataset']
         # get the mf all other samples of within age_bin_size/2 years of age on either side
         matched_samples = self.all_methyl_age_df_t.loc[(np.abs(self.all_methyl_age_df_t['age_at_index'] - this_age) <= self.age_bin_size/2) & (self.all_methyl_age_df_t['dataset'] == this_dset)].index.copy(deep=True)
         # drop the mutated sample itself
@@ -359,10 +357,11 @@ class mutationScan:
         # create column called 'mutated' that is True if the sample is the mutated sample
         metrics['mutated'] = metrics['sample'] == mut_sample_name
         # wilcoxon rank sum test of absolute median difference between mutated sample and matched samples
+        # ‘greater’: the distribution underlying x is stochastically greater than the distribution underlying y
         pval = stats.mannwhitneyu(
-            x = abs_median_diffs.loc[mut_sample_name],
-            y = abs_median_diffs.drop(mut_sample_name),
-            alternative = 'greater', axis = None
+            x = abs_median_diffs.loc[mut_sample_name].to_numpy().ravel(),
+            y = abs_median_diffs.drop(mut_sample_name).to_numpy().ravel(),
+            alternative = 'greater'
             ).pvalue
         metrics['mwu_pval'] = pval
         return metrics
@@ -482,10 +481,8 @@ class mutationScan:
                     [i for i in range(self.num_correl_sites)] 
                     for _ in range(len(mut_locs.loc[mut_locs['dataset'] == dset]))
                     ]
-                break
             mut_correl_measured_l.append(mut_locs)
             print("Done chrom {}".format(chrom), flush=True)
-            break
         mut_correl_measured_df = pd.concat(mut_correl_measured_l)
         mut_correl_measured_df.loc[:, 'mut_cpg'] = mut_correl_measured_df['chr'] + ':' + mut_correl_measured_df['start'].astype(str)
 
