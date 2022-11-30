@@ -7,7 +7,6 @@ import utils
 import seaborn as sns
 from statsmodels.stats.weightstats import ztest as ztest
 from rich.progress import track
-import sys
 import os
 
 
@@ -37,7 +36,7 @@ class mutationScan:
             & (self.all_mut_w_age_df['chr'] != 'X') 
             & (self.all_mut_w_age_df['chr'] != 'Y')
             & (self.all_mut_w_age_df['case_submitter_id'].isin(self.all_methyl_age_df_t.index)),
-            :]
+            :]# (self.all_mut_w_age_df['mutation'] == 'C>T')
         # join self.all_mut_w_age_df with the illumina_cpg_locs_df
         all_mut_w_age_illum_df = self.all_mut_w_age_df.copy(deep=True)
         all_mut_w_age_illum_df['start'] = pd.to_numeric(self.all_mut_w_age_df['start'])
@@ -46,20 +45,49 @@ class mutationScan:
         # subset illumina_cpg_locs_df to only the CpGs that are measured
         self.illumina_cpg_locs_df = self.illumina_cpg_locs_df.loc[self.illumina_cpg_locs_df['#id'].isin(self.all_methyl_age_df_t.columns)]
 
-    def volcano_plot(self, nearby_site_diffs_df):
+    def volcano_plot(self, all_metrics_df):
         """
-        Plot a volcano plot of the nearby_site_diffs_df
+        Plot a volcano plot of the the delta_mf and pval
+        @ all_metrics_df
         """
-        # get the log10 of the pvals
-        nearby_site_diffs_df['log10_pval'] = nearby_site_diffs_df['fdr_pval'].apply(lambda x: -np.log10(x))
-        # get the log2 of the fold change
-        # color points orange if they are significant
-        # put legend in upper left
-        sns.scatterplot(y = 'log10_pval', x = 'delta_mf', data = nearby_site_diffs_df, alpha=0.3, hue = 'sig', palette = {True: 'orange', False: 'grey'})
-        plt.legend(loc='upper left')
-        plt.xlabel(r"$\Delta$MF")
-        plt.ylabel('-log10 FDR pval')
-        plt.show()
+        # TODO: deal with pvalues == 0
+        # first select only the rows with measurements for the mutated sample
+        mut_metrics_df = all_metrics_df.loc[all_metrics_df['mutated'] == True]
+        mut_metrics_df['abs_delta_mf_median'] = mut_metrics_df['delta_mf_median'].abs()
+        # then get cumulative metrics 
+        cumul_delta_mf = mut_metrics_df.groupby('mut_event')['delta_mf_median'].sum()
+        abs_cumul_delta_mf = mut_metrics_df.groupby('mut_event')['abs_delta_mf_median'].sum()
+        # doesn't matter if min, max, or mean cause all pvals are same for a mut event
+        pvals = mut_metrics_df.groupby('mut_event')['fdr_pval'].min()
+        sigs = mut_metrics_df.groupby('mut_event')['sig'].min()
+        grouped_volc_metrics = pd.merge(
+            abs_cumul_delta_mf, pd.merge(
+                sigs, pd.merge(
+                    cumul_delta_mf, pvals, on='mut_event'), on='mut_event'), on='mut_event')
+        grouped_volc_metrics['log10_pval'] = grouped_volc_metrics['fdr_pval'].apply(lambda x: -np.log10(x))
+        
+        _, axes = plt.subplots(1, 2, figsize=(12, 6), dpi=100, gridspec_kw={'width_ratios': [3, 1]})
+        # volcano plot
+        sns.scatterplot(y = 'log10_pval', x = 'delta_mf_median', data = grouped_volc_metrics, alpha=0.3, hue = 'sig', palette = {True: 'steelblue', False: 'grey'}, ax = axes[0])
+        axes[0].legend(loc='upper left', labels=['FDR pvalue < .05', 'FDR pvalue >= . 05'])
+        axes[0].set_xlabel(r"Cumulative $\Delta$MF")
+        axes[0].set_ylabel('-log10 FDR pval')
+        # barplot of the number of significant and non-significant mutations
+        sns.countplot(x = 'sig', data = grouped_volc_metrics, palette = {True: 'steelblue', False: 'grey'}, ax = axes[1])
+        axes[1].set_xlabel('FDR pvalue < 0.05')
+        axes[1].set_ylabel('Count of mutation events')
+
+        # same but absolute cumul
+        _, axes = plt.subplots(1, 2, figsize=(12, 6), dpi=100, gridspec_kw={'width_ratios': [3, 1]})
+        # volcano plot
+        sns.scatterplot(y = 'log10_pval', x = 'abs_delta_mf_median', data = grouped_volc_metrics, alpha=0.3, hue = 'sig', palette = {True: 'steelblue', False: 'grey'}, ax = axes[0])
+        axes[0].legend(loc='upper left', labels=['FDR pvalue < .05', 'FDR pvalue >= . 05'])
+        axes[0].set_xlabel(r"Absolute cumulative $\Delta$MF")
+        axes[0].set_ylabel('-log10 FDR pval')
+        # barplot of the number of significant and non-significant mutations
+        sns.countplot(x = 'sig', data = grouped_volc_metrics, palette = {True: 'steelblue', False: 'grey'}, ax = axes[1])
+        axes[1].set_xlabel('FDR pvalue < 0.05')
+        axes[1].set_ylabel('Count of mutation events')
 
     def effect_violin(self, nearby_diffs_w_illum_df, mut_in_measured_cpg_w_methyl_age_df, pval,  sig_thresh = .05):
         """
@@ -325,13 +353,11 @@ class mutationScan:
         # not sure why have to do this to make it not give identically labelled series error
         # select rows of self.all_mut_w_age_df that have the same chr and dataset as mut_row
         relevant_mutations = self.all_mut_w_age_df.loc[(self.all_mut_w_age_df['chr'] == mut_row['chr']) & (self.all_mut_w_age_df['dataset'] == mut_row['dataset'])]
-        
         # detect samples that have a mutation in the max_dist window of any of the sites in sites_to_test
         # get locations of sites to test
         sites_to_test_locs = self.illumina_cpg_locs_df.loc[self.illumina_cpg_locs_df['#id'].isin(sites_to_test)] 
         # select rows of relevant_mutations that are within max_dist of any of the sites_to_test
         have_illegal_muts = relevant_mutations.loc[relevant_mutations.apply(lambda row: any(np.abs(row['start'] - sites_to_test_locs['start']) <= self.max_dist), axis=1)]
-
         # detect samples that have a mutation in the mut_cpg or within max_dist of it
         have_illegal_muts = pd.concat([have_illegal_muts, relevant_mutations.loc[(relevant_mutations['mut_cpg'] == mut_row['mut_cpg']) | (np.abs(relevant_mutations['start'] - mut_row['start']) <= self.max_dist)]])
         return have_illegal_muts['case_submitter_id'].to_list()
@@ -341,30 +367,45 @@ class mutationScan:
         self, 
         comparison_site_mfs: pd.DataFrame, 
         mut_sample_name: str
-        ) -> pd.DataFrame:
+        ) -> tuple:
         """
         Calculate effect size and pvalue for each comparison
         """
+        # get the difference of each sample from the median of the other samples
         median_diffs = comparison_site_mfs.apply(
             lambda row: row - np.nanmedian(comparison_site_mfs.drop(row.name), axis = 0),
             axis=1
             )
         abs_median_diffs = np.abs(median_diffs)
-        if not isinstance(median_diffs, pd.DataFrame):
-            median_diffs = pd.DataFrame(median_diffs)
+
         metrics = median_diffs.stack().reset_index()
         metrics.columns = ['sample', 'measured_site', 'delta_mf_median']
         # create column called 'mutated' that is True if the sample is the mutated sample
         metrics['mutated'] = metrics['sample'] == mut_sample_name
-        # wilcoxon rank sum test of absolute median difference between mutated sample and matched samples
-        # ‘greater’: the distribution underlying x is stochastically greater than the distribution underlying y
+
         pval = stats.mannwhitneyu(
+            x = comparison_site_mfs.loc[mut_sample_name].to_numpy().ravel(),
+            y = comparison_site_mfs.drop(mut_sample_name).to_numpy().ravel(),
+            alternative = 'two-sided'
+            ).pvalue
+        metrics['mf_pval'] = pval
+        # wilcoxon rank sum test of absolute median difference between mutated sample and matched samples
+        pval = stats.mannwhitneyu(
+            x = median_diffs.loc[mut_sample_name].to_numpy().ravel(),
+            y = median_diffs.drop(mut_sample_name).to_numpy().ravel(),
+            alternative = 'two-sided'
+            ).pvalue
+        metrics['delta_mf_pval'] = pval
+        # ‘greater’: the distribution underlying x is stochastically greater than the distribution underlying y
+        abs_pval = stats.mannwhitneyu(
             x = abs_median_diffs.loc[mut_sample_name].to_numpy().ravel(),
             y = abs_median_diffs.drop(mut_sample_name).to_numpy().ravel(),
             alternative = 'greater'
             ).pvalue
-        metrics['mwu_pval'] = pval
-        return metrics
+        metrics['abs_delta_mf_pval'] = abs_pval
+        # rename columns to correlation index
+        median_diffs.columns = [str(i) for i in range(len(median_diffs.columns))]
+        return metrics, median_diffs
 
     def effect_on_each_site(
         self, 
@@ -378,7 +419,7 @@ class mutationScan:
         num_skipped = 0
         num_dropped = 0
         all_metrics_dfs = []
-        #for _, mut_row in track(comparison_sites_df.iterrows(), description="Analyzing each mutation", total=len(comparison_sites_df)):
+        all_median_diffs_dfs = {}
         i = 0
         total = len(comparison_sites_df)
         for _, mut_row in comparison_sites_df.iterrows():
@@ -389,27 +430,31 @@ class mutationScan:
             # drop entries of matched_samples that are in samples_to_exclude
             before_drop = len(matched_samples)
             matched_samples = [s for s in matched_samples if s not in samples_to_exclude]
-            after_drop = len(matched_samples)
-            num_dropped += before_drop - after_drop
+            num_dropped += before_drop - len(matched_samples)
             if len(matched_samples) <= 10:
                 num_skipped += 1
                 continue
+            # get a list of matched and mutated samples to select from methylation 
             matched_samples.append(mut_row['case_submitter_id'])
             comparison_site_mfs = self.all_methyl_age_df_t.loc[matched_samples, mut_row['comparison_sites']]
             # measure the change in methylation between sites in the mutated samples and in other non-mutated samples of the same age
-            metrics = self._compare_sites(comparison_site_mfs, mut_sample_name = mut_row['case_submitter_id'])
+            metrics, median_diffs = self._compare_sites(comparison_site_mfs, mut_sample_name = mut_row['case_submitter_id'])
             metrics['mut_cpg'] = mut_row['mut_cpg']
+            metrics['mut_event'] = mut_row['mut_event']
             cpg_to_dist_dict = dict(zip(mut_row['comparison_sites'], mut_row['comparison_dists']))
             metrics['measured_site_dist'] = metrics['measured_site'].map(cpg_to_dist_dict)
             # add to output
             all_metrics_dfs.append(metrics)
+            all_median_diffs_dfs[mut_row['case_submitter_id']] = median_diffs
             i += 1
-            if i % 1000 == 0:
+            if i % 100 == 0:
                 print("Processed {}% of mutations".format((i/total)*100), flush=True)
+
         print("WARNING: Not enough samples of the same age and tissue to calculate effect of mutation for {} mutations".format(num_skipped), flush=True)
         print("WARNING: Dropped {} samples due to colliding mutation".format(num_dropped), flush=True)
         all_metrics_df = pd.concat(all_metrics_dfs)
-        return all_metrics_df
+        all_median_diffs_df = pd.concat(all_median_diffs_dfs, axis = 0)
+        return all_metrics_df, all_median_diffs_df
 
     def _select_correl_sites(self,
         corr_df: pd.DataFrame,
@@ -451,7 +496,7 @@ class mutationScan:
         for chrom in self.all_mut_w_age_df['chr'].unique():
             # illum is already subset to measured cpgs, so just choose the chrom
             this_chr_measured_cpgs = self.illumina_cpg_locs_df[self.illumina_cpg_locs_df['chr'] == chrom]
-            # get mutations on this chrom, with VAF > min_VAF_percentile
+            # get mutations on this chrom, with VAF > min_VAF_percentile, in a measured CpG (i.e. in the illumina cpgs)
             mut_locs = self.all_mut_w_age_illum_df.loc[
                 (self.all_mut_w_age_illum_df['chr'] == chrom) & (self.all_mut_w_age_illum_df['DNA_VAF'] 
                 >= np.percentile(self.all_mut_w_age_illum_df['DNA_VAF'], min_VAF_percentile))
@@ -475,7 +520,7 @@ class mutationScan:
                         mut_cpg = mut_row['#id'],
                         corr_direction = corr_direction)
                         )
-                # why this is the necessary syntax is beyond me
+                # why is this the best syntax i've found???
                 mut_locs.loc[:, 'comparison_sites'].loc[mut_locs['dataset'] == dset] = correl_sites
                 mut_locs.loc[:, 'comparison_dists'].loc[mut_locs['dataset'] == dset] = [
                     [i for i in range(self.num_correl_sites)] 
@@ -485,7 +530,7 @@ class mutationScan:
             print("Done chrom {}".format(chrom), flush=True)
         mut_correl_measured_df = pd.concat(mut_correl_measured_l)
         mut_correl_measured_df.loc[:, 'mut_cpg'] = mut_correl_measured_df['chr'] + ':' + mut_correl_measured_df['start'].astype(str)
-
+        mut_correl_measured_df.loc[:, 'mut_event'] = mut_correl_measured_df['case_submitter_id'] + '_' + mut_correl_measured_df['mut_cpg']
         pd.options.mode.chained_assignment = 'warn'
         return mut_correl_measured_df
 
@@ -540,13 +585,13 @@ class mutationScan:
         # drop rows of comparison_sites_df where comparison_sites has length 0
         comparison_sites_df = comparison_sites_df[comparison_sites_df['comparison_sites'].apply(lambda x: len(x) > 0)]
         # for each mutation with nearby measured site, compare the methylation of the nearby measured sites in the mutated sample to the other samples of same age and dataset
-        all_metrics_df = self.effect_on_each_site(comparison_sites_df)
+        all_metrics_df, all_median_diffs_df = self.effect_on_each_site(comparison_sites_df)
         # fdr correct pvals
-        all_metrics_df = utils.fdr_correct(all_metrics_df, pval_col_name = 'mwu_pval')
+        all_metrics_df = utils.fdr_correct(all_metrics_df, pval_col_name = 'mf_pval')
+        all_metrics_df = utils.fdr_correct(all_metrics_df, pval_col_name = 'delta_mf_pval')
+        all_metrics_df = utils.fdr_correct(all_metrics_df, pval_col_name = 'abs_delta_mf_pval')
         all_metrics_df.reset_index(inplace=True, drop=True)
-        self.all_metrics_df = all_metrics_df
-
-        return comparison_sites_df, all_metrics_df
+        return comparison_sites_df, all_metrics_df, all_median_diffs_df
 
 #####################################################################
 #####################################################################

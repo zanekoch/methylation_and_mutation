@@ -560,9 +560,9 @@ def half(l, which_half):
     else:
         return l[int(len(l)/2):]
 
-def fdr_correct(df, pval_col_name = 'ztest_pval'):
+def fdr_correct(df, pval_col_name):
     df = df.dropna(subset=[pval_col_name])
-    df['sig'], df['fdr_pval'] = fdrcorrection(df.loc[:, pval_col_name], alpha=0.05)
+    df[pval_col_name + '_sig'], df[pval_col_name + '_fdr'] = fdrcorrection(df.loc[:, pval_col_name], alpha=0.05)
     return df
 
 def fdr_correct_split(df, pval_col_name = 'ztest_pval', split_col = 'mutated'):
