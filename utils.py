@@ -9,6 +9,7 @@ import sys
 from collections import defaultdict
 import seaborn as sns
 from statsmodels.stats.multitest import fdrcorrection
+import math
 
 
 # CONSTANTS
@@ -21,6 +22,12 @@ PERCENTILES = [1]#np.flip(np.linspace(0, 1, 6))
 
 def get_percentiles():
     return PERCENTILES
+
+def roundup(x, to_nearest):
+    if x > 0:
+        return int(math.ceil(x / to_nearest)) * to_nearest
+    else:
+        return int(math.floor(x / to_nearest)) * to_nearest
 
 def drop_cpgs_by_chrom(all_methyl_df_t, chroms_to_drop_l, illumina_cpg_locs_df):
     """
