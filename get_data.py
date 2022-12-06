@@ -164,27 +164,3 @@ def main(illum_cpg_locs_fn, out_dir, methyl_dir, mut_fn, meta_fn):
     all_methyl_df_t = transpose_methylation(all_methyl_df)
     print("Done", flush=True)
     return illumina_cpg_locs_df, all_mut_df, all_methyl_df, all_methyl_df_t, all_meta_df, dataset_names_list
-
-    if DATA_SET == "TCGA":
-        # infer files from data_dirs
-        data_files_by_name, dataset_names_list = infer_fns_from_data_dirs(data_dirs)
-        run_name = '_'.join(dataset_names_list)
-
-        # read in illumina cpg locations
-        illumina_cpg_locs_df = pd.read_csv(illum_cpg_locs_fn, sep=',', dtype={'CHR': str}, low_memory=False)
-        illumina_cpg_locs_df = illumina_cpg_locs_df.rename({"CHR": "chr", "MAPINFO":"start", "IlmnID": "#id"}, axis=1)
-        illumina_cpg_locs_df = illumina_cpg_locs_df[['#id','chr', 'start', 'Strand']]
-
-        # read in and combine mutation files
-        all_mut_df = get_mutations(data_files_by_name)
-
-        # read in and combine methylation files
-        all_methyl_df = get_methylation(data_files_by_name, illumina_cpg_locs_df)
-        # transpose methylation
-        all_methyl_df_t = transpose_methylation(all_methyl_df)
-
-        # read in and combine metadata files (ages)
-        all_meta_df = get_metadata(data_files_by_name)
-        
-        return illumina_cpg_locs_df, all_mut_df, all_methyl_df, all_methyl_df_t, all_meta_df, run_name, dataset_names_list
-

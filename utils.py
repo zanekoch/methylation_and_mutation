@@ -38,6 +38,25 @@ def drop_cpgs_by_chrom(all_methyl_df_t, chroms_to_drop_l, illumina_cpg_locs_df):
     cols_to_keep = set(all_methyl_df_t.columns.to_list()) - set(cpgs_to_drop.to_list())
     return all_methyl_df_t.loc[:,cols_to_keep]
 
+def quantileNormalize(methyl_df):
+    """ 
+    From https://github.com/ShawnLYU/Quantile_Normalizeor
+    Replace each CpG site in each sample with the mean value of that rank CpG across all samples
+    @ methyl_df: pandas dataframe with samples as columns and CpGs as rows
+    """
+    df = methyl_df.copy(deep = True)
+    # sort each column of df in increasing order
+    dic = {}
+    for sample in df:
+        dic.update({sample : sorted(df[sample])})
+    sorted_df = pd.DataFrame(dic)
+    # get the mean methylation fraction at each rank 
+    rank_vals = sorted_df.mean(axis = 1).tolist()
+    # update each value with rank t to that rank's mean value
+    for sample in df:
+        t = np.searchsorted(np.sort(df[sample]), df[sample])
+        df[sample] = [rank_vals[i] for i in t]
+    return df
 
 # returns mut_df joined s.t. only mutations that are in measured CpG sites with methylation data remain
 # be aware that drop_duplicates first 
