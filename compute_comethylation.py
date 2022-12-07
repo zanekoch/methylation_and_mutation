@@ -13,6 +13,8 @@ import pyarrow
 import sys
 import cProfile
 import pstats
+from tqdm import tqdm
+
 
 
 class mutationScan:
@@ -64,34 +66,30 @@ class mutationScan:
         """
         # TODO: deal with pvalues == 0
         # first select only the rows with measurements for the mutated sample
-        mut_metrics_df = all_metrics_df.loc[all_metrics_df['mutated'] == True]
+        mut_metrics_df = all_metrics_df.loc[all_metrics_df['mutated_sample'] == True]
         mut_metrics_df['abs_delta_mf_median'] = mut_metrics_df['delta_mf_median'].abs()
         # then get median delta_mf for each event
         med_delta_mf = mut_metrics_df.groupby('mut_event')['delta_mf_median'].median()
         abs_median_delta_mf = mut_metrics_df.groupby('mut_event')['abs_delta_mf_median'].median()
         # doesn't matter if min, max, or mean cause all pvals are same for a mut event
-        pvals = mut_metrics_df.groupby('mut_event')[pval_col + '_fdr'].min()
+        pvals = mut_metrics_df.groupby('mut_event')[pval_col].min()
         sigs = mut_metrics_df.groupby('mut_event')[pval_col + '_sig'].min()
-        grouped_volc_metrics = pd.merge(
-            abs_median_delta_mf, pd.merge(
-                sigs, pd.merge(
-                    med_delta_mf, pvals, on='mut_event'), on='mut_event'), on='mut_event')
-        grouped_volc_metrics['log10_pval'] = grouped_volc_metrics[pval_col + '_fdr'].apply(lambda x: -np.log10(x))
-        
+        grouped_volc_metrics = pd.merge(abs_median_delta_mf, pd.merge(sigs, pd.merge(med_delta_mf, pvals, on='mut_event'), on='mut_event'), on='mut_event')
+        grouped_volc_metrics['log10_pval'] = grouped_volc_metrics[pval_col].apply(lambda x: -np.log10(x))
         _, axes = plt.subplots(1, 2, figsize=(12, 6), dpi=100, gridspec_kw={'width_ratios': [3, 1]})
         # volcano plot
         sns.scatterplot(
             y = 'log10_pval', x = 'delta_mf_median', data = grouped_volc_metrics, alpha=0.3,
             hue = pval_col + '_sig', palette = {True: 'maroon', False: 'grey'}, ax = axes[0]
             )
-        axes[0].legend(loc='upper center', labels=['q < .05', 'q >= . 05'], title='FDR q-value')
+        axes[0].legend(loc='upper center', labels=['p < .05', 'p >= . 05'], title='Bonferroni p-value')
         axes[0].set_xlabel(r"Median $\Delta$MF")
-        axes[0].set_ylabel('-log10 FDR pval')
+        axes[0].set_ylabel('-log10 p-value')
         # barplot of the number of significant and non-significant mutations
         sns.countplot(x = pval_col + '_sig', data = grouped_volc_metrics, palette = {True: 'maroon', False: 'grey'}, ax = axes[1])
-        axes[1].set_xlabel('FDR q-value')
+        axes[1].set_xlabel('p-value')
         # set x ticks
-        axes[1].set_xticklabels(['q >= .05', 'q < .05'])
+        axes[1].set_xticklabels(['p >= .05', 'p < .05'])
         axes[1].set_ylabel('Count of mutation events')
 
         # same but absolute cumul
@@ -101,13 +99,13 @@ class mutationScan:
             y = 'log10_pval', x = 'abs_delta_mf_median', data = grouped_volc_metrics, alpha=0.3,
             hue = pval_col + '_sig', palette = {True: 'maroon', False: 'grey'}, ax = axes[0]
             )
-        axes[0].legend(loc='upper left', labels=['q < .05', 'q >= . 05'], title='FDR q-value')
+        axes[0].legend(loc='upper left', labels=['p < .05', 'p >= . 05'], title='Bonferroni p-value')
         axes[0].set_xlabel(r"Median absolute $\Delta$MF")
-        axes[0].set_ylabel('-log10 FDR pval')
+        axes[0].set_ylabel('-log10 p-value')
         # barplot of the number of significant and non-significant mutations
         sns.countplot(x = pval_col + '_sig', data = grouped_volc_metrics, palette = {True: 'maroon', False: 'grey'}, ax = axes[1])
-        axes[1].set_xlabel('FDR q-value')
-        axes[1].set_xticklabels(['q >= .05', 'q < .05'])
+        axes[1].set_xlabel('Bonferroni p-value')
+        axes[1].set_xticklabels(['p >= .05', 'p < .05'])
         axes[1].set_ylabel('Count of mutation events')
 
     def corr_heatmap(
@@ -200,13 +198,13 @@ class mutationScan:
         ) -> None:
         all_metrics_df['abs_delta_mf_median'] = all_metrics_df['delta_mf_median'].abs()
         # get the cumulative effect in the significant mutated samples first
-        sig_mut_events = all_metrics_df.loc[(all_metrics_df['mf_pval_sig'] == True) & (all_metrics_df['mutated'] == True), :]
+        sig_mut_events = all_metrics_df.loc[(all_metrics_df['mf_pval_sig'] == True) & (all_metrics_df['mutated_sample'] == True), :]
         abs_cumul_delta_mf_sig_mut = sig_mut_events.groupby('mut_event')['abs_delta_mf_median'].sum().reset_index()
         abs_cumul_delta_mf_sig_mut['Site of mutation event'] = 'Mutated individuals'
         # then do the same for the non-mutated significant samples
-        sig_nonmut_events = all_metrics_df[(all_metrics_df['mf_pval_sig'] == True) & (all_metrics_df['mutated'] == False)]
+        sig_nonmut_events = all_metrics_df[(all_metrics_df['mf_pval_sig'] == True) & (all_metrics_df['mutated_sample'] == False)]
         abs_cumul_delta_mf_sig_nonmut = sig_nonmut_events.groupby(['mut_event', 'sample'])['abs_delta_mf_median'].sum().reset_index()
-        abs_cumul_delta_mf_sig_nonmut['Site of mutation event'] = 'Non-mutated individuals'
+        abs_cumul_delta_mf_sig_nonmut['Site of mutation event'] = 'Non-mutated matched individuals'
         abs_cumul_delta_mf_sig_nonmut.drop(columns=['sample'], inplace=True)
         # concat the two dataframes
         abs_cumul_delta_mfs = pd.concat([abs_cumul_delta_mf_sig_mut, abs_cumul_delta_mf_sig_nonmut], axis=0)
@@ -214,7 +212,7 @@ class mutationScan:
         abs_cumul_delta_mfs.columns= ['mut_event', 'abs_delta_mf_median', 'Site of mutation event']
         sns.violinplot(
             data = abs_cumul_delta_mfs, x= 'Site of mutation event', y = 'abs_delta_mf_median', cut=0, bw=.15,
-            ax = axes[0], palette={'Mutated individuals': 'maroon', 'Non-mutated individuals': 'steelblue'}
+            ax = axes[0], palette={'Mutated individuals': 'maroon', 'Non-mutated matched individuals': 'steelblue'}
             )
         # set y label
         axes[0].set_ylabel(r"Absolute cumulative $\Delta$MF")
@@ -297,7 +295,6 @@ class mutationScan:
         """
         # so it works when called from heatmap and comethylation scan 
         mut_row = mut_row.copy(deep=True).squeeze()
-        # not sure why have to do this to make it not give identically labelled series error
         # select rows of self.all_mut_w_age_df that have the same chr and dataset as mut_row
         relevant_mutations = self.all_mut_w_age_df.loc[(self.all_mut_w_age_df['chr'] == mut_row['chr']) & (self.all_mut_w_age_df['dataset'] == mut_row['dataset'])]
         # detect samples that have a mutation in the max_dist window of any of the sites in sites_to_test
@@ -380,8 +377,9 @@ class mutationScan:
             metrics['measured_site_dist'] = metrics['measured_site'].map(cpg_to_dist_dict)
             # add to output
             return metrics
+        tqdm.pandas(desc="Calculating effect of mutation on comparison sites")
         # apply process_row across each row of comparison_sites_df
-        all_metrics_dfs = comparison_sites_df.apply(process_row, axis=1)
+        all_metrics_dfs = comparison_sites_df.progress_apply(process_row, axis=1)
         # drop none values
         all_metrics_dfs = all_metrics_dfs.dropna()
         all_metrics_dfs = all_metrics_dfs.to_list()
@@ -547,10 +545,12 @@ class mutationScan:
                 (self.all_mut_w_age_illum_df['DNA_VAF'] >= np.percentile(self.all_mut_w_age_illum_df['DNA_VAF'], min_VAF_percentile))
                 & (self.all_mut_w_age_illum_df['#id'].isin(self.illumina_cpg_locs_df['#id'])), :
                 ]
-        print("Number mutation events being processed: {}".format(len(valid_muts_w_illum)))
+        print("Number mutation events being processed: {}".format(len(valid_muts_w_illum)), flush=True)
         # get same age and tissue samples for each
-        valid_muts_w_illum['matched_samples'] = valid_muts_w_illum.apply(lambda mut_event: self._same_age_and_tissue_samples(mut_event['case_submitter_id']), axis = 1)
-        valid_muts_w_illum['comparison_sites'] = valid_muts_w_illum.apply(lambda mut_event: self._select_correl_sites(mut_event, corr_direction), axis = 1)
+        tqdm.pandas(desc="Getting matched samples")
+        valid_muts_w_illum['matched_samples'] = valid_muts_w_illum.progress_apply(lambda mut_event: self._same_age_and_tissue_samples(mut_event['case_submitter_id']), axis = 1)
+        tqdm.pandas(desc="Getting comparison sites")
+        valid_muts_w_illum['comparison_sites'] = valid_muts_w_illum.progress_apply(lambda mut_event: self._select_correl_sites(mut_event, corr_direction), axis = 1)
         valid_muts_w_illum['comparison_dists'] = [[i for i in range(self.num_correl_sites)] for _ in range(len(valid_muts_w_illum))]
         valid_muts_w_illum['mut_cpg'] = valid_muts_w_illum['chr'] + ':' + valid_muts_w_illum['start'].astype(str)
         valid_muts_w_illum['mut_event'] = valid_muts_w_illum['case_submitter_id'] + '_' + valid_muts_w_illum['mut_cpg']

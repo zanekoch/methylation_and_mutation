@@ -1,9 +1,8 @@
 import compute_comethylation, get_data, utils
 import os
-import pandas as pd
 
 
-out_dir = "/cellar/users/zkoch/methylation_and_mutation/output_120522"
+out_dir = "/cellar/users/zkoch/methylation_and_mutation/output_120522/"
 dependency_f_dir = "/cellar/users/zkoch/methylation_and_mutation/dependency_files"
 data_dir = "/cellar/users/zkoch/methylation_and_mutation/data"
 methylation_dir = '/cellar/users/zkoch/methylation_and_mutation/data/dropped3SD_qnormed_methylation'
@@ -29,7 +28,7 @@ mut_scan = compute_comethylation.mutationScan(
     )
 
 comparison_sites_df, all_metrics_df = mut_scan.look_for_disturbances(
-    min_VAF_percentile = 75, 
+    min_VAF_percentile = 50, 
     linkage_method='correl', 
     out_dir = out_dir, 
     corr_direction = 'pos'
