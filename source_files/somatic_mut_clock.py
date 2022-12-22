@@ -13,6 +13,7 @@ class mutationClock:
         all_mut_w_age_df: pd.DataFrame,
         illumina_cpg_locs_df: pd.DataFrame, 
         all_methyl_age_df_t: pd.DataFrame,
+        matrix_qtl_dir: str = "/cellar/users/zkoch/methylation_and_mutation/data/matrixQtl_data/muts",
         godmc_meqtl_fn: str = "/cellar/users/zkoch/methylation_and_mutation/data/meQTL/goDMC_meQTL/goDMC_meQTLs.parquet",
         pancan_meqtl_fn: str = "/cellar/users/zkoch/methylation_and_mutation/data/meQTL/pancan_tcga_meQTL"
         ) -> None:
@@ -20,18 +21,19 @@ class mutationClock:
         self.all_mut_w_age_df = all_mut_w_age_df
         self.illumina_cpg_locs_df = illumina_cpg_locs_df
         self.all_methyl_age_df_t = all_methyl_age_df_t
-        # Preprocessing: subset to only mutations that are C>T, non X and Y chromosomes, and that occured in samples with measured methylation
+        # Preprocessing: subset to only mutations that are non X and Y chromosomes and that occured in samples with measured methylation
         self.all_mut_w_age_df['mut_cpg'] = self.all_mut_w_age_df['chr'] + ':' + self.all_mut_w_age_df['start'].astype(str)
         self.all_mut_w_age_df = self.all_mut_w_age_df.loc[
             (self.all_mut_w_age_df['chr'] != 'X') 
             & (self.all_mut_w_age_df['chr'] != 'Y')
             & (self.all_mut_w_age_df['case_submitter_id'].isin(self.all_methyl_age_df_t.index)),
-            :]# (self.all_mut_w_age_df['mutation'] == 'C>T')
+            :]
         # join self.all_mut_w_age_df with the illumina_cpg_locs_df
         all_mut_w_age_illum_df = self.all_mut_w_age_df.copy(deep=True)
         all_mut_w_age_illum_df['start'] = pd.to_numeric(self.all_mut_w_age_df['start'])
         self.all_mut_w_age_illum_df = all_mut_w_age_illum_df.merge(
-                                        self.illumina_cpg_locs_df, on=['chr', 'start'], how='left')
+                                        self.illumina_cpg_locs_df, on=['chr', 'start'], how='left'
+                                        )
         # subset illumina_cpg_locs_df to only the CpGs that are measured
         # and remove chr X and Y
         self.illumina_cpg_locs_df = self.illumina_cpg_locs_df.loc[
@@ -39,16 +41,12 @@ class mutationClock:
             & (self.illumina_cpg_locs_df['chr'] != 'X') 
             & (self.illumina_cpg_locs_df['chr'] != 'Y')
             ]
-        # subset all_methyl_age_df_t to only the samples that have mutations
         
-        
-        
-    
     def _select_correl_sites(
         self,
         cpg_id: str,
         cpg_chr: str,
-        num_sites: int
+        num_correl_sites: int
         ) -> list:
         """
         Just in time correlation to find the most correlated sites to the mutation event CpG in matched samples
@@ -63,8 +61,16 @@ class mutationClock:
         # get correlation between mut_cpg and all same chrom CpGs
         corrs = same_chrom_cpgs_mf.corrwith(cpg_mf, axis=0)
         # choose the sites with largest absolute correlation
-        return corrs.abs().sort_values(ascending=False).index[:num_sites].to_list()
+        return corrs.abs().sort_values(ascending=False).index[:num_correl_sites].to_list()
         
+    def get_matrixQTL_sites(
+        self,
+        cpg_id: str
+        ) -> list:
+        
+        
+        
+        return
     
     def get_predictor_sites(
         self, 
@@ -77,24 +83,28 @@ class mutationClock:
         @ cpg_id: the id of the CpG
         @ returns: list of genomic locations of the sites to be used as predictors in format chr:start
         """
+        # get cpg_id's chromosome and start position
         chrom = self.illumina_cpg_locs_df.loc[
             self.illumina_cpg_locs_df['#id'] == cpg_id, 'chr'
             ].values[0]
         start = self.illumina_cpg_locs_df.loc[
             self.illumina_cpg_locs_df['#id'] == cpg_id, 'start'
             ].values[0]
-        # get correlated CpGs
+        # get num_correl_sites correlated CpGs and convert to genomic locations
         corr_cpg_ids = self._select_correl_sites(cpg_id, chrom, num_correl_sites)
-        # convert to genomic locations
         corr_locations = (
             self.illumina_cpg_locs_df.loc[
                 self.illumina_cpg_locs_df['#id'].isin(corr_cpg_ids)
                 ].assign(location=lambda df: df['chr'] + ':' + df['start'].astype(str))['location']
             .tolist()
             )
-        # get nearby sites (and cpg_id position)
+        # get sites (and cpg_id position) within nearby_window_size of cpg_id
         nearby_sites = [chrom + ':' + str(start + i) for i in range(-nearby_window_size, nearby_window_size + 1)]
         # TODO: get the sites from databases
+        
+        # TODO: get sites from matrixQTL
+        
+        
         # return the union of the two
         predictor_sites = list(set(corr_locations + nearby_sites))
     
@@ -143,9 +153,7 @@ class mutationClock:
             # print the intercept
             print(model.intercept_)
             
-        
-             
-        
+            
     def build_one_predictor(
         self, 
         cpg_id: str,
