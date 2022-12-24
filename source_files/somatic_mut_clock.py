@@ -15,7 +15,7 @@ class mutationClock:
         all_methyl_age_df_t: pd.DataFrame,
         matrix_qtl_dir: str = "/cellar/users/zkoch/methylation_and_mutation/data/matrixQtl_data/muts",
         godmc_meqtl_fn: str = "/cellar/users/zkoch/methylation_and_mutation/data/meQTL/goDMC_meQTL/goDMC_meQTLs.parquet",
-        pancan_meqtl_fn: str = "/cellar/users/zkoch/methylation_and_mutation/data/meQTL/pancan_tcga_meQTL"
+        pancan_meqtl_fn: str = "/cellar/users/zkoch/methylation_and_mutation/data/meQTL/pancan_tcga_meQTL/pancan_meQTL.parquet"
         ) -> None:
 
         self.all_mut_w_age_df = all_mut_w_age_df
@@ -41,6 +41,9 @@ class mutationClock:
             & (self.illumina_cpg_locs_df['chr'] != 'X') 
             & (self.illumina_cpg_locs_df['chr'] != 'Y')
             ]
+        # read in the matrixQTL results from databases
+        self.godmc_meqtl_df = pd.read_parquet(godmc_meqtl_fn)        
+        self.pancan_meqtl_df = pd.read_parquet(pancan_meqtl_fn)
         
     def _select_correl_sites(
         self,
@@ -65,17 +68,43 @@ class mutationClock:
         
     def get_matrixQTL_sites(
         self,
-        cpg_id: str
+        cpg_id: str,
+        chrom: str,
+        max_meqtl_sites: int
         ) -> list:
-        
-        
-        
-        return
-    
+        """
+        Given a CpG, get the max_meqtl_sites number meQTLs with smallest p-value in relation to this CpG
+        @ cpg_id: the CpG id
+        @ chrom: the chromosome of the CpG, to read in the correct matrixQTL results
+        @ max_meqtl_sites: the maximum number of meQTLs to return
+        @ return: a list of the meQTLs, 'chr:start', with smallest p-value
+        """
+        # read in the matrixQTL results for this chromosome        
+        meqtl_df = pd.read_parquet(os.path.join(self.matrix_qtl_dir, f"chr{chrom}_meqtl.parquet"))
+        # get the meQTLs for this CpG
+        meqtls = meqtl_df.loc[meqtl_df['#id'] == cpg_id, :]
+        # get the max_meqtl_sites meQTLS with smallest p-value
+        meqtls = meqtls.sort_values(by='p-value', ascending=True).head(max_meqtl_sites)
+        return meqtls['SNP'].to_list()
+            
+    def get_db_sites(
+        self,
+        cpg_id:str
+        ) -> list:
+        """
+        Return the meQTL locations in either of the databases for the given CpG
+        @ cpg_id: the CpG id
+        @ returns: a list of the meQTLs, 'chr:start'
+        """
+        godmc_metqtls = self.godmc_meqtl_df.loc[self.godmc_meqtl_df['cpg'] == cpg_id, 'snp'].to_list()    
+        pancan_meqtls = self.pancan_meqtl_df.loc[self.ancan_meqtl_df['cpg'] == cpg_id, 'snp'].to_list()
+        return godmc_metqtls + pancan_meqtls
+
     def get_predictor_sites(
         self, 
         cpg_id: str,
         num_correl_sites: int,
+        max_meqtl_sites: int,
         nearby_window_size: int
         ) -> list:
         """
@@ -92,21 +121,20 @@ class mutationClock:
             ].values[0]
         # get num_correl_sites correlated CpGs and convert to genomic locations
         corr_cpg_ids = self._select_correl_sites(cpg_id, chrom, num_correl_sites)
-        corr_locations = (
+        corr_locs = (
             self.illumina_cpg_locs_df.loc[
                 self.illumina_cpg_locs_df['#id'].isin(corr_cpg_ids)
                 ].assign(location=lambda df: df['chr'] + ':' + df['start'].astype(str))['location']
             .tolist()
             )
         # get sites (and cpg_id position) within nearby_window_size of cpg_id
-        nearby_sites = [chrom + ':' + str(start + i) for i in range(-nearby_window_size, nearby_window_size + 1)]
-        # TODO: get the sites from databases
-        
-        # TODO: get sites from matrixQTL
-        
-        
+        nearby_site_locs = [chrom + ':' + str(start + i) for i in range(-nearby_window_size, nearby_window_size + 1)]
+        # get sites from databases
+        db_meqtl_locs = self.get_db_sites(cpg_id)
+        # get sites from matrixQTL 
+        matrix_meqtl_locs = self.get_matrixQTL_sites(cpg_id, chrom, max_meqtl_sites)
         # return the union of the two
-        predictor_sites = list(set(corr_locations + nearby_sites))
+        predictor_sites = list(set(corr_locs + nearby_site_locs + matrix_meqtl_locs + db_meqtl_locs))
     
         return predictor_sites
     

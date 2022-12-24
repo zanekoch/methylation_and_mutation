@@ -1,7 +1,7 @@
 from glob import glob
 
 # specify the input files
-mut_dir = "/cellar/users/zkoch/methylation_and_mutation/data/matrixQtl_data/binary_muts"
+mut_dir = "/cellar/users/zkoch/methylation_and_mutation/data/matrixQtl_data/muts"
 mut_fns = glob(mut_dir + "/*csv.gz")
 methyl_fn = "/cellar/users/zkoch/methylation_and_mutation/data/matrixQtl_data/methyl.csv.gz"
 chroms = [str(i) for i in range(1,23)]

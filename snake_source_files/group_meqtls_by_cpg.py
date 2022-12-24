@@ -27,15 +27,13 @@ def group_by_cpg(
     
     all_meqtls = []
     # for each meqtl file
-    for i, meqtl_fn in enumerate(meqtl_fns):
+    for meqtl_fn in meqtl_fns:
         # read in file
         meqtl_df = pd.read_csv(meqtl_fn, sep='\t')
         meqtl_df = meqtl_df.rename({'gene': '#id'}, axis=1)
         # join with illumina_cpg_locs_df on #id
         this_chr_meqtls = meqtl_df.merge(illumina_cpg_locs_df, on='#id')
         all_meqtls.append(this_chr_meqtls)
-        if i == 3:
-            break
     # concat all_meqtls
     all_meqtls_df = pd.concat(all_meqtls)
     # rename 'chr' column to 'cpg_chr' and 'start' to 'cpg_start'
