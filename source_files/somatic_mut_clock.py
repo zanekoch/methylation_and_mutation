@@ -5,6 +5,12 @@ import sys
 from tqdm import tqdm
 from sklearn.linear_model import LinearRegression
 from sklearn.model_selection import cross_validate
+from sklearn.model_selection import KFold
+from sklearn.metrics import mean_absolute_error, r2_score
+from sklearn.linear_model import ElasticNetCV
+# import random forest regressor
+from sklearn.ensemble import RandomForestRegressor
+import matplotlib.pyplot as plt
 
 
 class mutationClock:
@@ -21,8 +27,9 @@ class mutationClock:
         self.all_mut_w_age_df = all_mut_w_age_df
         self.illumina_cpg_locs_df = illumina_cpg_locs_df
         self.all_methyl_age_df_t = all_methyl_age_df_t
+        self.matrix_qtl_dir = matrix_qtl_dir
         # Preprocessing: subset to only mutations that are non X and Y chromosomes and that occured in samples with measured methylation
-        self.all_mut_w_age_df['mut_cpg'] = self.all_mut_w_age_df['chr'] + ':' + self.all_mut_w_age_df['start'].astype(str)
+        self.all_mut_w_age_df['mut_loc'] = self.all_mut_w_age_df['chr'] + ':' + self.all_mut_w_age_df['start'].astype(str)
         self.all_mut_w_age_df = self.all_mut_w_age_df.loc[
             (self.all_mut_w_age_df['chr'] != 'X') 
             & (self.all_mut_w_age_df['chr'] != 'Y')
@@ -44,6 +51,10 @@ class mutationClock:
         # read in the matrixQTL results from databases
         self.godmc_meqtl_df = pd.read_parquet(godmc_meqtl_fn)        
         self.pancan_meqtl_df = pd.read_parquet(pancan_meqtl_fn)
+        
+        # one hot encode gender and tissue type
+        self.all_methyl_age_df_t = pd.get_dummies(self.all_methyl_age_df_t, columns=["gender", "dataset"])
+        
         
     def _select_correl_sites(
         self,
@@ -97,7 +108,7 @@ class mutationClock:
         @ returns: a list of the meQTLs, 'chr:start'
         """
         godmc_metqtls = self.godmc_meqtl_df.loc[self.godmc_meqtl_df['cpg'] == cpg_id, 'snp'].to_list()    
-        pancan_meqtls = self.pancan_meqtl_df.loc[self.ancan_meqtl_df['cpg'] == cpg_id, 'snp'].to_list()
+        pancan_meqtls = self.pancan_meqtl_df.loc[self.pancan_meqtl_df['cpg'] == cpg_id, 'snp'].to_list()
         return godmc_metqtls + pancan_meqtls
 
     def get_predictor_sites(
@@ -127,15 +138,27 @@ class mutationClock:
                 ].assign(location=lambda df: df['chr'] + ':' + df['start'].astype(str))['location']
             .tolist()
             )
-        # get sites (and cpg_id position) within nearby_window_size of cpg_id
+        print(f"got {len(corr_locs)} correlated sites")
+        # get sites (and cpg_id itself position) within nearby_window_size of cpg_id
         nearby_site_locs = [chrom + ':' + str(start + i) for i in range(-nearby_window_size, nearby_window_size + 1)]
+        print(f"got {len(nearby_site_locs)} nearby sites")
         # get sites from databases
         db_meqtl_locs = self.get_db_sites(cpg_id)
+        print(f"got {len(db_meqtl_locs)} db sites")
         # get sites from matrixQTL 
         matrix_meqtl_locs = self.get_matrixQTL_sites(cpg_id, chrom, max_meqtl_sites)
-        # return the union of the two
+        print(f"got {len(matrix_meqtl_locs)} matrixQTL sites")
+        # print the number of overlapping sites between each pair of sources
+        names = ['correlated', 'nearby', 'db', 'matrixQTL']
+        sources = [corr_locs, nearby_site_locs, db_meqtl_locs, matrix_meqtl_locs]
+        for source_name, source_locs in zip(names, sources):
+            for source_name2, source_locs2 in zip(names, sources):
+                if source_name == source_name2:
+                    continue
+                print(f"number of overlapping sites between {source_name} and {source_name2}: {len(set(source_locs) & set(source_locs2))}")
+        # return the union of all sources
         predictor_sites = list(set(corr_locs + nearby_site_locs + matrix_meqtl_locs + db_meqtl_locs))
-    
+        print(f"got {len(predictor_sites)} total predictor sites")
         return predictor_sites
     
     def train_one_predictor(
@@ -150,37 +173,44 @@ class mutationClock:
         y = self.all_methyl_age_df_t.loc[:, cpg_id]
         # get the mutation status of predictor sites
         mut_status = self.all_mut_w_age_df.loc[
-            self.all_mut_w_age_df['mut_cpg'].isin(predictor_sites),
-            ['DNA_VAF', 'case_submitter_id', 'mut_cpg']
+            self.all_mut_w_age_df['mut_loc'].isin(predictor_sites),
+            ['DNA_VAF', 'case_submitter_id', 'mut_loc']
             ]
         # create a new dataframe with columns = predictor sites, rows = y.index, and values = mut_status
         X = pd.DataFrame(index=y.index, columns=predictor_sites)
         # populate the X dataframe
-        X.loc[:, predictor_sites] = mut_status.pivot(index='case_submitter_id', columns='mut_cpg', values='DNA_VAF')
+        X.loc[:, predictor_sites] = mut_status.pivot(index='case_submitter_id', columns='mut_loc', values='DNA_VAF')
         X.fillna(0, inplace=True)
+        # add one-hot-encoded gender and tissue type columns
+        X[self.all_methyl_age_df_t.columns[-35:]] = self.all_methyl_age_df_t.loc[X.index, self.all_methyl_age_df_t.columns[-35:]]
+        # drop all but last 35 columns from X
+        X = X.iloc[:, -35:]
         
-        # train an linear regression model from sklearn to predict y from X with 5-fold cross validation
-        from sklearn.model_selection import KFold
-        from sklearn.metrics import mean_absolute_error, r2_score
-        from sklearn.linear_model import ElasticNetCV
-        model = ElasticNetCV(cv=5, random_state=0)
-        cv = KFold(n_splits=2, shuffle=True, random_state=0)
+        
+        # model = RandomForestRegressor(n_estimators=100, max_depth=5, random_state=0)
+        model = ElasticNetCV(cv=3, random_state=0)
+        # model = LinearRegression()
+        cv = KFold(n_splits=3, shuffle=True, random_state=0)
+        fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+        i = 0
         # do the cross validation
         for train_index, test_index in cv.split(X):
             X_train, X_test = X.iloc[train_index, :], X.iloc[test_index, :]
             y_train, y_test = y.iloc[train_index], y.iloc[test_index]
             model.fit(X_train, y_train)
+            preds = model.predict(X_test)
             # calculate MAE
-            print(mean_absolute_error(y_test, model.predict(X_test)))
+            print(f"MAE: {mean_absolute_error(y_test, preds)}")
             # and r2
-            print(r2_score(y_test, model.predict(X_test)))
-            # print all the nonzero coefficients
-            print(model.coef_[model.coef_ != 0])
-            # print the number of nonzero coefficients
-            print(np.count_nonzero(model.coef_))
-            # print the intercept
-            print(model.intercept_)
-            
+            print(f"r2: {r2_score(y_test, preds)}")
+            # plot actual vs predicted
+            axes[i].scatter(y_test, preds, s=1)
+            # print the coefficents and feature names for each nonzero coefficient
+            print(f"coefficients: {model.coef_[model.coef_ != 0]}")
+            print(f"feature names: {X.columns[model.coef_ != 0]}")
+            print(f"intercept {model.intercept_}")
+            i += 1
+        return model
             
     def build_one_predictor(
         self, 
