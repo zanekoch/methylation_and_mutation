@@ -3,6 +3,7 @@ import numpy as np
 import os
 import sys
 from tqdm import tqdm
+import pickle
 from sklearn.linear_model import LinearRegression
 from sklearn.model_selection import cross_validate
 from sklearn.model_selection import KFold
@@ -19,6 +20,7 @@ class mutationClock:
         all_mut_w_age_df: pd.DataFrame,
         illumina_cpg_locs_df: pd.DataFrame, 
         all_methyl_age_df_t: pd.DataFrame,
+        output_dir: str,
         matrix_qtl_dir: str = "/cellar/users/zkoch/methylation_and_mutation/data/matrixQtl_data/muts",
         godmc_meqtl_fn: str = "/cellar/users/zkoch/methylation_and_mutation/data/meQTL/goDMC_meQTL/goDMC_meQTLs.parquet",
         pancan_meqtl_fn: str = "/cellar/users/zkoch/methylation_and_mutation/data/meQTL/pancan_tcga_meQTL/pancan_meQTL.parquet"
@@ -27,6 +29,7 @@ class mutationClock:
         self.all_mut_w_age_df = all_mut_w_age_df
         self.illumina_cpg_locs_df = illumina_cpg_locs_df
         self.all_methyl_age_df_t = all_methyl_age_df_t
+        self.output_dir = output_dir
         self.matrix_qtl_dir = matrix_qtl_dir
         # Preprocessing: subset to only mutations that are non X and Y chromosomes and that occured in samples with measured methylation
         self.all_mut_w_age_df['mut_loc'] = self.all_mut_w_age_df['chr'] + ':' + self.all_mut_w_age_df['start'].astype(str)
@@ -55,7 +58,6 @@ class mutationClock:
         # one hot encode gender and tissue type
         self.all_methyl_age_df_t = pd.get_dummies(self.all_methyl_age_df_t, columns=["gender", "dataset"])
         
-        
     def _select_correl_sites(
         self,
         cpg_id: str,
@@ -77,7 +79,7 @@ class mutationClock:
         # choose the sites with largest absolute correlation
         return corrs.abs().sort_values(ascending=False).index[:num_correl_sites].to_list()
         
-    def get_matrixQTL_sites(
+    def _get_matrixQTL_sites(
         self,
         cpg_id: str,
         chrom: str,
@@ -98,7 +100,7 @@ class mutationClock:
         meqtls = meqtls.sort_values(by='p-value', ascending=True).head(max_meqtl_sites)
         return meqtls['SNP'].to_list()
             
-    def get_db_sites(
+    def _get_db_sites(
         self,
         cpg_id:str
         ) -> list:
@@ -124,12 +126,16 @@ class mutationClock:
         @ returns: list of genomic locations of the sites to be used as predictors in format chr:start
         """
         # get cpg_id's chromosome and start position
-        chrom = self.illumina_cpg_locs_df.loc[
-            self.illumina_cpg_locs_df['#id'] == cpg_id, 'chr'
+        try:
+            chrom = self.illumina_cpg_locs_df.loc[
+                self.illumina_cpg_locs_df['#id'] == cpg_id, 'chr'
             ].values[0]
-        start = self.illumina_cpg_locs_df.loc[
-            self.illumina_cpg_locs_df['#id'] == cpg_id, 'start'
+            start = self.illumina_cpg_locs_df.loc[
+                self.illumina_cpg_locs_df['#id'] == cpg_id, 'start'
             ].values[0]
+        # if for some reason this cpg is not in illumina_cpg_locs_df, return empty list of predictors
+        except:
+            return []
         # get num_correl_sites correlated CpGs and convert to genomic locations
         corr_cpg_ids = self._select_correl_sites(cpg_id, chrom, num_correl_sites)
         corr_locs = (
@@ -138,36 +144,27 @@ class mutationClock:
                 ].assign(location=lambda df: df['chr'] + ':' + df['start'].astype(str))['location']
             .tolist()
             )
-        print(f"got {len(corr_locs)} correlated sites")
         # get sites (and cpg_id itself position) within nearby_window_size of cpg_id
         nearby_site_locs = [chrom + ':' + str(start + i) for i in range(-nearby_window_size, nearby_window_size + 1)]
-        print(f"got {len(nearby_site_locs)} nearby sites")
         # get sites from databases
-        db_meqtl_locs = self.get_db_sites(cpg_id)
-        print(f"got {len(db_meqtl_locs)} db sites")
+        db_meqtl_locs = self._get_db_sites(cpg_id)
         # get sites from matrixQTL 
-        matrix_meqtl_locs = self.get_matrixQTL_sites(cpg_id, chrom, max_meqtl_sites)
-        print(f"got {len(matrix_meqtl_locs)} matrixQTL sites")
-        # print the number of overlapping sites between each pair of sources
-        names = ['correlated', 'nearby', 'db', 'matrixQTL']
-        sources = [corr_locs, nearby_site_locs, db_meqtl_locs, matrix_meqtl_locs]
-        for source_name, source_locs in zip(names, sources):
-            for source_name2, source_locs2 in zip(names, sources):
-                if source_name == source_name2:
-                    continue
-                print(f"number of overlapping sites between {source_name} and {source_name2}: {len(set(source_locs) & set(source_locs2))}")
+        matrix_meqtl_locs = self._get_matrixQTL_sites(cpg_id, chrom, max_meqtl_sites)
         # return the union of all sources
         predictor_sites = list(set(corr_locs + nearby_site_locs + matrix_meqtl_locs + db_meqtl_locs))
-        print(f"got {len(predictor_sites)} total predictor sites")
+        # print(f"got {len(predictor_sites)} total predictor sites")
         return predictor_sites
     
-    def train_one_predictor(
+    def _create_training_mat(
         self, 
-        cpg_id: str,
+        cpg_id: str, 
         predictor_sites: list
-        ) -> pd.DataFrame:
+        ) -> tuple:
         """
-        Train the predictor for one CpG
+        Create the training matrix for the given cpg_id and predictor_sites
+        @ cpg_id: the id of the CpG
+        @ predictor_sites: list of sites to be used as predictors of cpg_id's methylation
+        @ returns: X, y where X is the training matrix and y is the methylation values of cpg_id across samples
         """
         # for each sample, get the cpg_id methylation values
         y = self.all_methyl_age_df_t.loc[:, cpg_id]
@@ -178,51 +175,91 @@ class mutationClock:
             ]
         # create a new dataframe with columns = predictor sites, rows = y.index, and values = mut_status
         X = pd.DataFrame(index=y.index, columns=predictor_sites)
-        # populate the X dataframe
+        # populate the X dataframe with variant allele frequencies
         X.loc[:, predictor_sites] = mut_status.pivot(index='case_submitter_id', columns='mut_loc', values='DNA_VAF')
         X.fillna(0, inplace=True)
-        # add one-hot-encoded gender and tissue type columns
-        X[self.all_methyl_age_df_t.columns[-35:]] = self.all_methyl_age_df_t.loc[X.index, self.all_methyl_age_df_t.columns[-35:]]
-        # drop all but last 35 columns from X
-        X = X.iloc[:, -35:]
+        # add one-hot-encoded gender and tissue type covariate columns
+        covariate_df = self.all_methyl_age_df_t.loc[X.index, self.all_methyl_age_df_t.columns[-35:]]
+        X = pd.merge(X, covariate_df, left_index=True, right_index=True)
+        return X, y
+    
+    def evaluate_predictor(
+        self, 
+        cpg_id: str,
+        predictor_sites: list
+        ) -> pd.DataFrame:
+        """
+        Train the predictor for one CpG
+        """
+        X, y = self._create_training_mat(cpg_id, predictor_sites)
         
-        
-        # model = RandomForestRegressor(n_estimators=100, max_depth=5, random_state=0)
-        model = ElasticNetCV(cv=3, random_state=0)
-        # model = LinearRegression()
+        model = ElasticNetCV(cv=3, random_state=0, max_iter=5000)
         cv = KFold(n_splits=3, shuffle=True, random_state=0)
-        fig, axes = plt.subplots(1, 3, figsize=(15, 5))
-        i = 0
         # do the cross validation
+        maes, r2s, feature_names = [], [], []
         for train_index, test_index in cv.split(X):
             X_train, X_test = X.iloc[train_index, :], X.iloc[test_index, :]
             y_train, y_test = y.iloc[train_index], y.iloc[test_index]
             model.fit(X_train, y_train)
             preds = model.predict(X_test)
-            # calculate MAE
-            print(f"MAE: {mean_absolute_error(y_test, preds)}")
-            # and r2
-            print(f"r2: {r2_score(y_test, preds)}")
-            # plot actual vs predicted
-            axes[i].scatter(y_test, preds, s=1)
-            # print the coefficents and feature names for each nonzero coefficient
-            print(f"coefficients: {model.coef_[model.coef_ != 0]}")
-            print(f"feature names: {X.columns[model.coef_ != 0]}")
-            print(f"intercept {model.intercept_}")
-            i += 1
-        return model
-            
-    def build_one_predictor(
+            maes.append(mean_absolute_error(y_test, preds))
+            r2s.append(r2_score(y_test, preds))
+            feature_names.append(X_train.columns[model.coef_ != 0].to_list())
+        # repeat with just the covariates
+        base_maes, base_r2s, base_feature_names = [], [], []
+        X = X.iloc[:, -35:]
+        for train_index, test_index in cv.split(X):
+            X_train, X_test = X.iloc[train_index, :], X.iloc[test_index, :]
+            y_train, y_test = y.iloc[train_index], y.iloc[test_index]
+            model.fit(X_train, y_train)
+            preds = model.predict(X_test)
+            base_maes.append(mean_absolute_error(y_test, preds))
+            base_r2s.append(r2_score(y_test, preds))
+            base_feature_names.append(X_train.columns[model.coef_ != 0].to_list())
+        # create df with columns cpg_id, mae, r2, feature_names, base_mae, base_r2, base_feature_names, with entries as the lists, not expanding
+        result_df = pd.DataFrame({
+            'cpg_id': [cpg_id], 'mae': [maes], 'r2': [r2s], 'feature_names': [feature_names],
+            'base_mae': [base_maes], 'base_r2': [base_r2s], 'base_feature_names': [base_feature_names]
+            })
+        return result_df
+    
+    def train_predictor(
         self, 
         cpg_id: str,
         num_correl_sites: int,
+        max_meqtl_sites: int,
         nearby_window_size: int
-        ) -> pd.DataFrame:
+        ):
         """
         Build the predictor for one CpG
         """
+        print(cpg_id, flush=True)
         # get the sites to be used as predictors
-        predictor_sites = self.get_predictor_sites(cpg_id, num_correl_sites, nearby_window_size)
-        
+        predictor_sites = self.get_predictor_sites(cpg_id, num_correl_sites, max_meqtl_sites, nearby_window_size)
+        print(f"got predictor sites for {cpg_id}", flush=True)
         # train the model
+        X, y = self._create_training_mat(cpg_id, predictor_sites)
+        # train one elasticNet model to predict y from X
+        model = ElasticNetCV(cv=5, random_state=0, max_iter=5000)
+        model.fit(X, y)
+        print(f"trained {cpg_id} model", flush=True)
+        # write the model to a file using pickle
+        model_fn = os.path.join(self.output_dir, f"{cpg_id}.pkl")
+        pickle.dump(model, open(model_fn, "wb"))
         
+    def train_all_predictors(
+        self, 
+        num_correl_sites: int,
+        max_meqtl_sites: int,
+        nearby_window_size: int,
+        cpg_ids: list = []
+        ):
+        """
+        Train the predictor for all CpGs
+        """
+        # get the list of all CpGs
+        if len(cpg_ids) == 0:
+            cpg_ids = self.illumina_cpg_locs_df['#id'].to_list()[:1]
+        # for each cpg, train the predictor
+        for cpg_id in cpg_ids:
+            self.train_predictor(cpg_id, num_correl_sites, max_meqtl_sites, nearby_window_size) 
