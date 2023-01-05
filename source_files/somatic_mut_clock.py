@@ -311,13 +311,32 @@ class mutationClock:
         # get the predictor model
         model = pickle.load(open(model_fn, "rb"))
         # print list of attributes of the model
-        print(len(model.coef_))
-        # get feature names 
-        
+        predictor_sites = model.feature_names_in_
         # create the X matrix
-        X, _ = self._create_training_mat(cpg_id, predictor_sites, samples)
-        # predict the methylation level
+        X, _ = self._create_training_mat(cpg_id, predictor_sites, test_samples)
+        # predict the methylation levels
         preds = model.predict(X)
         # create a df with the samples as rows and the predicted methylation level as a column called cpg_id
         pred_methyl_df = pd.DataFrame({cpg_id: preds}, index=test_samples)
         return pred_methyl_df
+
+    def predict_all_cpgs(
+        self,
+        cpg_ids: list,
+        test_samples: list,
+        model_dir: str
+        ) -> pd.DataFrame:
+        """
+        Predict the methylation level of some CpGs for a list of samples using pretrained models
+        @ cpg_ids: list of CpG ids to predict
+        @ test_samples: list of samples to predict for
+        @ model_dir: directory containing the pickled models
+        """
+        # for each cpg, predict the methylation level
+        predictions = []
+        for cpg_id in cpg_ids:
+            model_fn = os.path.join(model_dir, f"{cpg_id}.pkl")
+            predictions.append(self.predict_cpg(cpg_id, test_samples, model_fn))
+        # concatenate the predictions into a single df
+        all_pred_methyl_df = pd.concat(predictions, axis=1)
+        return all_pred_methyl_df
