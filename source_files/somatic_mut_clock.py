@@ -55,7 +55,10 @@ class mutationClock:
         self.godmc_meqtl_df = pd.read_parquet(godmc_meqtl_fn)        
         self.pancan_meqtl_df = pd.read_parquet(pancan_meqtl_fn)
         # one hot encode gender and tissue type
+        dset_col = self.all_methyl_age_df_t['dataset'].to_list()
         self.all_methyl_age_df_t = pd.get_dummies(self.all_methyl_age_df_t, columns=["gender", "dataset"])
+        # add back in the dataset column
+        self.all_methyl_age_df_t['dataset'] = dset_col
         
         self.matrixQTL_store = {}
         
@@ -64,18 +67,18 @@ class mutationClock:
         cpg_id: str,
         cpg_chr: str,
         num_correl_sites: int,
-        samples: list
+        train_samples: list
         ) -> list:
         """
-        Just in time correlation to find the most correlated sites to the mutation event CpG in matched samples
+        Just in time correlation to find the most correlated sites to the mutation event CpG in matched train_samples
         """
         # get the  CpG's MF
-        cpg_mf = self.all_methyl_age_df_t.loc[samples, cpg_id]
+        cpg_mf = self.all_methyl_age_df_t.loc[train_samples, cpg_id]
         # get the MF of all same chrom CpGs
         same_chrom_cpgs = self.illumina_cpg_locs_df.loc[
             self.illumina_cpg_locs_df['chr'] == cpg_chr, # exclude the mut_cpg
             '#id'].values
-        same_chrom_cpgs_mf = self.all_methyl_age_df_t.loc[samples, same_chrom_cpgs]
+        same_chrom_cpgs_mf = self.all_methyl_age_df_t.loc[train_samples, same_chrom_cpgs]
         # get correlation between mut_cpg and all same chrom CpGs
         corrs = same_chrom_cpgs_mf.corrwith(cpg_mf, axis=0)
         # choose the sites with largest absolute correlation
@@ -125,7 +128,7 @@ class mutationClock:
     def get_predictor_sites(
         self, 
         cpg_id: str,
-        samples: list,
+        train_samples: list,
         num_correl_sites: int,
         max_meqtl_sites: int,
         nearby_window_size: int
@@ -133,7 +136,7 @@ class mutationClock:
         """
         Get the sites to be used as predictors of cpg_id's methylation
         @ cpg_id: the id of the CpG
-        @ samples: the samples to be used
+        @ train_samples: the train_samples to be used
         @ num_correl_sites: the number of correlated sites to be used
         @ max_meqtl_sites: the maximum number of meQTLs to be used
         @ nearby_window_size: the window size to be used to find nearby sites
@@ -151,7 +154,7 @@ class mutationClock:
         except:
             return []
         # get num_correl_sites correlated CpGs and convert to genomic locations
-        corr_cpg_ids = self._select_correl_sites(cpg_id, chrom, num_correl_sites, samples)
+        corr_cpg_ids = self._select_correl_sites(cpg_id, chrom, num_correl_sites, train_samples)
         corr_locs = (
             self.illumina_cpg_locs_df.loc[
                 self.illumina_cpg_locs_df['#id'].isin(corr_cpg_ids)
@@ -194,20 +197,24 @@ class mutationClock:
         # add rows of all 0s for samples that don't have any mutations in predictor sites
         X = X.reindex(y.index, fill_value=0)
         # add one-hot-encoded gender and tissue type covariate columns
-        covariate_df = self.all_methyl_age_df_t.loc[X.index, self.all_methyl_age_df_t.columns[-35:]]
+        onehot_dataset_cols = [
+            i for i, col in enumerate(self.all_methyl_age_df_t.columns) if col.startswith('dataset_') or col.startswith('gender_')
+            ]
+        onehot_dataset_cols = self.all_methyl_age_df_t.iloc[:, onehot_dataset_cols].columns
+        covariate_df = self.all_methyl_age_df_t.loc[X.index, onehot_dataset_cols]
         X = pd.merge(X, covariate_df, left_index=True, right_index=True)
         return X, y
     
     def evaluate_predictor(
         self, 
         cpg_id: str,
-        samples: list,
+        train_samples: list,
         predictor_sites: list
         ) -> pd.DataFrame:
         """
         Train the predictor for one CpG
         """
-        X, y = self._create_training_mat(cpg_id, predictor_sites, samples)
+        X, y = self._create_training_mat(cpg_id, predictor_sites, train_samples)
         
         model = ElasticNetCV(cv=3, random_state=0, max_iter=5000, n_jobs=5, selection='random')
         cv = KFold(n_splits=3, shuffle=True, random_state=0)
@@ -243,7 +250,7 @@ class mutationClock:
     def train_predictor(
         self, 
         cpg_id: str,
-        samples: list,
+        train_samples: list,
         num_correl_sites: int,
         max_meqtl_sites: int,
         nearby_window_size: int
@@ -251,15 +258,15 @@ class mutationClock:
         """
         Build the predictor for one CpG
         @ cpg_id: the id of the CpG to predict
-        @ samples: list of samples to use for training
+        @ train_samples: list of samples to use for training
         @ num_correl_sites: number of sites to use as predictors
         @ max_meqtl_sites: maximum number of meqtl db sites to use as predictors
         @ nearby_window_size: window size to use for choosing nearby sites
         """
         # get the sites to be used as predictors
-        predictor_sites = self.get_predictor_sites(cpg_id, samples, num_correl_sites, max_meqtl_sites, nearby_window_size)
+        predictor_sites = self.get_predictor_sites(cpg_id, train_samples, num_correl_sites, max_meqtl_sites, nearby_window_size)
         # train the model
-        X, y = self._create_training_mat(cpg_id, predictor_sites, samples)
+        X, y = self._create_training_mat(cpg_id, predictor_sites, train_samples)
         # train one elasticNet model to predict y from X
         model = ElasticNetCV(cv=5, random_state=0, max_iter=5000, selection = 'random')
         model.fit(X, y)
@@ -273,7 +280,7 @@ class mutationClock:
         max_meqtl_sites: int,
         nearby_window_size: int,
         cpg_ids: list = [],
-        samples: list = []
+        train_samples: list = []
         ):
         """
         Train the predictor for all CpGs
@@ -281,10 +288,36 @@ class mutationClock:
         # get the list of all CpGs
         if len(cpg_ids) == 0:
             cpg_ids = self.illumina_cpg_locs_df['#id'].to_list()
-        if len(samples) == 0:
-            samples = self.all_methyl_age_df_t.index.to_list()
+        if len(train_samples) == 0:
+            train_samples = self.all_methyl_age_df_t.index.to_list()
         # for each cpg, train the predictor
         for i, cpg_id in enumerate(cpg_ids):
-            self.train_predictor(cpg_id, samples, num_correl_sites, max_meqtl_sites, nearby_window_size) 
+            self.train_predictor(cpg_id, train_samples, num_correl_sites, max_meqtl_sites, nearby_window_size) 
             if i % 10 == 0:
                 print(i)
+                    
+    def predict_cpg(
+        self, 
+        cpg_id: str,
+        test_samples: list,
+        model_fn: str
+        ) -> pd.DataFrame:
+        """
+        Predict the methylation level of one CpG for a list of samples
+        @ cpg_id: the id of the CpG to predict
+        @ test_samples: list of samples to predict
+        @ model_fn: the file name of the pickled model
+        """
+        # get the predictor model
+        model = pickle.load(open(model_fn, "rb"))
+        # print list of attributes of the model
+        print(len(model.coef_))
+        # get feature names 
+        
+        # create the X matrix
+        X, _ = self._create_training_mat(cpg_id, predictor_sites, samples)
+        # predict the methylation level
+        preds = model.predict(X)
+        # create a df with the samples as rows and the predicted methylation level as a column called cpg_id
+        pred_methyl_df = pd.DataFrame({cpg_id: preds}, index=test_samples)
+        return pred_methyl_df

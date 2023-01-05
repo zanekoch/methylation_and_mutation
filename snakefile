@@ -50,12 +50,12 @@ rule balance_train_test_split:
 rule train_methyl_predictors:
   input:
     expand(os.path.join(mut_dir, "chr{chrom}_meqtl.parquet"), chrom=chroms),
-    os.path.join(predictors_dir, "train_samples.txt"),
-    os.path.join(predictors_dir, "test_samples.txt")
+    train_samples_fn = os.path.join(predictors_dir, "train_samples.txt"),
+    test_samples_fn = os.path.join(predictors_dir, "test_samples.txt")
   output:
     os.path.join(predictors_dir, "{cpg_start}_{cpg_end}.txt")
   conda:
     "big_data"
   shell:
-    "python /cellar/users/zkoch/methylation_and_mutation/snake_source_files/train_methyl_predictors.py --cpg_start {wildcards.cpg_start} --cpg_end {wildcards.cpg_end} --out_dir {predictors_dir}"
+    "python /cellar/users/zkoch/methylation_and_mutation/snake_source_files/train_methyl_predictors.py --cpg_start {wildcards.cpg_start} --cpg_end {wildcards.cpg_end} --out_dir {predictors_dir} --train_samples_fn {input.train_samples_fn}"
     

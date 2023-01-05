@@ -6,12 +6,13 @@ import os
 import pandas as pd
 
 def train_predictors(
-    out_dir,
-    cpg_start,
-    cpg_end,
-    all_mut_w_age_df,
-    illumina_cpg_locs_df, 
-    all_methyl_age_df_t
+    out_dir: str,
+    cpg_start: int,
+    cpg_end: int,
+    all_mut_w_age_df: pd.DataFrame,
+    illumina_cpg_locs_df: pd.DataFrame, 
+    all_methyl_age_df_t: pd.DataFrame,
+    training_samples: list
     ) -> None:
     """
     Train all the predictors
@@ -28,7 +29,7 @@ def train_predictors(
     cpg_ids = mut_clock.illumina_cpg_locs_df.iloc[cpg_start:cpg_end]['#id'].to_list()
     mut_clock.train_all_predictors(
         num_correl_sites = 1000, max_meqtl_sites = 1000,
-        nearby_window_size = 5000, cpg_ids = cpg_ids
+        nearby_window_size = 5000, cpg_ids = cpg_ids, samples = training_samples
         )
     # create an empty file in out_dir called cpg_end.txt
     with open(os.path.join(out_dir, f"{cpg_start}_{cpg_end}.txt"), "w") as f:
@@ -57,10 +58,16 @@ def main():
     parser.add_argument('--cpg_start', type=int, help='cpg start')
     parser.add_argument('--cpg_end', type=int, help='cpg end')
     parser.add_argument('--out_dir', type=str, help='output directory')
+    parser.add_argument('--train_samples_fn', type=int, help='fn containing train samples')
     args = parser.parse_args()
     cpg_start = args.cpg_start
     cpg_end = args.cpg_end
     out_dir = args.out_dir
+    train_samples_fn = args.train_samples_fn
+    print(f"Training methylation predictors {cpg_start} to {cpg_end}")
+    # read training samples from file and convert to list
+    with open(train_samples_fn, "r") as f:
+        training_samples = f.read().splitlines()
     
     all_mut_w_age_df, illumina_cpg_locs_df, all_methyl_age_df_t = read_data()
 
