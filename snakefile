@@ -38,9 +38,20 @@ rule group_meqtls:
   shell:
     "python /cellar/users/zkoch/methylation_and_mutation/snake_source_files/group_meqtls_by_cpg.py --chrom {wildcards.chrom} --out_fn {output}"
 
+rule balance_train_test_split:
+  output:
+    os.path.join(predictors_dir, "train_samples.txt"),
+    os.path.join(predictors_dir, "test_samples.txt")
+  conda:
+    "big_data"
+  shell:
+    "python /cellar/users/zkoch/methylation_and_mutation/snake_source_files/balance_train_test_split.py --out_dir {predictors_dir}"
+
 rule train_methyl_predictors:
   input:
-    expand(os.path.join(mut_dir, "chr{chrom}_meqtl.parquet"), chrom=chroms)
+    expand(os.path.join(mut_dir, "chr{chrom}_meqtl.parquet"), chrom=chroms),
+    os.path.join(predictors_dir, "train_samples.txt"),
+    os.path.join(predictors_dir, "test_samples.txt")
   output:
     os.path.join(predictors_dir, "{cpg_start}_{cpg_end}.txt")
   conda:

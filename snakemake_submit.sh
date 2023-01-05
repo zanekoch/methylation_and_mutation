@@ -1,1 +1,1 @@
-snakemake --use-conda --cluster "sbatch -A zkoch -p nrnb-compute --mem=128GB -t 10:00:00" --jobs 5 --retries 3
+snakemake --dry-run --use-conda --cluster "sbatch -A zkoch -p nrnb-compute --mem=128GB -t 10:00:00" --jobs 5 --retries 3
