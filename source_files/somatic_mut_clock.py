@@ -63,18 +63,19 @@ class mutationClock:
         self,
         cpg_id: str,
         cpg_chr: str,
-        num_correl_sites: int
+        num_correl_sites: int,
+        samples: list
         ) -> list:
         """
         Just in time correlation to find the most correlated sites to the mutation event CpG in matched samples
         """
         # get the  CpG's MF
-        cpg_mf = self.all_methyl_age_df_t.loc[:, cpg_id]
+        cpg_mf = self.all_methyl_age_df_t.loc[samples, cpg_id]
         # get the MF of all same chrom CpGs
         same_chrom_cpgs = self.illumina_cpg_locs_df.loc[
             self.illumina_cpg_locs_df['chr'] == cpg_chr, # exclude the mut_cpg
             '#id'].values
-        same_chrom_cpgs_mf = self.all_methyl_age_df_t.loc[:, same_chrom_cpgs]
+        same_chrom_cpgs_mf = self.all_methyl_age_df_t.loc[samples, same_chrom_cpgs]
         # get correlation between mut_cpg and all same chrom CpGs
         corrs = same_chrom_cpgs_mf.corrwith(cpg_mf, axis=0)
         # choose the sites with largest absolute correlation
@@ -124,6 +125,7 @@ class mutationClock:
     def get_predictor_sites(
         self, 
         cpg_id: str,
+        samples: list,
         num_correl_sites: int,
         max_meqtl_sites: int,
         nearby_window_size: int
@@ -131,6 +133,10 @@ class mutationClock:
         """
         Get the sites to be used as predictors of cpg_id's methylation
         @ cpg_id: the id of the CpG
+        @ samples: the samples to be used
+        @ num_correl_sites: the number of correlated sites to be used
+        @ max_meqtl_sites: the maximum number of meQTLs to be used
+        @ nearby_window_size: the window size to be used to find nearby sites
         @ returns: list of genomic locations of the sites to be used as predictors in format chr:start
         """
         # get cpg_id's chromosome and start position
@@ -145,7 +151,7 @@ class mutationClock:
         except:
             return []
         # get num_correl_sites correlated CpGs and convert to genomic locations
-        corr_cpg_ids = self._select_correl_sites(cpg_id, chrom, num_correl_sites)
+        corr_cpg_ids = self._select_correl_sites(cpg_id, chrom, num_correl_sites, samples)
         corr_locs = (
             self.illumina_cpg_locs_df.loc[
                 self.illumina_cpg_locs_df['#id'].isin(corr_cpg_ids)
@@ -165,16 +171,18 @@ class mutationClock:
     def _create_training_mat(
         self, 
         cpg_id: str, 
-        predictor_sites: list
+        predictor_sites: list,
+        samples: list
         ) -> tuple:
         """
         Create the training matrix for the given cpg_id and predictor_sites
         @ cpg_id: the id of the CpG
         @ predictor_sites: list of sites to be used as predictors of cpg_id's methylation
+        @ samples: the samples to be included in the training matrix
         @ returns: X, y where X is the training matrix and y is the methylation values of cpg_id across samples
         """
         # for each sample, get the cpg_id methylation values
-        y = self.all_methyl_age_df_t.loc[:, cpg_id]
+        y = self.all_methyl_age_df_t.loc[samples, cpg_id]
         # get the mutation status of predictor sites
         mut_status = self.all_mut_w_age_df.loc[
             self.all_mut_w_age_df['mut_loc'].isin(predictor_sites),
@@ -193,12 +201,13 @@ class mutationClock:
     def evaluate_predictor(
         self, 
         cpg_id: str,
+        samples: list,
         predictor_sites: list
         ) -> pd.DataFrame:
         """
         Train the predictor for one CpG
         """
-        X, y = self._create_training_mat(cpg_id, predictor_sites)
+        X, y = self._create_training_mat(cpg_id, predictor_sites, samples)
         
         model = ElasticNetCV(cv=3, random_state=0, max_iter=5000, n_jobs=5, selection='random')
         cv = KFold(n_splits=3, shuffle=True, random_state=0)
@@ -234,17 +243,23 @@ class mutationClock:
     def train_predictor(
         self, 
         cpg_id: str,
+        samples: list,
         num_correl_sites: int,
         max_meqtl_sites: int,
         nearby_window_size: int
         ):
         """
         Build the predictor for one CpG
+        @ cpg_id: the id of the CpG to predict
+        @ samples: list of samples to use for training
+        @ num_correl_sites: number of sites to use as predictors
+        @ max_meqtl_sites: maximum number of meqtl db sites to use as predictors
+        @ nearby_window_size: window size to use for choosing nearby sites
         """
         # get the sites to be used as predictors
-        predictor_sites = self.get_predictor_sites(cpg_id, num_correl_sites, max_meqtl_sites, nearby_window_size)
+        predictor_sites = self.get_predictor_sites(cpg_id, samples, num_correl_sites, max_meqtl_sites, nearby_window_size)
         # train the model
-        X, y = self._create_training_mat(cpg_id, predictor_sites)
+        X, y = self._create_training_mat(cpg_id, predictor_sites, samples)
         # train one elasticNet model to predict y from X
         model = ElasticNetCV(cv=5, random_state=0, max_iter=5000, selection = 'random')
         model.fit(X, y)
@@ -257,7 +272,8 @@ class mutationClock:
         num_correl_sites: int,
         max_meqtl_sites: int,
         nearby_window_size: int,
-        cpg_ids: list = []
+        cpg_ids: list = [],
+        samples: list = []
         ):
         """
         Train the predictor for all CpGs
@@ -265,8 +281,10 @@ class mutationClock:
         # get the list of all CpGs
         if len(cpg_ids) == 0:
             cpg_ids = self.illumina_cpg_locs_df['#id'].to_list()
+        if len(samples) == 0:
+            samples = self.all_methyl_age_df_t.index.to_list()
         # for each cpg, train the predictor
         for i, cpg_id in enumerate(cpg_ids):
-            self.train_predictor(cpg_id, num_correl_sites, max_meqtl_sites, nearby_window_size) 
+            self.train_predictor(cpg_id, samples, num_correl_sites, max_meqtl_sites, nearby_window_size) 
             if i % 10 == 0:
                 print(i)
