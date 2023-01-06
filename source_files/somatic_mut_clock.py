@@ -294,7 +294,7 @@ class mutationClock:
         for i, cpg_id in enumerate(cpg_ids):
             self.train_predictor(cpg_id, train_samples, num_correl_sites, max_meqtl_sites, nearby_window_size) 
             if i % 10 == 0:
-                print(i)
+                print(i, flush=True)
                     
     def predict_cpg(
         self, 

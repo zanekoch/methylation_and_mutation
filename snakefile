@@ -7,9 +7,9 @@ methyl_fn = "/cellar/users/zkoch/methylation_and_mutation/data/matrixQtl_data/me
 chroms = [str(i) for i in range(1,23)]
 predictors_dir = "/cellar/users/zkoch/methylation_and_mutation/output_dirs/output_010423"
 
-total_cpgs = 10000
-cpg_starts = [i for i in range(0, total_cpgs, 500)]
-cpg_ends = [i for i in range(499, total_cpgs, 500)]
+total_cpgs = 267152
+cpg_starts = [i for i in range(0, total_cpgs, 1000)]
+cpg_ends = [i for i in range(999, total_cpgs, 1000)]
 cpg_ends.append(total_cpgs)
 cpgs = list(zip(cpg_starts, cpg_ends))
 

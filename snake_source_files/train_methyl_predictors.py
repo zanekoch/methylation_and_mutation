@@ -29,7 +29,7 @@ def train_predictors(
     cpg_ids = mut_clock.illumina_cpg_locs_df.iloc[cpg_start:cpg_end]['#id'].to_list()
     mut_clock.train_all_predictors(
         num_correl_sites = 1000, max_meqtl_sites = 1000,
-        nearby_window_size = 5000, cpg_ids = cpg_ids, samples = training_samples
+        nearby_window_size = 5000, cpg_ids = cpg_ids, train_samples = training_samples
         )
     # create an empty file in out_dir called cpg_end.txt
     with open(os.path.join(out_dir, f"{cpg_start}_{cpg_end}.txt"), "w") as f:
@@ -58,7 +58,7 @@ def main():
     parser.add_argument('--cpg_start', type=int, help='cpg start')
     parser.add_argument('--cpg_end', type=int, help='cpg end')
     parser.add_argument('--out_dir', type=str, help='output directory')
-    parser.add_argument('--train_samples_fn', type=int, help='fn containing train samples')
+    parser.add_argument('--train_samples_fn', type=str, help='fn containing train samples')
     args = parser.parse_args()
     cpg_start = args.cpg_start
     cpg_end = args.cpg_end
@@ -73,7 +73,7 @@ def main():
 
     train_predictors(
         out_dir, cpg_start, cpg_end, all_mut_w_age_df, 
-        illumina_cpg_locs_df, all_methyl_age_df_t
+        illumina_cpg_locs_df, all_methyl_age_df_t, training_samples
         )
     
 if __name__ == "__main__":
