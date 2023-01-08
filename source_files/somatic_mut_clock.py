@@ -9,6 +9,7 @@ from sklearn.model_selection import cross_validate
 from sklearn.model_selection import KFold
 from sklearn.metrics import mean_absolute_error, r2_score
 from sklearn.linear_model import ElasticNetCV
+import ray
 # import random forest regressor
 from sklearn.ensemble import RandomForestRegressor
 import matplotlib.pyplot as plt
@@ -32,7 +33,8 @@ class mutationClock:
         self.output_dir = output_dir
         self.matrix_qtl_dir = matrix_qtl_dir
         # Preprocessing: subset to only mutations that are non X and Y chromosomes and that occured in samples with measured methylation
-        self.all_mut_w_age_df['mut_loc'] = self.all_mut_w_age_df['chr'] + ':' + self.all_mut_w_age_df['start'].astype(str)
+        self.all_mut_w_age_df['mut_loc'] = self.all_mut_w_age_df['chr'] + ':' \
+                                         + self.all_mut_w_age_df['start'].astype(str)
         self.all_mut_w_age_df = self.all_mut_w_age_df.loc[
             (self.all_mut_w_age_df['chr'] != 'X') 
             & (self.all_mut_w_age_df['chr'] != 'Y')
@@ -59,8 +61,71 @@ class mutationClock:
         self.all_methyl_age_df_t = pd.get_dummies(self.all_methyl_age_df_t, columns=["gender", "dataset"])
         # add back in the dataset column
         self.all_methyl_age_df_t['dataset'] = dset_col
-        
+        # cache :P
         self.matrixQTL_store = {}
+        
+    def mutual_info(
+        self, 
+        samples: list,
+        cpg_ids: list,
+        covariate: pd.Series, 
+        bins: int = 5, 
+        parallel: bool = False):
+        '''
+        Estimates mutual information between CpG sites and some covariate. Uses methylation in self.all_methyl_age_df_t
+        @ samples: list of samples to use
+        @ cpg_ids: list of cpgs to use
+        @ covariate: pandas series of covariate to use
+        @ bins: number of bins to use for discretization
+        @ parallel: whether to run in parallel
+        '''
+        methyl_df = self.all_methyl_age_df_t.loc[samples, cpg_ids].T
+        covariate = covariate.loc[samples]
+        assert len(covariate.index) == len(methyl_df.columns), \
+            'dimensions of covariate are %s, but methyl matrix are %s' \
+             %  (covariate.shape, methyl_df.shape)
+        
+        def shan_entropy(c): # inner func for entropy
+            c_normalized = c / float(np.sum(c))
+            c_normalized = c_normalized[np.nonzero(c_normalized)]
+            H = -sum(c_normalized* np.log2(c_normalized))  
+            return H
+
+        if parallel:
+            # set up ray
+            ray.init(ignore_reinit_error=True)
+
+            @ray.remote
+            def runMI(col):
+                nas = np.logical_and(~np.isnan(col), ~np.isnan(covariate))
+                c_XY = np.histogram2d(col[nas], covariate[nas],bins)[0]
+                c_X = np.histogram(col[nas], bins)[0]
+                c_Y = np.histogram(covariate[nas], bins)[0]
+                H_X = shan_entropy(c_X)
+                H_Y = shan_entropy(c_Y)
+                H_XY = shan_entropy(c_XY)
+                MI = H_X + H_Y - H_XY
+                return MI
+
+            # set up job queue 
+            result_ids = []
+            for col in methyl_df.values:
+                result_ids.append(runMI.remote(col))
+            # MI = Parallel(n_jobs=24, verbose=0)(map(delayed(runMI), [col for col in meth_df.values]))
+            MI = ray.get(result_ids)  
+            ray.shutdown()
+        else:
+            MI = []
+            for col in methyl_df.values:
+                nas = np.logical_and(~np.isnan(col), ~np.isnan(covariate))
+                c_XY = np.histogram2d(col[nas], covariate[nas],bins)[0]
+                c_X = np.histogram(col[nas], bins)[0]
+                c_Y = np.histogram(covariate[nas], bins)[0]
+                H_X = shan_entropy(c_X)
+                H_Y = shan_entropy(c_Y)
+                H_XY =shan_entropy(c_XY)
+                MI.append(H_X + H_Y - H_XY)
+        return MI        
         
     def _select_correl_sites(
         self,
@@ -216,7 +281,7 @@ class mutationClock:
         """
         X, y = self._create_training_mat(cpg_id, predictor_sites, train_samples)
         
-        model = ElasticNetCV(cv=3, random_state=0, max_iter=5000, n_jobs=5, selection='random')
+        model = ElasticNetCV(cv=3, random_state=0, max_iter=5000, n_jobs=-1, selection='random')
         cv = KFold(n_splits=3, shuffle=True, random_state=0)
         # do the cross validation
         maes, r2s, feature_names = [], [], []
@@ -228,7 +293,7 @@ class mutationClock:
             maes.append(mean_absolute_error(y_test, preds))
             r2s.append(r2_score(y_test, preds))
             feature_names.append(X_train.columns[model.coef_ != 0].to_list())
-        model2 = ElasticNetCV(cv=3, random_state=0, max_iter=5000, n_jobs=5, selection='random')
+        model2 = ElasticNetCV(cv=3, random_state=0, max_iter=5000, n_jobs=-1, selection='random')
         # repeat with just the covariates
         base_maes, base_r2s, base_feature_names = [], [], []
         X = X.iloc[:, -35:]
@@ -268,7 +333,7 @@ class mutationClock:
         # train the model
         X, y = self._create_training_mat(cpg_id, predictor_sites, train_samples)
         # train one elasticNet model to predict y from X
-        model = ElasticNetCV(cv=5, random_state=0, max_iter=5000, selection = 'random')
+        model = ElasticNetCV(cv=5, random_state=0, max_iter=5000, selection = 'random', n_jobs=-1)
         model.fit(X, y)
         # write the model to a file using pickle
         model_fn = os.path.join(self.output_dir, f"{cpg_id}.pkl")
@@ -295,7 +360,17 @@ class mutationClock:
             self.train_predictor(cpg_id, train_samples, num_correl_sites, max_meqtl_sites, nearby_window_size) 
             if i % 10 == 0:
                 print(i, flush=True)
-                    
+    
+    def most_predictable_cpgs(self):
+        """
+        I want a measure of how well a methyl predictor can predict a CpG.
+        Do get this I need to train a predictor and then test it on something.
+        Either
+        """
+    
+        return
+    
+                
     def predict_cpg(
         self, 
         cpg_id: str,
@@ -340,3 +415,30 @@ class mutationClock:
         # concatenate the predictions into a single df
         all_pred_methyl_df = pd.concat(predictions, axis=1)
         return all_pred_methyl_df
+    
+    def train_epi_clock(
+        self,
+        X: pd.DataFrame,
+        y: pd.Series,
+        out_fn: str,
+        cpg_subset: list = []
+        ):
+        """
+        Trains an epigenetic clock to predict chronological age from cpg methylation
+        @ X: a df with samples as rows and cpgs as columns. Predicted methylation
+        @ y: a series of chronological ages for the samples
+        @ out_fn: the file to save the trained model to
+        @ cpg_subset: a list of cpgs to use as predictors, e.g. accurately predictable or high MI. If empty, all cpgs are used
+        @ return: the trained model
+        """
+        if len(cpg_subset) > 0:
+            X = X[cpg_subset]
+        from sklearn.model_selection import cross_validate
+        # Create an ElasticNetCV object
+        model = ElasticNetCV(cv=5, random_state=0, max_iter=5000, selection = 'random', n_jobs=-1)
+        # Fit the model using cross-validation
+        scores = cross_validate(
+            model, X, y, cv=2, 
+            scoring=['neg_mean_absolute_error', 'neg_mean_squared_error', 'r2']
+            )
+        return scores
