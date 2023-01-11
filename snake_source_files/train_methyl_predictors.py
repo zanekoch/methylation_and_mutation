@@ -27,19 +27,21 @@ def train_predictors(
         out_dir
         )
     cpg_ids = mut_clock.illumina_cpg_locs_df.iloc[cpg_start:cpg_end]['#id'].to_list()
-    mut_clock.train_all_predictors(
+    result_df = mut_clock.train_all_predictors(
         num_correl_sites = 1000, max_meqtl_sites = 1000,
-        nearby_window_size = 5000, cpg_ids = cpg_ids, train_samples = training_samples
+        nearby_window_size = 5000, cpg_ids = cpg_ids, 
+        train_samples = training_samples, evaluate = True
         )
+    result_df.to_parquet("/cellar/users/zkoch/methylation_and_mutation/output_dirs/output_122622/eval_results/0_2000_cpg_predictions_df_ridge.parquet")
     # create an empty file in out_dir called cpg_end.txt
-    with open(os.path.join(out_dir, f"{cpg_start}_{cpg_end}.txt"), "w") as f:
-        f.write("done")
+    """with open(os.path.join(out_dir, f"{cpg_start}_{cpg_end}.txt"), "w") as f:
+        f.write("done")"""
 
 def read_data() -> tuple:
     # read in data
-    out_dir = "./output_dirs/output_120522"
-    dependency_f_dir = "./dependency_files"
-    data_dir = "./data"
+    out_dir = "/cellar/users/zkoch/methylation_and_mutation/output_dirs/output_120522"
+    dependency_f_dir = "/cellar/users/zkoch/methylation_and_mutation/dependency_files"
+    data_dir = "/cellar/users/zkoch/methylation_and_mutation/data"
     methylation_dir = '/cellar/users/zkoch/methylation_and_mutation/data/dropped3SD_qnormed_methylation'
     illumina_cpg_locs_df, all_mut_df, all_methyl_df, all_methyl_df_t, all_meta_df, dataset_names_list = get_data.main(
         illum_cpg_locs_fn = os.path.join(dependency_f_dir, "illumina_cpg_450k_locations.csv"),
