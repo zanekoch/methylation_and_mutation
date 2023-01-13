@@ -439,9 +439,27 @@ def get_diff_from_mean(methyl_df_t):
 def convert_csv_to_parquet(in_fn):
     from pyarrow import csv, parquet
     out_fn = in_fn.split('.')[0] + '.parquet'
+    print(f" Converting {in_fn} to {out_fn}", flush=True)
     table = csv.read_csv(in_fn, parse_options=csv.ParseOptions(delimiter="\t"))
     parquet.write_table(table, out_fn)
-
+    
+def convert_csv_to_dask_parquet(in_fn, out_dir):
+    from pyarrow import csv, parquet
+    import dask.dataframe as dd
+    print(f" Converting {in_fn} to {out_dir}", flush=True)
+    table = csv.read_csv(in_fn, parse_options=csv.ParseOptions(delimiter="\t"))
+    print("read in table", flush=True)
+    methyl_df = table.to_pandas()
+    print("converted to pandas", flush=True)
+    methyl_df_reshap = methyl_df.pivot_table(index='icgc_donor_id', columns='probe_id', values='methylation_value')
+    print("reshaped", flush=True)
+    proc_methyl_dd = dd.from_pandas(methyl_df_reshap, npartitions=100)
+    proc_methyl_dd.to_parquet(out_dir)
+    print("wrote out as dask", flush=True)
+    methyl_df_reshap.to_parquet(os.path.join(out_dir, 'methyl_df_reshap.parquet'))
+    print("wrote out as pandas", flush=True)
+    
+    
 def plot_corr_dist_boxplots(corr_dist_df):
     """
     Plots distance vs correlation boxplots
