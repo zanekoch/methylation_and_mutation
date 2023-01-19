@@ -452,11 +452,12 @@ def convert_csv_to_dask_parquet(in_fn, out_dir):
     methyl_df = table.to_pandas()
     print("converted to pandas", flush=True)
     methyl_df_reshap = methyl_df.pivot_table(index='icgc_donor_id', columns='probe_id', values='methylation_value')
+    methyl_df_reshap_t = methyl_df_reshap.T
     print("reshaped", flush=True)
-    proc_methyl_dd = dd.from_pandas(methyl_df_reshap, npartitions=100)
+    proc_methyl_dd = dd.from_pandas(methyl_df_reshap_t, npartitions=100)
     proc_methyl_dd.to_parquet(out_dir)
     print("wrote out as dask", flush=True)
-    methyl_df_reshap.to_parquet(os.path.join(out_dir, 'methyl_df_reshap.parquet'))
+    methyl_df_reshap_t.to_parquet(os.path.join(out_dir, 'methyl_df_reshap_t.parquet'))
     print("wrote out as pandas", flush=True)
     
     

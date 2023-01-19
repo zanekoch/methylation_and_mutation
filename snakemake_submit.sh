@@ -1,1 +1,1 @@
-snakemake --use-conda --cluster "sbatch -A zkoch -p nrnb-compute --mem=75GB --cpus-per-task=10 -t 6:00:00" --jobs 20 --retries 1
+snakemake --keep-incomplete --use-conda --cluster "sbatch -A zkoch -p nrnb-compute --mem=128GB -t 1:00:00" --jobs 20 --retries 1

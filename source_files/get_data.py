@@ -144,13 +144,17 @@ def transpose_methylation(all_methyl_df):
     all_methyl_df_t = pd.DataFrame(all_methyl_arr_t, index = sample_names, columns=cpg_names)
     return all_methyl_df_t
 
+def get_illum_locs(illum_cpg_locs_fn):
+    illumina_cpg_locs_df = pd.read_csv(illum_cpg_locs_fn, sep=',', dtype={'CHR': str}, low_memory=False)
+    illumina_cpg_locs_df = illumina_cpg_locs_df.rename({"CHR": "chr", "MAPINFO":"start", "IlmnID": "#id"}, axis=1)
+    illumina_cpg_locs_df = illumina_cpg_locs_df[['#id','chr', 'start', 'Strand']]
+    return illumina_cpg_locs_df
+
 def main(illum_cpg_locs_fn, out_dir, methyl_dir, mut_fn, meta_fn):
     # make output directories
     os.makedirs(out_dir, exist_ok=True)
     # read in illumina cpg locations
-    illumina_cpg_locs_df = pd.read_csv(illum_cpg_locs_fn, sep=',', dtype={'CHR': str}, low_memory=False)
-    illumina_cpg_locs_df = illumina_cpg_locs_df.rename({"CHR": "chr", "MAPINFO":"start", "IlmnID": "#id"}, axis=1)
-    illumina_cpg_locs_df = illumina_cpg_locs_df[['#id','chr', 'start', 'Strand']]
+    illumina_cpg_locs_df = get_illum_locs(illum_cpg_locs_fn)
     # read in mutations, methylation, and metadata
     all_mut_df = get_mutations(mut_fn)
     all_meta_df, dataset_names_list = get_metadata(meta_fn)
