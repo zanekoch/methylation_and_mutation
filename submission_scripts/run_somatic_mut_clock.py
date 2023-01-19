@@ -115,10 +115,10 @@ def main():
     if do != 'predict':
         result_df = mut_clock.driver(
             do = do, num_correl_sites = num_correl_sites, max_meqtl_sites = max_meqtl_sites,
-            nearby_window_size = nearby_window_size, cpg_ids = mi_df.head(num_top_mi_cpgs).index.to_list(), 
+            nearby_window_size = nearby_window_size, cpg_ids = mi_df.iloc[9890:9890 + num_top_mi_cpgs, :].index.to_list(), 
             train_samples = samples, aggregate = aggregate, binarize = binarize
             )
-        if do == "evaluate" or do == "predict":
+        if do == "evaluate" or do == "train":
             result_df.to_parquet(
                 os.path.join(out_dir, f"evaluate_results_{dataset}_{num_correl_sites}correl_{max_meqtl_sites}matrixQtl_{nearby_window_size}nearby_{num_top_mi_cpgs}numCpGs_{aggregate}Aggregate_{binarize}binarize_{use_all_muts}AllMuts.parquet")
                 )

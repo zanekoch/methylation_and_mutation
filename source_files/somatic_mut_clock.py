@@ -7,8 +7,7 @@ import pickle
 import matplotlib.pyplot as plt
 import time
 
-from sklearn.model_selection import cross_validate
-from sklearn.model_selection import KFold
+from sklearn.model_selection import cross_validate, KFold
 from sklearn.metrics import mean_absolute_error, r2_score
 from sklearn.linear_model import ElasticNetCV, RidgeCV, LinearRegression, SGDRegressor
 from sklearn.ensemble import RandomForestRegressor
@@ -644,11 +643,38 @@ class mutationClock:
             predictions.append(
                 self.predict_cpg(cpg_id, test_samples, model_fn, pred_group_fn, aggregate, binarize)
                 )
-            if i % 100 == 0:
-                print(i, flush=True)
+            if i % 10 == 0:
+                print(f"Finished {100*i/len(cpg_ids)}% of CpGs", flush=True)
         # concatenate the predictions into a single df
         pred_methyl_df = pd.concat(predictions, axis=1)
         return pred_methyl_df
+    
+    def choose_clock_cpgs(
+        self, 
+        pred_train_methyl: pd.DataFrame,
+        train_methyl: pd.DataFrame,
+        mi_df: pd.DataFrame
+        ) -> pd.DataFrame:
+        """
+        Given predicted and actual values of training methylation for a set of CpGs, and the mutual information of each CpG with age across training samples, choose the best CpGs to use as predictors of age
+        @ pred_train_methyl: a df with samples as rows and predicted CpG methylation levels as columns
+        @ train_methyl: a df with samples as rows and actual CpG methylation levels as columns
+        @ mi_df: a df with CpGs as rows and mutual information with age the column
+        @ return: a df of CpGs sorted by first their mutual information with age, then their correlation with actual methylation values, then MAE with actual methylation values
+        """
+        # get pairwise correlations between predicted and actual methylation
+        corrs = pred_train_methyl.corrwith(train_methyl, axis=0, method='pearson')
+        # get pairwise MAEs between predicted and actual methylation
+        maes = np.abs(pred_train_methyl - train_methyl).mean(axis=0)
+        # get MIs for these CpGs
+        mi = mi_df.loc[pred_train_methyl.columns, "mutual_info"]
+        # prioritize CpGs by correlation, then MI, then MAE
+        cpg_priority_df = pd.DataFrame({"corr": corrs, "mutual_info": mi, "mae": maes})
+        cpg_priority_df = cpg_priority_df.sort_values(
+            by=["corr", "mutual_info", "mae"], ascending=[False, False, True]
+            )
+        return cpg_priority_df
+    
     
     def train_epi_clock(
         self,
@@ -667,12 +693,10 @@ class mutationClock:
         """
         if len(cpg_ids) > 0:
             X = X[cpg_ids]
-        # import kfold cross validation
-        from sklearn.model_selection import KFold
         # Create an ElasticNetCV object
         model = ElasticNetCV(
             cv=5, random_state=0, max_iter=5000,
-            selection = 'random', n_jobs=48, verbose=1
+            selection = 'random', n_jobs=-1, verbose=1
             )
         # Fit the model using cross-validation
         cv = KFold(n_splits=3, shuffle=True, random_state=0)
