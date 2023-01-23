@@ -6,6 +6,7 @@ from tqdm import tqdm
 import pickle
 import matplotlib.pyplot as plt
 import time
+import seaborn as sns
 
 from sklearn.model_selection import cross_validate, KFold
 from sklearn.metrics import mean_absolute_error, r2_score
@@ -22,7 +23,8 @@ class mutationClock:
         output_dir: str,
         matrix_qtl_dir: str = "/cellar/users/zkoch/methylation_and_mutation/data/matrixQtl_data/muts",
         godmc_meqtl_fn: str = "/cellar/users/zkoch/methylation_and_mutation/data/meQTL/goDMC_meQTL/goDMC_meQTLs.parquet",
-        pancan_meqtl_fn: str = "/cellar/users/zkoch/methylation_and_mutation/data/meQTL/pancan_tcga_meQTL/pancan_meQTL.parquet"
+        pancan_meqtl_fn: str = "/cellar/users/zkoch/methylation_and_mutation/data/meQTL/pancan_tcga_meQTL/pancan_meQTL.parquet",
+        tissue_type: str = "",
         ) -> None:
 
         self.all_mut_w_age_df = all_mut_w_age_df
@@ -71,13 +73,12 @@ class mutationClock:
         # cache :P
         self.matrixQTL_store = {}
         # master feature matrix: samples X all unique mutation events with DNA_VAF as entries
-        """pivoted_mut_df = self.all_mut_w_age_df.pivot_table(
-            index = ['mut_loc'] , columns = ['case_submitter_id'], values = ['DNA_VAF'], fill_value=0
-            )
-        # make all_mut_w_age_piv not a multiindex
-        pivoted_mut_df.columns = pivoted_mut_df.columns.droplevel(0)
-        self.pivoted_mut_df = pivoted_mut_df.T"""
+        # DEPRECATED
         self.pivoted_mut_df = pd.DataFrame()
+        # if tissue type is specified, subset the data to only this tissue type
+        if tissue_type != "":
+            self.all_methyl_age_df_t = self.all_methyl_age_df_t.loc[self.all_methyl_age_df_t['dataset'] == tissue_type, :]
+            self.all_mut_w_age_df = self.all_mut_w_age_df.loc[self.all_mut_w_age_df['dataset'] == tissue_type, :]
         
     def mutual_info(
         self, 
@@ -310,7 +311,6 @@ class mutationClock:
         if aggregate == "Both":
             X_noAgg = noAgg()
             X_agg = agg()
-            # merge on index
             X = pd.merge(X_noAgg, X_agg, left_index=True, right_index=True)
         elif aggregate == "False":
             X = noAgg()
@@ -548,8 +548,12 @@ class mutationClock:
         # get the list of all CpGs
         if len(cpg_ids) == 0:
             cpg_ids = self.illumina_cpg_locs_df['#id'].to_list()
+        # get the list samples to train with
         if len(train_samples) == 0:
             train_samples = self.all_methyl_age_df_t.index.to_list()
+        else: # intersection with all_methyl_age_df_t index, so if a training sample is a diff tissue type it will be removed
+            train_samples = list(set(train_samples) & set(self.all_methyl_age_df_t.index.to_list()))
+        
         if do == 'train':
             # for each cpg, train the predictor and save trained model
             for i, cpg_id in enumerate(cpg_ids):
@@ -651,30 +655,36 @@ class mutationClock:
     
     def choose_clock_cpgs(
         self, 
-        pred_train_methyl: pd.DataFrame,
-        train_methyl: pd.DataFrame,
+        pred_methyl: pd.DataFrame,
+        actual_methyl: pd.DataFrame,
         mi_df: pd.DataFrame
         ) -> pd.DataFrame:
         """
         Given predicted and actual values of training methylation for a set of CpGs, and the mutual information of each CpG with age across training samples, choose the best CpGs to use as predictors of age
-        @ pred_train_methyl: a df with samples as rows and predicted CpG methylation levels as columns
-        @ train_methyl: a df with samples as rows and actual CpG methylation levels as columns
+        @ pred_methyl: a df with samples as rows and predicted CpG methylation levels as columns
+        @ actual_methyl: a df with samples as rows and actual CpG methylation levels as columns
         @ mi_df: a df with CpGs as rows and mutual information with age the column
-        @ return: a df of CpGs sorted by first their mutual information with age, then their correlation with actual methylation values, then MAE with actual methylation values
+        @ return: a df of CpGs sorted by first their predicted methylation mutual information with age, then their correlation with actual methylation values, then MAE with actual methylation values, then their actual methylation mutual information with age
         """
         # get pairwise correlations between predicted and actual methylation
-        corrs = pred_train_methyl.corrwith(train_methyl, axis=0, method='pearson')
+        corrs = pred_methyl.corrwith(actual_methyl, axis=0, method='pearson')
         # get pairwise MAEs between predicted and actual methylation
-        maes = np.abs(pred_train_methyl - train_methyl).mean(axis=0)
+        maes = np.abs(pred_methyl - actual_methyl).mean(axis=0)
         # get MIs for these CpGs
-        mi = mi_df.loc[pred_train_methyl.columns, "mutual_info"]
+        mi = mi_df.loc[pred_methyl.columns, "mutual_info"]
+        # get MI of predicted methylation with age in training data
+        pred_methyl_mi = self.mutual_info(
+            X = pred_methyl, 
+            covariate = self.all_methyl_age_df_t.loc[actual_methyl.index, 'age_at_index']
+            )
+        # get corr of predicted methylation with age in training data
+        pred_methyl_corr = pred_methyl.corrwith(self.all_methyl_age_df_t.loc[actual_methyl.index, 'age_at_index'])
         # prioritize CpGs by correlation, then MI, then MAE
-        cpg_priority_df = pd.DataFrame({"corr": corrs, "mutual_info": mi, "mae": maes})
+        cpg_priority_df = pd.DataFrame({"pred_mutual_info": pred_methyl_mi, "methyl_corr": corrs, "mae": maes, "mutual_info": mi, "age_corr": pred_methyl_corr})
         cpg_priority_df = cpg_priority_df.sort_values(
-            by=["corr", "mutual_info", "mae"], ascending=[False, False, True]
+            by=["pred_mutual_info", "methyl_corr", "mutual_info", "mae", "age_corr"], ascending=[False, False, False, True, False]
             )
         return cpg_priority_df
-    
     
     def train_epi_clock(
         self,
@@ -695,7 +705,7 @@ class mutationClock:
             X = X[cpg_ids]
         # Create an ElasticNetCV object
         model = ElasticNetCV(
-            cv=5, random_state=0, max_iter=5000,
+            cv=5, random_state=0, max_iter=10000,
             selection = 'random', n_jobs=-1, verbose=1
             )
         # Fit the model using cross-validation
@@ -714,3 +724,22 @@ class mutationClock:
         # create dataframe with  r2s, maes, preds, tests as columns
         results_df = pd.DataFrame({'r2': r2s, 'mae': maes, 'preds': preds, 'tests': tests})
         return results_df
+    
+    def visualize_clock_perf(
+        self, 
+        results_df: pd.DataFrame
+        ) -> None:
+        fig, axes = plt.subplots(1, len(results_df), figsize=(15, 4), sharex=True, dpi=100)
+        for i in range(len(results_df)):
+            to_plot = results_df.loc[i, 'tests'].to_frame().join(self.all_methyl_age_df_t.loc[:, 'dataset'])
+            to_plot['preds'] = results_df.loc[i, 'preds']
+            to_plot.columns = ['Actual age (years)', 'Dataset', 'Predicted age']
+            sns.scatterplot(data=to_plot, x='Actual age (years)', y='Predicted age', hue='Dataset', ax=axes[i], legend=False)
+            # axes[i].scatter(results_df.loc[i, 'tests'], results_df.loc[i, 'preds'], s=4, c=)
+            # plot the identity line
+            axes[i].plot([15, 95], [15, 95], color='red', linestyle='--')
+            axes[i].set_xlabel('Actual age (years)')
+            axes[i].set_ylabel('Predicted age (years)')
+            # write r2 and mae in upper left corner
+            axes[i].text(.01, .99, f"R2 = {results_df.loc[i, 'r2']:.3f}", ha='left', va='top',  transform=axes[i].transAxes )
+            axes[i].text(.01, .9, f"MAE = {results_df.loc[i, 'mae']:.3f}", ha='left', va='top',  transform=axes[i].transAxes)

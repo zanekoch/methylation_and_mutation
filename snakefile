@@ -7,20 +7,19 @@ import pandas as pd
 # MUST HAVE SAME NUMBER OF SAMPLES IN EACH FILE AND IN SAME ORDER
 # the file that contains the methylation data
 ## samples X CpGs matrix of methylation values [0, 1]
-methyl_fn = "/cellar/users/zkoch/methylation_and_mutation/data/icgc/for_matrixQTL/icgc_methyl_df_cpgXsamples.csv.gz"
+methyl_fn = "/cellar/users/zkoch/methylation_and_mutation/data/matrixQtl_data/methyl.csv.gz" #"/cellar/users/zkoch/methylation_and_mutation/data/icgc/for_matrixQTL/icgc_methyl_df_cpgXsamples.csv.gz"
 # the file that contains the mutation data
 ## must have, at least, columns 'mut_loc' (chr:pos), 'sample', and 'MAF'
-mut_fn = "/cellar/users/zkoch/methylation_and_mutation/data/icgc/for_matrixQTL/icgc_mut_df.parquet"
+mut_fn = "/cellar/users/zkoch/methylation_and_mutation/data/matrixQtl_data/muts.parquet" #"/cellar/users/zkoch/methylation_and_mutation/data/icgc/for_matrixQTL/icgc_mut_df.parquet"
 # output directory where partitioned mutation files, matrixQTL outputs, and predictors will be stored
-out_dir = "/cellar/users/zkoch/methylation_and_mutation/output_dirs/icgc_muts_011423"
+out_dir = "/cellar/users/zkoch/methylation_and_mutation/data/matrixQtl_data/muts" #"/cellar/users/zkoch/methylation_and_mutation/output_dirs/icgc_muts_011423"
 ##################
 # define constants and constantishs
 ##################
 CHROMS = [str(i) for i in range(1,23)]
 MUT_PER_FILE = 10000
 mut_df = pd.read_parquet(mut_fn)
-NUM_UNIQUE_MUTS = len(mut_df['mut_loc'].unique()) # constantish
-
+NUM_UNIQUE_MUTS = 2420000 # len(mut_df['mut_loc'].unique()) # constantish
 ##################
 # the number of cpgs to partition the methylation data based on
 # TODO: make this dynamically set based on the number of cpgs in methyl_fn

@@ -76,6 +76,7 @@ def main():
     parser.add_argument('--binarize', type=str, help='binarize')
     parser.add_argument('--use_all_muts', type=str, help='use_all_muts')
     parser.add_argument('--trained_model_dir', type=str, help='train_model_dir', default="")
+    parser.add_argument('--tissue_type', type=str, help='subset to only train models for one tissue', default="")
     # parse arguments
     args = parser.parse_args()
     dataset = args.dataset
@@ -90,9 +91,12 @@ def main():
     use_all_muts = True if args.use_all_muts == "True" else False
     samples_fn = args.samples_fn
     trained_model_dir = args.trained_model_dir
+    tissue_type = args.tissue_type
     if samples_fn != "":
         with open(samples_fn, 'r') as f:
             samples = f.read().splitlines()
+    else:
+        samples = []
             
     if dataset == "TCGA":
         all_mut_w_age_df, illumina_cpg_locs_df, all_methyl_age_df_t, mi_df = read_tcga_data()
@@ -100,7 +104,8 @@ def main():
             all_mut_w_age_df = all_mut_w_age_df, 
             illumina_cpg_locs_df = illumina_cpg_locs_df, 
             all_methyl_age_df_t = all_methyl_age_df_t,
-            output_dir = out_dir
+            output_dir = out_dir,
+            tissue_type = tissue_type
             )
     elif dataset == "ICGC":
         icgc_mut_w_age_df, illumina_cpg_locs_df, icgc_methyl_age_df_t, mi_df = read_icgc_data()
@@ -109,23 +114,12 @@ def main():
             all_mut_w_age_df = icgc_mut_w_age_df, 
             illumina_cpg_locs_df = illumina_cpg_locs_df, 
             all_methyl_age_df_t = icgc_methyl_age_df_t,
-            output_dir = out_dir
+            output_dir = out_dir,
+            tissue_type = tissue_type, 
+            matrix_qtl_dir = "/cellar/users/zkoch/methylation_and_mutation/output_dirs/icgc_muts_011423"
             )
     print("Got data, now training and evaluating")
-    if do != 'predict':
-        result_df = mut_clock.driver(
-            do = do, num_correl_sites = num_correl_sites, max_meqtl_sites = max_meqtl_sites,
-            nearby_window_size = nearby_window_size, cpg_ids = mi_df.iloc[9890:9890 + num_top_mi_cpgs, :].index.to_list(), 
-            train_samples = samples, aggregate = aggregate, binarize = binarize
-            )
-        if do == "evaluate" or do == "train":
-            result_df.to_parquet(
-                os.path.join(out_dir, f"evaluate_results_{dataset}_{num_correl_sites}correl_{max_meqtl_sites}matrixQtl_{nearby_window_size}nearby_{num_top_mi_cpgs}numCpGs_{aggregate}Aggregate_{binarize}binarize_{use_all_muts}AllMuts.parquet")
-                )
-            print(
-                f"Done, wrote results to evaluate_results_{dataset}_{num_correl_sites}correl_{max_meqtl_sites}matrixQtl_{nearby_window_size}nearby_{num_top_mi_cpgs}numCpGs_{aggregate}Aggregate_{binarize}binarize_{use_all_muts}AllMuts.parquet"
-                )
-    else: # predict
+    if do == 'predict':
         predicted_methyl = mut_clock.predict_all_cpgs(
             cpg_ids = mi_df.head(num_top_mi_cpgs).index.to_list(), test_samples = samples, 
             model_dir = trained_model_dir, aggregate = aggregate, binarize = binarize
@@ -136,6 +130,19 @@ def main():
         print(
             f"Done, wrote results to predicted_methyl_{dataset}_{num_correl_sites}correl_{max_meqtl_sites}matrixQtl_{nearby_window_size}nearby_{num_top_mi_cpgs}numCpGs_{aggregate}Aggregate_{binarize}binarize_{use_all_muts}AllMuts.parquet"
             )
+    else: 
+        result_df = mut_clock.driver(
+            do = do, num_correl_sites = num_correl_sites, max_meqtl_sites = max_meqtl_sites,
+            nearby_window_size = nearby_window_size, cpg_ids = mi_df.iloc[:num_top_mi_cpgs, :].index.to_list(), 
+            train_samples = samples, aggregate = aggregate, binarize = binarize
+            )
+        if do == "evaluate" or do == "train":
+            result_df.to_parquet(
+                os.path.join(out_dir, f"evaluate_results_{dataset}_{num_correl_sites}correl_{max_meqtl_sites}matrixQtl_{nearby_window_size}nearby_{num_top_mi_cpgs}numCpGs_{aggregate}Aggregate_{binarize}binarize_{use_all_muts}AllMuts.parquet")
+                )
+            print(
+                f"Done, wrote results to evaluate_results_{dataset}_{num_correl_sites}correl_{max_meqtl_sites}matrixQtl_{nearby_window_size}nearby_{num_top_mi_cpgs}numCpGs_{aggregate}Aggregate_{binarize}binarize_{use_all_muts}AllMuts.parquet"
+                )
     
 
 if __name__ == "__main__":

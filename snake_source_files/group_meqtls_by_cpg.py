@@ -40,6 +40,14 @@ def group_by_cpg(
     all_meqtls_df = all_meqtls_df.rename({'chr': 'cpg_chr', 'start': 'cpg_start'}, axis=1)
     all_meqtls_df.drop('Strand', axis=1, inplace=True)
     all_meqtls_df[['snp_chr', 'snp_start']] = all_meqtls_df['SNP'].str.split(':', expand=True)
+    # create column specifying if cis and if so the distance
+    all_meqtls_df['cis'] = all_meqtls_df.apply(
+        lambda x: True if x['cpg_chr'] == x['snp_chr'] else False, axis=1)
+    # make both int
+    all_meqtls_df['snp_start'] = all_meqtls_df['snp_start'].astype(int)
+    all_meqtls_df['cpg_start'] = all_meqtls_df['cpg_start'].astype(int)
+    all_meqtls_df['distance'] = all_meqtls_df.apply(
+        lambda x: x['cpg_start'] - x['snp_start'] if x['cis'] else -1, axis=1)
     # write out as parquet
     all_meqtls_df.to_parquet(out_fn)
         
