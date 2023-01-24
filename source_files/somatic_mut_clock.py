@@ -60,11 +60,11 @@ class mutationClock:
             set(self.all_methyl_age_df_t.columns).intersection(set(self.illumina_cpg_locs_df['#id'].to_list() + ['dataset', 'gender', 'age_at_index']))
             ]
         # read in the matrixQTL results from databases
-        self.godmc_meqtl_df = pd.read_parquet(godmc_meqtl_fn)        
+        """self.godmc_meqtl_df = pd.read_parquet(godmc_meqtl_fn)        
         self.pancan_meqtl_df = pd.read_parquet(
             pancan_meqtl_fn,
             columns = ['snp', 'cpg', 'beta', 'p-value']
-            )
+            )"""
         # one hot encode gender and tissue type
         dset_col = self.all_methyl_age_df_t['dataset'].to_list()
         self.all_methyl_age_df_t = pd.get_dummies(self.all_methyl_age_df_t, columns=["gender", "dataset"])
@@ -267,6 +267,7 @@ class mutationClock:
         @ predictor_groups: dict of lists of sites to be used as predictors of cpg_id's methylation
         @ samples: the samples to be included in the training matrix
         @ aggregate: whether to aggregate the mutation status by predictor group
+        @ binarize: whether to binarize the mutation status
         @ returns: X, y where X is the training matrix and y is the methylation values of cpg_id across samples
         """
         def noAgg():
@@ -338,7 +339,8 @@ class mutationClock:
         nearby_window_size: int,
         aggregate: str = "False",
         binarize: bool = False,
-        feat_store: str = ""
+        feat_store: str = "",
+        scramble: bool = False
         ) -> pd.DataFrame:
         """
         Evaluate the predictor for one CpG
@@ -363,15 +365,14 @@ class mutationClock:
         # if empty for some reason, return empty dataframe
         if predictor_groups == {}:
             return pd.DataFrame()
+        
+        model = ElasticNetCV(cv=5, random_state=0, max_iter=5000, n_jobs=-1, selection='random')
+        # actual model
         # create training matrix
         X, y = self._create_training_mat(
             cpg_id, predictor_groups, train_samples, 
             aggregate = aggregate, binarize = binarize
-            )
-        # do trainings
-        model = ElasticNetCV(
-            cv=5, random_state=0, max_iter=5000, n_jobs=-1, selection='random'
-            )
+            )        
         cv = KFold(n_splits=3, shuffle=True, random_state=0)
         # do the cross validation
         maes, r2s, feature_names, coefs, intercepts = [], [], [], [], []
@@ -385,10 +386,8 @@ class mutationClock:
             feature_names.append(X_train.columns[model.coef_ != 0].to_list())
             coefs.append(model.coef_[model.coef_ != 0])
             intercepts.append(model.intercept_)
+            
         # baseline model
-        model2 = ElasticNetCV(
-            cv=5, random_state=0, max_iter=5000, n_jobs=-1, selection='random'
-            )
         base_maes, base_r2s, base_feature_names, base_coefs, base_intercepts = [], [], [], [], []
         coviariate_col_names = [
             col for  col in X.columns if col.startswith('dataset_') or col.startswith('gender_')
@@ -397,26 +396,53 @@ class mutationClock:
         for train_index, test_index in cv.split(X):
             X_train, X_test = X_cov_only.iloc[train_index, :], X_cov_only.iloc[test_index, :]
             y_train, y_test = y.iloc[train_index], y.iloc[test_index]
-            model2.fit(X_train, y_train)
-            preds = model2.predict(X_test)
+            model.fit(X_train, y_train)
+            preds = model.predict(X_test)
             base_maes.append(mean_absolute_error(y_test, preds))
             base_r2s.append(r2_score(y_test, preds))
-            base_feature_names.append(X_train.columns[model2.coef_ != 0].to_list())
-            base_coefs.append(model2.coef_[model2.coef_ != 0])
-            base_intercepts.append(model2.intercept_)
-        # create df with columns cpg_id, mae, r2, feature_names, base_mae, base_r2, base_feature_names, with entries as the lists, not expanding
+            base_feature_names.append(X_train.columns[model.coef_ != 0].to_list())
+            base_coefs.append(model.coef_[model.coef_ != 0])
+            base_intercepts.append(model.intercept_)
+            
+        # if scramble, randomly shuffle the mutation rows of X, but not covariate
+        if scramble:
+            # shuffle rows of the mutation columns
+            non_coviariate_col_names = [
+                col for  col in X.columns \
+                if not col.startswith('dataset_') and not col.startswith('gender_')
+                ]
+            scrambled_X = X[non_coviariate_col_names].copy()
+            scrambled_X = scrambled_X.sample(frac = 1, random_state = 0).reset_index(drop=True)
+            # add the unshuffled covariate columns back
+            covariate_df = X.loc[:, coviariate_col_names]
+            # concat ignoring the index
+            scrambled_X.index = covariate_df.index
+            scrambled_X = pd.concat([scrambled_X, covariate_df], axis = 1)
+            scrambled_maes, scrambled_r2s, scrambled_feature_names, scrambled_coefs, scrambled_intercepts = [], [], [], [], []
+            # train again again but with scrambled X
+            for train_index, test_index in cv.split(X):
+                X_train, X_test = scrambled_X.iloc[train_index, :], scrambled_X.iloc[test_index, :]
+                y_train, y_test = y.iloc[train_index], y.iloc[test_index]
+                model.fit(X_train, y_train)
+                preds = model.predict(X_test)
+                scrambled_maes.append(mean_absolute_error(y_test, preds))
+                scrambled_r2s.append(r2_score(y_test, preds))
+                scrambled_feature_names.append(X_train.columns[model.coef_ != 0].to_list())
+                scrambled_coefs.append(model.coef_[model.coef_ != 0])
+                scrambled_intercepts.append(model.intercept_)
+        
+            result_df = pd.DataFrame({
+                'cpg_id': cpg_id, 'mae': np.mean(maes), 'r2': np.mean(r2s), 'feature_names': [feature_names], 'coefs': [coefs], 'intercepts': [intercepts], 
+                'base_mae': np.mean(base_maes), 'base_r2': np.mean(base_r2s), 'base_feature_names': [base_feature_names], 'base_coefs': [base_coefs], 'base_intercepts': [base_intercepts],
+                'scrambled_mae': np.mean(scrambled_maes), 'scrambled_r2': np.mean(scrambled_r2s), 'scrambled_feature_names': [scrambled_feature_names], 'scrambled_coefs': [scrambled_coefs], 'scrambled_intercepts': [scrambled_intercepts]
+                })
+            return result_df
         result_df = pd.DataFrame({
-            'cpg_id': cpg_id, 'mae': np.mean(maes), 'r2': np.mean(r2s), 'feature_names': [feature_names], 'coefs': [coefs],'intercepts': [intercepts], 'base_mae': np.mean(base_maes), 
-            'base_r2': np.mean(base_r2s), 'base_feature_names': [base_feature_names], 
-            'base_coefs': [base_coefs], 'base_intercepts': [base_intercepts] 
-            })
-        result_df['mae_diff'] = result_df['mae'] - result_df['base_mae']
-        result_df['r2_diff'] = result_df['r2'] - result_df['base_r2'] 
-        """result_df = pd.DataFrame({
-            'mae': np.mean(maes), 'r2': np.mean(r2s), 
-            'base_mae': np.mean(base_maes), 'base_r2': np.mean(base_r2s)
-            }, index=[cpg_id])"""
+                'cpg_id': cpg_id, 'mae': np.mean(maes), 'r2': np.mean(r2s), 'feature_names': [feature_names], 'coefs': [coefs], 'intercepts': [intercepts], 
+                'base_mae': np.mean(base_maes), 'base_r2': np.mean(base_r2s), 'base_feature_names': [base_feature_names], 'base_coefs': [base_coefs], 'base_intercepts': [base_intercepts]
+                })
         return result_df
+        
     
     def feature_informations(self, 
         cpg_id: str,
@@ -496,7 +522,8 @@ class mutationClock:
         max_meqtl_sites: int,
         nearby_window_size: int,
         aggregate: str,
-        binarize: bool = False
+        binarize: bool = False,
+        scramble: bool = False
         ):
         """
         Build the predictor for one CpG
@@ -505,6 +532,9 @@ class mutationClock:
         @ num_correl_sites: number of sites to use as predictors
         @ max_meqtl_sites: maximum number of meqtl db sites to use as predictors
         @ nearby_window_size: window size to use for choosing nearby sites
+        @ aggregate: whether to aggregate the mutation status by predictor group or not
+        @ binarize: whether to binarize the mutation status or not
+        @ scramble: whether to also train baseline models (same predictor sites but rows switched)
         """
         # get the sites to be used as predictors
         predictor_groups = self.get_predictor_site_groups(
@@ -523,82 +553,38 @@ class mutationClock:
             )
         # train one elasticNet model to predict y from X
         model = ElasticNetCV(
-            cv=5, random_state=0, max_iter=5000, selection = 'random', n_jobs=-1
+            cv=5, random_state=0, max_iter=10000, selection = 'random', n_jobs=-1
             )
         model.fit(X, y)
-        # write the model to a file using pickle
         model_fn = os.path.join(self.output_dir, f"{cpg_id}.pkl")
         pickle.dump(model, open(model_fn, "wb"))
-        
-    def driver(
-        self, 
-        do: str,
-        num_correl_sites: int,
-        max_meqtl_sites: int,
-        nearby_window_size: int,
-        cpg_ids: list = [],
-        train_samples: list = [],
-        aggregate: str = "False",
-        binarize: bool = False,
-        feat_store: str = ""
-        ):
-        """
-        Train the predictor for all CpGs
-        """
-        # get the list of all CpGs
-        if len(cpg_ids) == 0:
-            cpg_ids = self.illumina_cpg_locs_df['#id'].to_list()
-        # get the list samples to train with
-        if len(train_samples) == 0:
-            train_samples = self.all_methyl_age_df_t.index.to_list()
-        else: # intersection with all_methyl_age_df_t index, so if a training sample is a diff tissue type it will be removed
-            train_samples = list(set(train_samples) & set(self.all_methyl_age_df_t.index.to_list()))
-        
-        if do == 'train':
-            # for each cpg, train the predictor and save trained model
-            for i, cpg_id in enumerate(cpg_ids):
-                self.train_predictor(
-                    cpg_id, train_samples, num_correl_sites, max_meqtl_sites,
-                    nearby_window_size, aggregate, binarize
-                    ) 
-                if i % 10 == 0:
-                    print(f"Finished {100*i/len(cpg_ids)}% of CpGs", flush=True)
-        elif do == 'evaluate': # evaluate
-            result_dfs = []
-            for i, cpg_id in enumerate(cpg_ids):
-                result_df = self.evaluate_predictor(
-                    cpg_id, train_samples, num_correl_sites, max_meqtl_sites,
-                    nearby_window_size, aggregate, binarize
-                    )
-                # check if result_df is empty
-                if len(result_df) != 0:
-                    result_dfs.append(result_df)
-                if i % 10 == 0:
-                    print(f"Finished {100*i/len(cpg_ids)}% of CpGs", flush=True)
-            result_df = pd.concat(result_dfs)
-            return result_df
-        elif do == 'mutual_info':
-            mis = {}
-            for i, cpg_id in enumerate(cpg_ids):
-                mis[cpg_id] = self.feature_informations(
-                    cpg_id, train_samples, num_correl_sites,
-                    max_meqtl_sites, nearby_window_size, aggregate,
-                    feat_store
-                    )
-                if i % 100 == 0:
-                    print(f"Finished {i/len(cpg_ids)}% of CpGs", flush=True)
-            # remove any elements that are length 0
-            mis = {k: v for k, v in mis.items() if len(v) > 0}
-            mis_df = pd.DataFrame(data = mis)
-            return mis_df
-        else:
-            print("'do' must be one of 'train', 'evaluate', 'mutual_info'")
-            sys.exit(1)
+        # if scramble, randomly shuffle the mutation rows of X, but not covariate
+        if scramble:
+            # shuffle rows of the mutation columns
+            non_coviariate_col_names = [
+                col for  col in X.columns \
+                if not col.startswith('dataset_') and not col.startswith('gender_')
+                ]
+            scrambled_X = X[non_coviariate_col_names].copy()
+            scrambled_X = scrambled_X.sample(frac = 1, random_state = 0).reset_index(drop=True)
+            # add the unshuffled covariate columns back
+            coviariate_col_names = [
+                col for  col in X.columns \
+                if col.startswith('dataset_') or col.startswith('gender_')
+                ]
+            covariate_df = X.loc[:, coviariate_col_names]
+            # concact ignoring the index
+            scrambled_X.index = covariate_df.index
+            scrambled_X = pd.concat([scrambled_X, covariate_df], axis = 1)
+            # train again again but with scrambled X
+            model.fit(scrambled_X, y)
+            model_fn = os.path.join(self.output_dir, f"{cpg_id}_scrambled.pkl")
+            pickle.dump(model, open(model_fn, "wb"))
         
     def predict_cpg(
         self, 
         cpg_id: str,
-        test_samples: list,
+        samples: list,
         model_fn: str,
         pred_group_fn: str,
         aggregate: str,
@@ -607,7 +593,7 @@ class mutationClock:
         """
         Predict the methylation level of one CpG for a list of samples
         @ cpg_id: the id of the CpG to predict
-        @ test_samples: list of samples to predict
+        @ samples: list of samples to predict
         @ model_fn: the file name of the pickled model
         @ pred_group_fn: the file name of the pickled predictor groups
         @ aggregate: whether to aggregate the methylation levels of the predictor sites
@@ -617,38 +603,47 @@ class mutationClock:
         model = pickle.load(open(model_fn, "rb"))
         pred_groups = pickle.load(open(pred_group_fn, "rb"))
         # create the X matrix
-        X, _ = self._create_training_mat(cpg_id, pred_groups, test_samples, aggregate, binarize)
+        X, _ = self._create_training_mat(cpg_id, pred_groups, samples, aggregate, binarize)
         # predict the methylation levels
         preds = model.predict(X)
         # create a df with the samples as rows and the predicted methylation level as a column called cpg_id
-        return pd.DataFrame({cpg_id: preds}, index=test_samples)
+        return pd.DataFrame({cpg_id: preds}, index=samples)
 
     def predict_all_cpgs(
         self,
         cpg_ids: list,
-        test_samples: list,
+        samples: list,
         model_dir: str,
         aggregate: str = "False",
-        binarize: bool = False
+        binarize: bool = False,
+        scrambled: bool = False
         ) -> pd.DataFrame:
         """
         Predict the methylation level of some CpGs for a list of samples using pretrained models
         @ cpg_ids: list of CpG ids to predict
-        @ test_samples: list of samples to predict for
+        @ samples: list of samples to predict for
         @ model_dir: directory containing the pickled models and predictor group files
         @ aggregate: whether to aggregate the features or not (must be the same as when the models were trained)
         @ binarize: whether to binarize the features or not (must be the same as when the models were trained)
+        @ scrambled: whether to use the baseline scrambled model or not
         @ return: a dataframe with the samples as rows and the predicted methylation levels as columns
         """
+        # intersection with all_methyl_age_df_t index, so if a sample is a diff tissue type it will be removed
+        samples = list(set(samples) & set(self.all_methyl_age_df_t.index.to_list()))
+            
         predictions = []
         for i, cpg_id in enumerate(cpg_ids):
-            model_fn = os.path.join(model_dir, f"{cpg_id}.pkl")
+            # wether to use the baseline scrambled model or not
+            if scrambled:
+                model_fn = os.path.join(model_dir, f"{cpg_id}_scrambled.pkl")
+            else:
+                model_fn = os.path.join(model_dir, f"{cpg_id}.pkl")
             pred_group_fn = os.path.join(model_dir, f"{cpg_id}_pred_groups.pkl")
             predictions.append(
-                self.predict_cpg(cpg_id, test_samples, model_fn, pred_group_fn, aggregate, binarize)
+                self.predict_cpg(cpg_id, samples, model_fn, pred_group_fn, aggregate, binarize)
                 )
-            if i % 10 == 0:
-                print(f"Finished {100*i/len(cpg_ids)}% of CpGs", flush=True)
+            """if i % 10 == 0:
+                print(f"Finished {100*i/len(cpg_ids)}% of CpGs", flush=True)"""
         # concatenate the predictions into a single df
         pred_methyl_df = pd.concat(predictions, axis=1)
         return pred_methyl_df
@@ -743,3 +738,71 @@ class mutationClock:
             # write r2 and mae in upper left corner
             axes[i].text(.01, .99, f"R2 = {results_df.loc[i, 'r2']:.3f}", ha='left', va='top',  transform=axes[i].transAxes )
             axes[i].text(.01, .9, f"MAE = {results_df.loc[i, 'mae']:.3f}", ha='left', va='top',  transform=axes[i].transAxes)
+            
+            
+            
+    def driver(
+        self, 
+        do: str,
+        num_correl_sites: int,
+        max_meqtl_sites: int,
+        nearby_window_size: int,
+        cpg_ids: list = [],
+        train_samples: list = [],
+        aggregate: str = "False",
+        binarize: bool = False,
+        feat_store: str = "",
+        scramble: bool = False
+        ):
+        """
+        Train the predictor for all CpGs
+        """
+        # get the list of all CpGs
+        if len(cpg_ids) == 0:
+            cpg_ids = self.illumina_cpg_locs_df['#id'].to_list()
+        # get the list samples to train with
+        if len(train_samples) == 0:
+            train_samples = self.all_methyl_age_df_t.index.to_list()
+        else: # intersection with all_methyl_age_df_t index, so if a training sample is a diff tissue type it will be removed
+            train_samples = list(set(train_samples) & set(self.all_methyl_age_df_t.index.to_list()))
+        
+        if do == 'train':
+            # for each cpg, train the predictor and save trained model
+            for i, cpg_id in enumerate(cpg_ids):
+                self.train_predictor(
+                    cpg_id, train_samples, num_correl_sites, max_meqtl_sites,
+                    nearby_window_size, aggregate, binarize, scramble
+                    )
+                if i % 10 == 0:
+                    print(f"Finished {100*i/len(cpg_ids)}% of CpGs", flush=True)
+        elif do == 'evaluate': # evaluate
+            result_dfs = []
+            for i, cpg_id in enumerate(cpg_ids):
+                result_df = self.evaluate_predictor(
+                    cpg_id, train_samples, num_correl_sites, max_meqtl_sites,
+                    nearby_window_size, aggregate, binarize, feat_store, scramble
+                    )
+                # check if result_df is empty
+                if len(result_df) != 0:
+                    result_dfs.append(result_df)
+                if i % 10 == 0:
+                    print(f"Finished {100*i/len(cpg_ids)}% of CpGs", flush=True)
+            result_df = pd.concat(result_dfs)
+            return result_df
+        elif do == 'mutual_info':
+            mis = {}
+            for i, cpg_id in enumerate(cpg_ids):
+                mis[cpg_id] = self.feature_informations(
+                    cpg_id, train_samples, num_correl_sites,
+                    max_meqtl_sites, nearby_window_size, aggregate,
+                    feat_store
+                    )
+                if i % 100 == 0:
+                    print(f"Finished {i/len(cpg_ids)}% of CpGs", flush=True)
+            # remove any elements that are length 0
+            mis = {k: v for k, v in mis.items() if len(v) > 0}
+            mis_df = pd.DataFrame(data = mis)
+            return mis_df
+        else:
+            print("'do' must be one of 'train', 'evaluate', 'mutual_info'")
+            sys.exit(1)

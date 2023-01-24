@@ -40,7 +40,7 @@ def read_icgc_data() -> tuple:
     icgc_mi_df.sort_values(by='mutual_info', ascending=False, inplace=True)
     return icgc_mut_w_age_df, illumina_cpg_locs_df, icgc_methyl_age_df_t, icgc_mi_df
 
-def read_tcga_data() -> tuple:
+def read_tcga_data(tissue_type) -> tuple:
     print("reading in data")
     # read in data
     out_dir = "/cellar/users/zkoch/methylation_and_mutation/output_dirs/output_010423"
@@ -56,8 +56,11 @@ def read_tcga_data() -> tuple:
         )
     # add ages to all_methyl_df_t
     all_mut_w_age_df, all_methyl_age_df_t = utils.add_ages_to_mut_and_methyl(all_mut_df, all_meta_df, all_methyl_df_t)
-    mi_df = pd.read_parquet('/cellar/users/zkoch/methylation_and_mutation/output_dirs/011723_output/tcga_training_mi.parquet')
-    mi_df.sort_values(by='mutual_info', ascending=False, inplace=True)
+    if tissue_type != "":
+        mi_df = pd.read_parquet(f'/cellar/users/zkoch/methylation_and_mutation/dependency_files/mutual_informations/tcga_training_{tissue_type}_mi.parquet')
+    else:
+        mi_df = pd.read_parquet('/cellar/users/zkoch/methylation_and_mutation/dependency_files/mutual_informations/tcga_training_mi.parquet')
+        mi_df.sort_values(by='mutual_info', ascending=False, inplace=True)
     return all_mut_w_age_df, illumina_cpg_locs_df, all_methyl_age_df_t, mi_df
 
 
@@ -74,6 +77,7 @@ def main():
     parser.add_argument('--samples_fn', type=str, help='path to file with samples to use', default="")
     parser.add_argument('--aggregate', type=str, help='aggregate')
     parser.add_argument('--binarize', type=str, help='binarize')
+    parser.add_argument('--scramble', type=str, help='scramble')
     parser.add_argument('--use_all_muts', type=str, help='use_all_muts')
     parser.add_argument('--trained_model_dir', type=str, help='train_model_dir', default="")
     parser.add_argument('--tissue_type', type=str, help='subset to only train models for one tissue', default="")
@@ -89,6 +93,7 @@ def main():
     aggregate = args.aggregate
     binarize = True if  args.binarize == "True" else False
     use_all_muts = True if args.use_all_muts == "True" else False
+    scramble = True if args.scramble == "True" else False
     samples_fn = args.samples_fn
     trained_model_dir = args.trained_model_dir
     tissue_type = args.tissue_type
@@ -97,9 +102,14 @@ def main():
             samples = f.read().splitlines()
     else:
         samples = []
-            
+    # if out_dir doesn't exist, create it
+    if not os.path.exists(out_dir):
+        os.makedirs(out_dir)
+    # print all the arguments
+    print("dataset: ", dataset, "do: ", do, "out_dir: ", out_dir, "num_correl_sites: ", num_correl_sites, "max_meqtl_sites: ", max_meqtl_sites, "nearby_window_size: ", nearby_window_size, "num_top_mi_cpgs: ", num_top_mi_cpgs, "aggregate: ", aggregate, "binarize: ", binarize, "use_all_muts: ", use_all_muts, "scramble: ", scramble, "samples_fn: ", samples_fn, "trained_model_dir: ", trained_model_dir, "tissue_type: ", tissue_type)
+    
     if dataset == "TCGA":
-        all_mut_w_age_df, illumina_cpg_locs_df, all_methyl_age_df_t, mi_df = read_tcga_data()
+        all_mut_w_age_df, illumina_cpg_locs_df, all_methyl_age_df_t, mi_df = read_tcga_data(tissue_type)
         mut_clock = somatic_mut_clock.mutationClock(
             all_mut_w_age_df = all_mut_w_age_df, 
             illumina_cpg_locs_df = illumina_cpg_locs_df, 
@@ -134,15 +144,16 @@ def main():
         result_df = mut_clock.driver(
             do = do, num_correl_sites = num_correl_sites, max_meqtl_sites = max_meqtl_sites,
             nearby_window_size = nearby_window_size, cpg_ids = mi_df.iloc[:num_top_mi_cpgs, :].index.to_list(), 
-            train_samples = samples, aggregate = aggregate, binarize = binarize
+            train_samples = samples, aggregate = aggregate, binarize = binarize, feat_store = feat_store, scramble = scramble
             )
-        if do == "evaluate" or do == "train":
+        if do == "evaluate":
             result_df.to_parquet(
                 os.path.join(out_dir, f"evaluate_results_{dataset}_{num_correl_sites}correl_{max_meqtl_sites}matrixQtl_{nearby_window_size}nearby_{num_top_mi_cpgs}numCpGs_{aggregate}Aggregate_{binarize}binarize_{use_all_muts}AllMuts.parquet")
                 )
             print(
                 f"Done, wrote results to evaluate_results_{dataset}_{num_correl_sites}correl_{max_meqtl_sites}matrixQtl_{nearby_window_size}nearby_{num_top_mi_cpgs}numCpGs_{aggregate}Aggregate_{binarize}binarize_{use_all_muts}AllMuts.parquet"
                 )
+        
     
 
 if __name__ == "__main__":
