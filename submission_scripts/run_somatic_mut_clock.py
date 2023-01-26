@@ -23,7 +23,6 @@ def read_icgc_data() -> tuple:
     shared_samples = set(icgc_methyl_df_t.index) & set(icgc_mut_df['sample'].unique()) & set(icgc_meta_df['sample'].unique())
     icgc_methyl_df_t = icgc_methyl_df_t.loc[shared_samples]
     icgc_methyl_df_t.dropna(how = 'any', axis=1, inplace=True)
-    print(icgc_methyl_df_t.shape)
     
     # rename columns 
     icgc_mut_df.rename(columns={'chromosome':'chr', 'sample': 'case_submitter_id', 'chromosome_start':'start', 'MAF': 'DNA_VAF'}, inplace=True)
@@ -56,12 +55,16 @@ def read_tcga_data(tissue_type) -> tuple:
         )
     # add ages to all_methyl_df_t
     all_mut_w_age_df, all_methyl_age_df_t = utils.add_ages_to_mut_and_methyl(all_mut_df, all_meta_df, all_methyl_df_t)
+    mi_df = pd.read_parquet('/cellar/users/zkoch/methylation_and_mutation/dependency_files/mutual_informations/tcga_combinedMI_top10MI.parquet')
     if tissue_type != "":
-        mi_df = pd.read_parquet(f'/cellar/users/zkoch/methylation_and_mutation/dependency_files/mutual_informations/tcga_training_{tissue_type}_mi.parquet')
+        mi_df = mi_df[tissue_type]
     else:
-        mi_df = pd.read_parquet('/cellar/users/zkoch/methylation_and_mutation/dependency_files/mutual_informations/tcga_training_mi.parquet')
-        mi_df.sort_values(by='mutual_info', ascending=False, inplace=True)
-    return all_mut_w_age_df, illumina_cpg_locs_df, all_methyl_age_df_t, mi_df
+        mi_df = mi_df['combined']
+    mi_df.columns = ['mutual_info']
+    mi_df.sort_values(by='mutual_info', ascending=False, inplace=True)
+    # mutations bin counts
+    mut_bin_counts_df = pd.read_parquet('/cellar/users/zkoch/methylation_and_mutation/dependency_files/tcga_mut_bin_counts.parquet')
+    return all_mut_w_age_df, illumina_cpg_locs_df, all_methyl_age_df_t, mi_df, mut_bin_counts_df
 
 
 def main():
@@ -109,7 +112,7 @@ def main():
     print("dataset: ", dataset, "do: ", do, "out_dir: ", out_dir, "num_correl_sites: ", num_correl_sites, "max_meqtl_sites: ", max_meqtl_sites, "nearby_window_size: ", nearby_window_size, "num_top_mi_cpgs: ", num_top_mi_cpgs, "aggregate: ", aggregate, "binarize: ", binarize, "use_all_muts: ", use_all_muts, "scramble: ", scramble, "samples_fn: ", samples_fn, "trained_model_dir: ", trained_model_dir, "tissue_type: ", tissue_type)
     
     if dataset == "TCGA":
-        all_mut_w_age_df, illumina_cpg_locs_df, all_methyl_age_df_t, mi_df = read_tcga_data(tissue_type)
+        all_mut_w_age_df, illumina_cpg_locs_df, all_methyl_age_df_t, mi_df, mut_bin_counts_df = read_tcga_data(tissue_type)
         mut_clock = somatic_mut_clock.mutationClock(
             all_mut_w_age_df = all_mut_w_age_df, 
             illumina_cpg_locs_df = illumina_cpg_locs_df, 
@@ -140,11 +143,11 @@ def main():
         print(
             f"Done, wrote results to predicted_methyl_{dataset}_{num_correl_sites}correl_{max_meqtl_sites}matrixQtl_{nearby_window_size}nearby_{num_top_mi_cpgs}numCpGs_{aggregate}Aggregate_{binarize}binarize_{use_all_muts}AllMuts.parquet"
             )
-    else: 
+    else: # evaluate or train
         result_df = mut_clock.driver(
             do = do, num_correl_sites = num_correl_sites, max_meqtl_sites = max_meqtl_sites,
             nearby_window_size = nearby_window_size, cpg_ids = mi_df.iloc[:num_top_mi_cpgs, :].index.to_list(), 
-            train_samples = samples, aggregate = aggregate, binarize = binarize, feat_store = feat_store, scramble = scramble
+            train_samples = samples, aggregate = aggregate, binarize = binarize, feat_store = "", scramble = scramble
             )
         if do == "evaluate":
             result_df.to_parquet(

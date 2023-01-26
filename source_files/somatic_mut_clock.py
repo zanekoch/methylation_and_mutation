@@ -358,6 +358,8 @@ class mutationClock:
                 cpg_id, train_samples, num_correl_sites,
                 max_meqtl_sites, nearby_window_size
                 )
+            pred_group_fn = os.path.join(self.output_dir, f"{cpg_id}_pred_groups.pkl")
+            pickle.dump(predictor_groups, open(pred_group_fn, "wb"))
         else: # read from saved pkl file
             predictor_groups_fn = os.path.join(feat_store, f"{cpg_id}.pkl")
             # open the file
@@ -765,7 +767,7 @@ class mutationClock:
             train_samples = self.all_methyl_age_df_t.index.to_list()
         else: # intersection with all_methyl_age_df_t index, so if a training sample is a diff tissue type it will be removed
             train_samples = list(set(train_samples) & set(self.all_methyl_age_df_t.index.to_list()))
-        
+        # do one of 3 options
         if do == 'train':
             # for each cpg, train the predictor and save trained model
             for i, cpg_id in enumerate(cpg_ids):
