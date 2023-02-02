@@ -4,6 +4,7 @@ import get_data, utils, somatic_mut_clock
 import argparse
 import os
 import pandas as pd
+import numpy as np
 import dask.dataframe as dd
 import glob
 
@@ -60,11 +61,10 @@ def read_tcga_data(tissue_type) -> tuple:
         mi_df = mi_df[tissue_type]
     else:
         mi_df = mi_df['combined']
+    mi_df = mi_df.to_frame()
     mi_df.columns = ['mutual_info']
-    mi_df.sort_values(by='mutual_info', ascending=False, inplace=True)
-    # mutations bin counts
-    mut_bin_counts_df = pd.read_parquet('/cellar/users/zkoch/methylation_and_mutation/dependency_files/tcga_mut_bin_counts.parquet')
-    return all_mut_w_age_df, illumina_cpg_locs_df, all_methyl_age_df_t, mi_df, mut_bin_counts_df
+    #mi_df.sort_values(by='mutual_info', ascending=False, inplace=True)
+    return all_mut_w_age_df, illumina_cpg_locs_df, all_methyl_age_df_t, mi_df
 
 
 def main():
@@ -76,14 +76,18 @@ def main():
     parser.add_argument('--num_correl_sites', type=int, help='number of correl sites to use for prediction')
     parser.add_argument('--max_meqtl_sites', type=int, help='max_meqtl_sites')
     parser.add_argument('--nearby_window_size', type=int, help='nearby_window_size')
-    parser.add_argument('--num_top_mi_cpgs', type=int, help='num_top_mi_cpgs')
+    parser.add_argument('--start_top_cpgs', type=int, help='start top cpgs', default=0)
+    parser.add_argument('--num_top_cpgs', type=int, help='num_top_cpgs')
     parser.add_argument('--samples_fn', type=str, help='path to file with samples to use', default="")
     parser.add_argument('--aggregate', type=str, help='aggregate')
     parser.add_argument('--binarize', type=str, help='binarize')
     parser.add_argument('--scramble', type=str, help='scramble')
-    parser.add_argument('--use_all_muts', type=str, help='use_all_muts')
     parser.add_argument('--trained_model_dir', type=str, help='train_model_dir', default="")
+    parser.add_argument('--bin_size', type=int, help='bin size', default="")
     parser.add_argument('--tissue_type', type=str, help='subset to only train models for one tissue', default="")
+    parser.add_argument('--feat_store', type=str, help='optional feature store', default="")
+    parser.add_argument('--do_prediction', type=str, help='optional prediction while training', default="")
+    
     # parse arguments
     args = parser.parse_args()
     dataset = args.dataset
@@ -92,72 +96,86 @@ def main():
     num_correl_sites = args.num_correl_sites
     max_meqtl_sites = args.max_meqtl_sites
     nearby_window_size = args.nearby_window_size
-    num_top_mi_cpgs = args.num_top_mi_cpgs
+    start_top_cpgs = args.start_top_cpgs
+    num_top_cpgs = args.num_top_cpgs
     aggregate = args.aggregate
     binarize = True if  args.binarize == "True" else False
-    use_all_muts = True if args.use_all_muts == "True" else False
     scramble = True if args.scramble == "True" else False
+    do_prediction = True if args.do_prediction == "True" else False
     samples_fn = args.samples_fn
     trained_model_dir = args.trained_model_dir
     tissue_type = args.tissue_type
-    if samples_fn != "":
-        with open(samples_fn, 'r') as f:
-            samples = f.read().splitlines()
-    else:
-        samples = []
+    feat_store = args.feat_store
+    bin_size = args.bin_size
+
     # if out_dir doesn't exist, create it
     if not os.path.exists(out_dir):
         os.makedirs(out_dir)
     # print all the arguments
-    print("dataset: ", dataset, "do: ", do, "out_dir: ", out_dir, "num_correl_sites: ", num_correl_sites, "max_meqtl_sites: ", max_meqtl_sites, "nearby_window_size: ", nearby_window_size, "num_top_mi_cpgs: ", num_top_mi_cpgs, "aggregate: ", aggregate, "binarize: ", binarize, "use_all_muts: ", use_all_muts, "scramble: ", scramble, "samples_fn: ", samples_fn, "trained_model_dir: ", trained_model_dir, "tissue_type: ", tissue_type)
-    
+    print("dataset: ", dataset, "do: ", do, "out_dir: ", out_dir, "num_correl_sites: ", num_correl_sites, "max_meqtl_sites: ", max_meqtl_sites, "nearby_window_size: ", nearby_window_size, "start_top_cpgs: ", start_top_cpgs, "num_top_cpgs: ", num_top_cpgs, "aggregate: ", aggregate, "binarize: ", binarize, "scramble: ", scramble, "samples_fn: ", samples_fn, "trained_model_dir: ", trained_model_dir, "bin_size: ", bin_size, "tissue_type: ", tissue_type)
+    # read in data
     if dataset == "TCGA":
-        all_mut_w_age_df, illumina_cpg_locs_df, all_methyl_age_df_t, mi_df, mut_bin_counts_df = read_tcga_data(tissue_type)
-        mut_clock = somatic_mut_clock.mutationClock(
-            all_mut_w_age_df = all_mut_w_age_df, 
-            illumina_cpg_locs_df = illumina_cpg_locs_df, 
-            all_methyl_age_df_t = all_methyl_age_df_t,
-            output_dir = out_dir,
-            tissue_type = tissue_type
-            )
+        all_mut_w_age_df, illumina_cpg_locs_df, all_methyl_age_df_t, mi_df = read_tcga_data(tissue_type)
+        matrix_qtl_dir = "/cellar/users/zkoch/methylation_and_mutation/data/matrixQtl_data/muts"
     elif dataset == "ICGC":
-        icgc_mut_w_age_df, illumina_cpg_locs_df, icgc_methyl_age_df_t, mi_df = read_icgc_data()
-        # create a mutationClock object with icgc data
-        mut_clock = somatic_mut_clock.mutationClock(
-            all_mut_w_age_df = icgc_mut_w_age_df, 
-            illumina_cpg_locs_df = illumina_cpg_locs_df, 
-            all_methyl_age_df_t = icgc_methyl_age_df_t,
-            output_dir = out_dir,
-            tissue_type = tissue_type, 
-            matrix_qtl_dir = "/cellar/users/zkoch/methylation_and_mutation/output_dirs/icgc_muts_011423"
-            )
+        all_mut_w_age_df, illumina_cpg_locs_df, all_methyl_age_df_t, mi_df = read_icgc_data()
+        matrix_qtl_dir = "/cellar/users/zkoch/methylation_and_mutation/output_dirs/icgc_muts_011423"
+    # create a mutationClock object with  data
+    mut_clock = somatic_mut_clock.mutationClock(
+        all_mut_w_age_df = all_mut_w_age_df, 
+        illumina_cpg_locs_df = illumina_cpg_locs_df, 
+        all_methyl_age_df_t = all_methyl_age_df_t,
+        output_dir = out_dir,
+        tissue_type = tissue_type, 
+        matrix_qtl_dir = matrix_qtl_dir
+        )
+    if samples_fn != "": # if samples specifies get list
+        with open(samples_fn, 'r') as f:
+            samples = f.read().splitlines()
+    else: # otherwise use this tissue's samples
+        samples = mut_clock.all_methyl_age_df_t.index.values.tolist()
     print("Got data, now training and evaluating")
+    # choose which CpGs to train model for
+    cpg_pred_priority = mut_clock.choose_cpgs_to_train(training_samples = samples, mi_df = mi_df, bin_size = 10000)
+    chosen_cpgs = cpg_pred_priority.iloc[start_top_cpgs:start_top_cpgs + num_top_cpgs]['#id'].values
+
+    # predict using trained models, train models and dump, or evaluate
     if do == 'predict':
         predicted_methyl = mut_clock.predict_all_cpgs(
-            cpg_ids = mi_df.head(num_top_mi_cpgs).index.to_list(), test_samples = samples, 
-            model_dir = trained_model_dir, aggregate = aggregate, binarize = binarize
+            cpg_ids = chosen_cpgs, samples = samples, 
+            model_dir = trained_model_dir, aggregate = aggregate, 
+            binarize = binarize, scrambled = scramble
             )
         predicted_methyl.to_parquet(
-            os.path.join(out_dir, f"predicted_methyl_{dataset}_{num_correl_sites}correl_{max_meqtl_sites}matrixQtl_{nearby_window_size}nearby_{num_top_mi_cpgs}numCpGs_{aggregate}Aggregate_{binarize}binarize_{use_all_muts}AllMuts.parquet")
+            os.path.join(out_dir, f"predicted_methyl_{dataset}_{num_correl_sites}correl_{max_meqtl_sites}matrixQtl_{nearby_window_size}nearby_{start_top_cpgs}startTopCpGs_{num_top_cpgs}numCpGs_{aggregate}Aggregate_{binarize}binarize_{bin_size}binSize_{scramble}ScrambledRF.parquet")
             )
         print(
-            f"Done, wrote results to predicted_methyl_{dataset}_{num_correl_sites}correl_{max_meqtl_sites}matrixQtl_{nearby_window_size}nearby_{num_top_mi_cpgs}numCpGs_{aggregate}Aggregate_{binarize}binarize_{use_all_muts}AllMuts.parquet"
+            f"Done, wrote results to predicted_methyl_{dataset}_{num_correl_sites}correl_{max_meqtl_sites}matrixQtl_{nearby_window_size}nearby_{start_top_cpgs}startTopCpGs_{num_top_cpgs}numCpGs_{aggregate}Aggregate_{binarize}binarize_{bin_size}binSize_{scramble}ScrambledRF.parquet"
             )
     else: # evaluate or train
         result_df = mut_clock.driver(
             do = do, num_correl_sites = num_correl_sites, max_meqtl_sites = max_meqtl_sites,
-            nearby_window_size = nearby_window_size, cpg_ids = mi_df.iloc[:num_top_mi_cpgs, :].index.to_list(), 
-            train_samples = samples, aggregate = aggregate, binarize = binarize, feat_store = "", scramble = scramble
+            nearby_window_size = nearby_window_size, cpg_ids = chosen_cpgs, 
+            train_samples = samples, aggregate = aggregate, binarize = binarize, 
+            feat_store = feat_store, scramble = scramble, do_prediction = do_prediction
             )
         if do == "evaluate":
             result_df.to_parquet(
-                os.path.join(out_dir, f"evaluate_results_{dataset}_{num_correl_sites}correl_{max_meqtl_sites}matrixQtl_{nearby_window_size}nearby_{num_top_mi_cpgs}numCpGs_{aggregate}Aggregate_{binarize}binarize_{use_all_muts}AllMuts.parquet")
+                os.path.join(out_dir, f"evaluate_results_{dataset}_{num_correl_sites}correl_{max_meqtl_sites}matrixQtl_{nearby_window_size}nearby_{start_top_cpgs}startTopCpGs_{num_top_cpgs}numCpGs_{aggregate}Aggregate_{binarize}binarize_{bin_size}binSize.parquet")
                 )
             print(
-                f"Done, wrote results to evaluate_results_{dataset}_{num_correl_sites}correl_{max_meqtl_sites}matrixQtl_{nearby_window_size}nearby_{num_top_mi_cpgs}numCpGs_{aggregate}Aggregate_{binarize}binarize_{use_all_muts}AllMuts.parquet"
+                f"Done, wrote results to evaluate_results_{dataset}_{num_correl_sites}correl_{max_meqtl_sites}matrixQtl_{nearby_window_size}nearby_{start_top_cpgs}startTopCpGs_{num_top_cpgs}numCpGs_{aggregate}Aggregate_{binarize}binarize_{bin_size}binSize.parquet"
                 )
+        elif do == 'eval_features':
+            result_df.to_parquet(
+                os.path.join(out_dir, f"feat_evaluate_results_{dataset}_{num_correl_sites}correl_{max_meqtl_sites}matrixQtl_{nearby_window_size}nearby_{start_top_cpgs}startTopCpGs_{num_top_cpgs}numCpGs_{aggregate}Aggregate_{binarize}binarize_{bin_size}binSize.parquet")
+                )
+            print(
+                f"Done, wrote results to feat_evaluate_results_{dataset}_{num_correl_sites}correl_{max_meqtl_sites}matrixQtl_{nearby_window_size}nearby_{start_top_cpgs}startTopCpGs_{num_top_cpgs}numCpGs_{aggregate}Aggregate_{binarize}binarize_{bin_size}binSize.parquet"
+                )
+        else: # train
+            print(f"Dumped trained models and predictions to {out_dir}")
         
-    
 
 if __name__ == "__main__":
     main()

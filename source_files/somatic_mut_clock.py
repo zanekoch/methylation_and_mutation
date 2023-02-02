@@ -22,11 +22,8 @@ class mutationClock:
         all_methyl_age_df_t: pd.DataFrame,
         output_dir: str,
         matrix_qtl_dir: str = "/cellar/users/zkoch/methylation_and_mutation/data/matrixQtl_data/muts",
-        godmc_meqtl_fn: str = "/cellar/users/zkoch/methylation_and_mutation/data/meQTL/goDMC_meQTL/goDMC_meQTLs.parquet",
-        pancan_meqtl_fn: str = "/cellar/users/zkoch/methylation_and_mutation/data/meQTL/pancan_tcga_meQTL/pancan_meQTL.parquet",
-        tissue_type: str = "",
+        tissue_type: str = ""
         ) -> None:
-
         self.all_mut_w_age_df = all_mut_w_age_df
         self.illumina_cpg_locs_df = illumina_cpg_locs_df
         self.all_methyl_age_df_t = all_methyl_age_df_t
@@ -59,12 +56,6 @@ class mutationClock:
         self.all_methyl_age_df_t = self.all_methyl_age_df_t.loc[:, 
             set(self.all_methyl_age_df_t.columns).intersection(set(self.illumina_cpg_locs_df['#id'].to_list() + ['dataset', 'gender', 'age_at_index']))
             ]
-        # read in the matrixQTL results from databases
-        """self.godmc_meqtl_df = pd.read_parquet(godmc_meqtl_fn)        
-        self.pancan_meqtl_df = pd.read_parquet(
-            pancan_meqtl_fn,
-            columns = ['snp', 'cpg', 'beta', 'p-value']
-            )"""
         # one hot encode gender and tissue type
         dset_col = self.all_methyl_age_df_t['dataset'].to_list()
         self.all_methyl_age_df_t = pd.get_dummies(self.all_methyl_age_df_t, columns=["gender", "dataset"])
@@ -72,9 +63,6 @@ class mutationClock:
         self.all_methyl_age_df_t['dataset'] = dset_col
         # cache :P
         self.matrixQTL_store = {}
-        # master feature matrix: samples X all unique mutation events with DNA_VAF as entries
-        # DEPRECATED
-        self.pivoted_mut_df = pd.DataFrame()
         # if tissue type is specified, subset the data to only this tissue type
         if tissue_type != "":
             self.all_methyl_age_df_t = self.all_methyl_age_df_t.loc[self.all_methyl_age_df_t['dataset'] == tissue_type, :]
@@ -157,7 +145,7 @@ class mutationClock:
                 ].assign(location=lambda df: df['chr'] + ':' + df['start'].astype(str))['location']
             .tolist()
             )
-        return {'pos_corr': pos_corr_locs, 'neg_corr': neg_corr_locs}
+        return pos_corr_locs, neg_corr_locs
         
     def _get_matrixQTL_sites(
         self,
@@ -178,33 +166,15 @@ class mutationClock:
             meqtl_df = pd.read_parquet(
                 os.path.join(self.matrix_qtl_dir, f"chr{chrom}_meqtl.parquet"),
                 columns=['#id', 'SNP', 'p-value', 'beta'])
+            # sort by p-value and beta magnitude
+            
             self.matrixQTL_store[chrom] = meqtl_df
         else:
             meqtl_df = self.matrixQTL_store[chrom]
         # get the meQTLs for this CpG
-        meqtls = meqtl_df.loc[meqtl_df['#id'] == cpg_id, :]
-        # get the max_meqtl_sites meQTLS with smallest p-value
-        meqtls = meqtls.nsmallest(max_meqtl_sites, 'p-value')
-        return {'matrixqtl_neg_beta': meqtls.loc[meqtls['beta'] < 0, 'SNP'].to_list(),
-                'matrixqtl_pos_beta': meqtls.loc[meqtls['beta'] > 0, 'SNP'].to_list()}
-            
-    def _get_db_sites(
-        self,
-        cpg_id: str
-        ) -> dict:
-        """
-        Return the meQTL locations in either of the databases for the given CpG
-        @ cpg_id: the CpG id
-        @ returns: a dict of the meQTLs from each db split by beta, 'chr:start'
-        """
-        godmc_metqtls = self.godmc_meqtl_df.loc[self.godmc_meqtl_df['cpg'] == cpg_id, :]
-        pos_godmc_meqtls = godmc_metqtls.loc[godmc_metqtls['beta_a1'] > 0, 'snp'].to_list()
-        neg_godmc_meqtls = godmc_metqtls.loc[godmc_metqtls['beta_a1'] < 0, 'snp'].to_list()
-        pancan_meqtls = self.pancan_meqtl_df.loc[self.pancan_meqtl_df['cpg'] == cpg_id, :]
-        pos_pancan_meqtls = pancan_meqtls.loc[pancan_meqtls['beta'] > 0, 'snp'].to_list()
-        neg_pancan_meqtls = pancan_meqtls.loc[pancan_meqtls['beta'] < 0, 'snp'].to_list()
-        return {'pos_godmc': pos_godmc_meqtls, 'neg_godmc': neg_godmc_meqtls,
-                'pos_pancan': pos_pancan_meqtls, 'neg_pancan': neg_pancan_meqtls}
+        neg_meqtls = meqtl_df.loc[(meqtl_df['#id'] == cpg_id) & (meqtl_df['beta'] < 0), :].nsmallest(max_meqtl_sites, 'p-value')['SNP'].to_list()
+        pos_meqtls = meqtl_df.loc[(meqtl_df['#id'] == cpg_id) & (meqtl_df['beta'] > 0), :].nsmallest(max_meqtl_sites, 'p-value')['SNP'].to_list()
+        return neg_meqtls, pos_meqtls
                 
     def get_predictor_site_groups(
         self, 
@@ -223,6 +193,7 @@ class mutationClock:
         @ nearby_window_size: the window size to be used to find nearby sites
         @ returns: list of genomic locations of the sites to be used as predictors in format chr:start
         """
+        predictor_site_groups = {}
         # get cpg_id's chromosome and start position
         try:
             chrom = self.illumina_cpg_locs_df.loc[
@@ -234,24 +205,43 @@ class mutationClock:
         # for some reason this cpg is not in illumina_cpg_locs_df, return empty dict
         except:
             return {}
-        # get dict of positions of most positively and negatively correlation CpG
-        corr_dict = self._select_correl_sites(cpg_id, chrom, num_correl_sites, train_samples)
+        
+        # get dict of positions of most positively and negatively correlated CpGs
+        predictor_site_groups['5000_pos_corr'], predictor_site_groups['5000_neg_corr'] = self._select_correl_sites(cpg_id, chrom, num_correl_sites=5000, train_samples=train_samples)
+        """predictor_site_groups['500_pos_corr'], predictor_site_groups['500_neg_corr'] = predictor_site_groups['10000_pos_corr'][:500], predictor_site_groups['10000_neg_corr'][:500]
+        predictor_site_groups['1000_pos_corr'], predictor_site_groups['1000_neg_corr'] = predictor_site_groups['10000_pos_corr'][:1000], predictor_site_groups['10000_neg_corr'][:1000]
+        predictor_site_groups['5000_pos_corr'], predictor_site_groups['5000_neg_corr'] = predictor_site_groups['10000_pos_corr'][:5000], predictor_site_groups['10000_neg_corr'][:5000]"""
+        
+        def extend(loc_list):
+            """Return the list of locations with each original loc extended out 250bp in each direction"""
+            extend_amount = 250
+            return [loc.split(':')[0] + ':' + str(int(loc.split(':')[1]) + i) for loc in loc_list for i in range(-extend_amount, extend_amount + 1)]
+        
+        # also extend out 250bp in each direction from each corr site
+        #predictor_site_groups['10000_pos_corr_ext'], predictor_site_groups['10000_neg_corr_ext'] = extend(predictor_site_groups['10000_pos_corr']), extend(predictor_site_groups['10000_neg_corr'])
+        predictor_site_groups['100_pos_corr_ext'], predictor_site_groups['100_neg_corr_ext'] = extend(predictor_site_groups['5000_pos_corr'][:100]), extend(predictor_site_groups['5000_neg_corr'][:100])
+        """predictor_site_groups['500_pos_corr_ext'], predictor_site_groups['500_neg_corr_ext'] = extend(predictor_site_groups['500_pos_corr']), extend(predictor_site_groups['500_neg_corr'])
+        predictor_site_groups['1000_pos_corr_ext'], predictor_site_groups['1000_neg_corr_ext'] = extend(predictor_site_groups['1000_pos_corr']), extend(predictor_site_groups['1000_neg_corr'])
+        predictor_site_groups['5000_pos_corr_ext'], predictor_site_groups['5000_neg_corr_ext'] = extend(predictor_site_groups['5000_pos_corr']), extend(predictor_site_groups['5000_neg_corr'])"""
+        
         # get sites (and cpg_id itself position) within nearby_window_size of cpg_id
-        very_nearby_site_locs = [chrom + ':' + str(start + i) for i in range(-int(50), int(50) + 1)]
-        nearby_site_locs = [chrom + ':' + str(start + i) for i in range(-int(nearby_window_size/2), int(nearby_window_size/2) + 1) if chrom + ':' + str(start + i) not in very_nearby_site_locs ]
-        # get sites from databases
-        """db_meqtl_locs = self._get_db_sites(cpg_id)"""
+        #predictor_site_groups['500_nearby'] = [chrom + ':' + str(start + i) for i in range(-int(250), int(250) + 1)]
+        #predictor_site_groups['5000_nearby'] = [chrom + ':' + str(start + i) for i in range(-int(2500), int(2500) + 1)]
+        predictor_site_groups['25000_nearby'] = [chrom + ':' + str(start + i) for i in range(-int(12500), int(12500) + 1)]
+        #predictor_site_groups['50000_nearby'] = [chrom + ':' + str(start + i) for i in range(-int(25000), int(25000) + 1)]
+        #predictor_site_groups['100000_nearby'] = [chrom + ':' + str(start + i) for i in range(-int(50000), int(50000) + 1)]
+        
+        #nearby_site_locs = [chrom + ':' + str(start + i) for i in range(-int(nearby_window_size/2), int(nearby_window_size/2) + 1) if chrom + ':' + str(start + i) not in very_nearby_site_locs ]
+        
         # get sites from matrixQTL 
-        matrix_meqtl_locs = self._get_matrixQTL_sites(cpg_id, chrom, max_meqtl_sites)
-        return {
-            'pos_corr': corr_dict['pos_corr'], 'neg_corr': corr_dict['neg_corr'],
-            'nearby': nearby_site_locs, 'very_nearby' : very_nearby_site_locs, 
-            'matrixqtl_neg_beta': matrix_meqtl_locs['matrixqtl_neg_beta'], 
-            'matrixqtl_pos_beta': matrix_meqtl_locs['matrixqtl_pos_beta']}
-        """, 
-            'pos_godmc': db_meqtl_locs['pos_godmc'], 'neg_godmc': db_meqtl_locs['neg_godmc'],
-            'pos_pancan': db_meqtl_locs['pos_pancan'], 'neg_pancan': db_meqtl_locs['neg_pancan']
-            }"""
+        predictor_site_groups['100_matrixqtl_neg_beta'], predictor_site_groups['100_matrixqtl_pos_beta'] = self._get_matrixQTL_sites(cpg_id, chrom, max_meqtl_sites=100)
+        #predictor_site_groups['10_matrixqtl_neg_beta'], predictor_site_groups['10_matrixqtl_pos_beta'] = predictor_site_groups['5000_matrixqtl_neg_beta'][:10], predictor_site_groups['5000_matrixqtl_pos_beta'][:10]
+        # predictor_site_groups['100_matrixqtl_neg_beta'], predictor_site_groups['100_matrixqtl_pos_beta'] = predictor_site_groups['5000_matrixqtl_neg_beta'][:100], predictor_site_groups['5000_matrixqtl_pos_beta'][:100]
+        #predictor_site_groups['500_matrixqtl_neg_beta'], predictor_site_groups['500_matrixqtl_pos_beta'] = predictor_site_groups['5000_matrixqtl_neg_beta'][:500], predictor_site_groups['5000_matrixqtl_pos_beta'][:500]
+        #predictor_site_groups['1000_matrixqtl_neg_beta'], predictor_site_groups['1000_matrixqtl_pos_beta'] = predictor_site_groups['5000_matrixqtl_neg_beta'][:1000], predictor_site_groups['5000_matrixqtl_pos_beta'][:1000]
+        
+        return predictor_site_groups
+    
     
     def _create_training_mat(
         self, 
@@ -302,7 +292,7 @@ class mutationClock:
                 mut_status = mut_status.reindex(y.index, fill_value=0)
                 agg_mut_status = mut_status.sum(axis=1)
                 aggregated_muts.append(agg_mut_status)
-            # create dataframe from binned_muts with columns pred_type
+            # create dataframe from aggreated mutations with columns pred_type
             X = pd.concat(aggregated_muts, axis=1)
             X.columns = predictor_groups.keys()
             return X
@@ -445,14 +435,14 @@ class mutationClock:
                 })
         return result_df
         
-    
     def feature_informations(self, 
         cpg_id: str,
         train_samples: list,
         num_correl_sites: int,
         max_meqtl_sites: int,
         nearby_window_size: int,
-        aggregate: bool = True,
+        aggregate: str = 'True',
+        binarize: bool = False,
         feat_store: str = ""
         ) -> list:
         """
@@ -471,50 +461,31 @@ class mutationClock:
                 cpg_id, train_samples, num_correl_sites,
                 max_meqtl_sites, nearby_window_size
                 )
-        else: # read from saved pkl file
-            predictor_groups_fn = os.path.join(feat_store, f"{cpg_id}.pkl")
-            # open the file
-            predictor_groups = pickle.load(open(predictor_groups_fn, 'rb'))
+            pred_group_fn = os.path.join(self.output_dir, f"{cpg_id}_pred_groups.pkl")
+            pickle.dump(predictor_groups, open(pred_group_fn, "wb"))
+        else: # read from saved pkl file if can
+            try:
+                predictor_groups_fn = os.path.join(feat_store, f"{cpg_id}_pred_groups.pkl")
+                # open the file
+                predictor_groups = pickle.load(open(predictor_groups_fn, 'rb'))
+            except:
+                predictor_groups = self.get_predictor_site_groups(
+                    cpg_id, train_samples, num_correl_sites,
+                    max_meqtl_sites, nearby_window_size
+                    )
+                pred_group_fn = os.path.join(self.output_dir, f"{cpg_id}_pred_groups.pkl")
+                pickle.dump(predictor_groups, open(pred_group_fn, "wb"))
         if predictor_groups == {}:
             return []
+        
         # create the training matrix
         X, y = self._create_training_mat(
             cpg_id, predictor_groups, train_samples, 
-            aggregate = aggregate
+            aggregate = aggregate, binarize=binarize
             )
-        # calculate the mutual information
-        mi = self.mutual_info(X, covariate = y)
+        # calculate the mutual information btwn each feature and the target methylation
+        mi = self.mutual_info(X, covariate = y, bins=10)
         return mi
-        
-    def save_all_predictor_groups(
-        self, 
-        num_correl_sites: int,
-        max_meqtl_sites: int,
-        nearby_window_size: int,
-        out_dir: str,
-        cpg_ids: list = [],
-        train_samples: list = [],
-        ) -> None:
-        """
-        Save the predictor sites for each CpG to be later loaded
-        @ num_correl_sites: the number of corr sites to be used as predictors
-        @ max_meqtl_sites: the maximum number of matrixQTL sites to be used as predictors
-        @ nearby_window_size: the window size to be used for nearby sites
-        @ cpg_ids: the list of CpGs to be preprocessed
-        @ train_samples: the list of samples to be used (only matter for correl sites)
-        """
-        # make the output directory if it doesn't exist
-        if not os.path.exists(out_dir):
-            os.makedirs(out_dir)
-        for i, cpg_id in enumerate(cpg_ids):
-            predictor_groups = self.get_predictor_site_groups(
-                cpg_id, train_samples, num_correl_sites,
-                max_meqtl_sites, nearby_window_size
-                )
-            with open(os.path.join(out_dir, f"{cpg_id}.pkl"), 'wb+') as f:
-                pickle.dump(predictor_groups, f)
-            if i % 10 == 0:
-                print(f"Finished {i/len(cpg_ids)}% of CpGs")
     
     def train_predictor(
         self, 
@@ -525,7 +496,9 @@ class mutationClock:
         nearby_window_size: int,
         aggregate: str,
         binarize: bool = False,
-        scramble: bool = False
+        scramble: bool = False,
+        feat_store: str = "",
+        do_prediction: bool = False
         ):
         """
         Build the predictor for one CpG
@@ -539,27 +512,49 @@ class mutationClock:
         @ scramble: whether to also train baseline models (same predictor sites but rows switched)
         """
         # get the sites to be used as predictors
-        predictor_groups = self.get_predictor_site_groups(
-            cpg_id, train_samples, num_correl_sites,
-            max_meqtl_sites, nearby_window_size
-            )
+        if feat_store == "": # not reading from saved pkl file
+            # get the sites to be used as predictors
+            predictor_groups = self.get_predictor_site_groups(
+                cpg_id, train_samples, num_correl_sites,
+                max_meqtl_sites, nearby_window_size
+                )
+            pred_group_fn = os.path.join(self.output_dir, f"{cpg_id}_pred_groups.pkl")
+            pickle.dump(predictor_groups, open(pred_group_fn, "wb"))
+        else: # read from saved pkl file if can
+            try:
+                predictor_groups_fn = os.path.join(feat_store, f"{cpg_id}_pred_groups.pkl")
+                # open the file
+                predictor_groups = pickle.load(open(predictor_groups_fn, 'rb'))
+                predictor_groups = {k: predictor_groups[k] for k in ['100_matrixqtl_neg_beta', '100_matrixqtl_pos_beta', '5000_pos_corr', '5000_neg_corr',
+                                                                     '100_pos_corr_ext', '100_neg_corr_ext', '25000_nearby']}
+            except:
+                predictor_groups = self.get_predictor_site_groups(
+                    cpg_id, train_samples, num_correl_sites,
+                    max_meqtl_sites, nearby_window_size
+                    )
+                pred_group_fn = os.path.join(self.output_dir, f"{cpg_id}_pred_groups.pkl")
+                pickle.dump(predictor_groups, open(pred_group_fn, "wb"))
         if predictor_groups == {}:
-            return
-        # predictor groups to pkl file
-        pred_group_fn = os.path.join(self.output_dir, f"{cpg_id}_pred_groups.pkl")
-        pickle.dump(predictor_groups, open(pred_group_fn, "wb")) 
+            return []
+        
         # create the training matrix
         X, y = self._create_training_mat(
             cpg_id, predictor_groups, train_samples, 
             aggregate = aggregate, binarize = binarize
             )
         # train one elasticNet model to predict y from X
-        model = ElasticNetCV(
-            cv=5, random_state=0, max_iter=10000, selection = 'random', n_jobs=-1
-            )
+        # model = ElasticNetCV(cv=5, random_state=0, max_iter=10000, selection = 'random', n_jobs=-1)
+        model = LinearRegression()
+        # model = RandomForestRegressor(n_estimators=100, random_state=0, n_jobs=-1)
         model.fit(X, y)
-        model_fn = os.path.join(self.output_dir, f"{cpg_id}.pkl")
+        model_fn = os.path.join(self.output_dir, f"{cpg_id}_model.pkl")
         pickle.dump(model, open(model_fn, "wb"))
+        if do_prediction:
+            X, y = self._create_training_mat(
+                cpg_id, predictor_groups, self.all_methyl_age_df_t.index, 
+                aggregate = aggregate, binarize = binarize
+                )
+            y_pred = model.predict(X)
         # if scramble, randomly shuffle the mutation rows of X, but not covariate
         if scramble:
             # shuffle rows of the mutation columns
@@ -580,8 +575,21 @@ class mutationClock:
             scrambled_X = pd.concat([scrambled_X, covariate_df], axis = 1)
             # train again again but with scrambled X
             model.fit(scrambled_X, y)
-            model_fn = os.path.join(self.output_dir, f"{cpg_id}_scrambled.pkl")
+            model_fn = os.path.join(self.output_dir, f"{cpg_id}_scrambled_model.pkl")
             pickle.dump(model, open(model_fn, "wb"))
+            if do_prediction:
+                X, y = self._create_training_mat(
+                    cpg_id, predictor_groups, self.all_methyl_age_df_t.index, 
+                    aggregate = aggregate, binarize = binarize
+                    )
+                y_pred_scrambled = model.predict(X)
+        # combine predictions if do_prediction
+        if do_prediction:
+            if scramble:
+                return pd.DataFrame({cpg_id: y_pred, cpg_id + "_scrambled": y_pred_scrambled}, index=self.all_methyl_age_df_t.index)
+            else:
+                return pd.DataFrame({cpg_id: y_pred}, index=self.all_methyl_age_df_t.index)
+        
         
     def predict_cpg(
         self, 
@@ -604,6 +612,8 @@ class mutationClock:
         # get the predictor model and predictor sites
         model = pickle.load(open(model_fn, "rb"))
         pred_groups = pickle.load(open(pred_group_fn, "rb"))
+        pred_groups = {k: pred_groups[k] for k in ['100_matrixqtl_neg_beta', '100_matrixqtl_pos_beta', '5000_pos_corr', '5000_neg_corr',
+                                                    '100_pos_corr_ext', '100_neg_corr_ext', '25000_nearby']}
         # create the X matrix
         X, _ = self._create_training_mat(cpg_id, pred_groups, samples, aggregate, binarize)
         # predict the methylation levels
@@ -637,15 +647,15 @@ class mutationClock:
         for i, cpg_id in enumerate(cpg_ids):
             # wether to use the baseline scrambled model or not
             if scrambled:
-                model_fn = os.path.join(model_dir, f"{cpg_id}_scrambled.pkl")
+                model_fn = os.path.join(model_dir, f"{cpg_id}_scrambled_modelRF.pkl")
             else:
-                model_fn = os.path.join(model_dir, f"{cpg_id}.pkl")
+                model_fn = os.path.join(model_dir, f"{cpg_id}_modelRF.pkl")
             pred_group_fn = os.path.join(model_dir, f"{cpg_id}_pred_groups.pkl")
             predictions.append(
                 self.predict_cpg(cpg_id, samples, model_fn, pred_group_fn, aggregate, binarize)
                 )
-            """if i % 10 == 0:
-                print(f"Finished {100*i/len(cpg_ids)}% of CpGs", flush=True)"""
+            if i % 100 == 0:
+                print(f"Finished {100*i/len(cpg_ids)}% of CpGs", flush=True)
         # concatenate the predictions into a single df
         pred_methyl_df = pd.concat(predictions, axis=1)
         return pred_methyl_df
@@ -740,9 +750,53 @@ class mutationClock:
             # write r2 and mae in upper left corner
             axes[i].text(.01, .99, f"R2 = {results_df.loc[i, 'r2']:.3f}", ha='left', va='top',  transform=axes[i].transAxes )
             axes[i].text(.01, .9, f"MAE = {results_df.loc[i, 'mae']:.3f}", ha='left', va='top',  transform=axes[i].transAxes)
-            
-            
-            
+    
+    def choose_cpgs_to_train(
+        self,
+        training_samples: list, 
+        mi_df: pd.DataFrame,
+        bin_size: int = 10000
+        ) -> pd.DataFrame:
+        """
+        Based on count of mutations nearby and mutual information, choose cpgs to train models for
+        @ training_samples: list of samples to train on
+        @ mi_df: dataframe of mutual information
+        @ bin_size: size of bins to count mutations in
+        @ returns: cpg_pred_priority, dataframe of cpgs with priority for prediction
+        """
+        def mutation_bin_count(all_mut_w_age_df, training_samples):
+            # count the number of mutations in each 10kb bin across all training samples
+            mut_bin_counts_dfs = []
+            for chrom in all_mut_w_age_df['chr'].unique():
+                chr_df = all_mut_w_age_df.loc[(all_mut_w_age_df['chr'] == chrom) & (all_mut_w_age_df['case_submitter_id'].isin(training_samples))]
+                counts, edges = np.histogram(chr_df['start'], bins = np.arange(0, chr_df['start'].max(), bin_size))
+                one_mut_bin_counts_df = pd.DataFrame({'counts': counts, 'edges': edges[:-1]})
+                one_mut_bin_counts_df['chr'] = chrom
+                mut_bin_counts_dfs.append(one_mut_bin_counts_df)
+            mut_bin_counts_df = pd.concat(mut_bin_counts_dfs, axis = 0)
+            mut_bin_counts_df.reset_index(inplace=True, drop=True)
+            return mut_bin_counts_df
+        
+        def round_down(num):
+            """
+            round N down to nearest bin_size
+            """
+            return num - (num % bin_size)
+        
+        # count mutations in each bin
+        mutation_bin_counts_df = mutation_bin_count(self.all_mut_w_age_df, training_samples)
+        # get count for each cpg
+        illumina_cpg_locs_w_methyl_df = self.illumina_cpg_locs_df.loc[self.illumina_cpg_locs_df['#id'].isin(self.all_methyl_age_df_t.columns)]
+        illumina_cpg_locs_w_methyl_df.loc[:,'rounded_start'] = illumina_cpg_locs_w_methyl_df.loc[:, 'start'].apply(round_down)
+        cpg_pred_priority = illumina_cpg_locs_w_methyl_df.merge(mutation_bin_counts_df, left_on=['chr', 'rounded_start'], right_on=['chr', 'edges'], how='left')
+        # get mi for each cpg
+        cpg_pred_priority = cpg_pred_priority.merge(mi_df, left_on='#id', right_index=True, how='left')
+        # sort by count and mi
+        cpg_pred_priority.sort_values(by=['counts', 'mutual_info'], ascending=[False, False], inplace=True)
+        # reset index
+        cpg_pred_priority.reset_index(inplace=True, drop=True)
+        return cpg_pred_priority
+    
     def driver(
         self, 
         do: str,
@@ -754,7 +808,8 @@ class mutationClock:
         aggregate: str = "False",
         binarize: bool = False,
         feat_store: str = "",
-        scramble: bool = False
+        scramble: bool = False,
+        do_prediction: bool = False
         ):
         """
         Train the predictor for all CpGs
@@ -769,14 +824,21 @@ class mutationClock:
             train_samples = list(set(train_samples) & set(self.all_methyl_age_df_t.index.to_list()))
         # do one of 3 options
         if do == 'train':
+            predicted_methyl = []
             # for each cpg, train the predictor and save trained model
             for i, cpg_id in enumerate(cpg_ids):
-                self.train_predictor(
+                preds = self.train_predictor(
                     cpg_id, train_samples, num_correl_sites, max_meqtl_sites,
-                    nearby_window_size, aggregate, binarize, scramble
+                    nearby_window_size, aggregate, binarize, scramble, feat_store,
+                    do_prediction
                     )
+                if do_prediction:
+                    predicted_methyl.append(preds)
                 if i % 10 == 0:
                     print(f"Finished {100*i/len(cpg_ids)}% of CpGs", flush=True)
+            if do_prediction:
+                predicted_methyl_df = pd.concat(predicted_methyl, axis=1)
+                predicted_methyl_df.to_parquet(os.path.join(self.output_dir, f'predicted_methyl_{num_correl_sites}correl_{max_meqtl_sites}matrixQtl_{nearby_window_size}nearby_{aggregate}Aggregate_{binarize}binarize_{scramble}Scrambled_best_mi_linreg.parquet'))
         elif do == 'evaluate': # evaluate
             result_dfs = []
             for i, cpg_id in enumerate(cpg_ids):
@@ -791,20 +853,19 @@ class mutationClock:
                     print(f"Finished {100*i/len(cpg_ids)}% of CpGs", flush=True)
             result_df = pd.concat(result_dfs)
             return result_df
-        elif do == 'mutual_info':
-            mis = {}
+        elif do == 'eval_features':
+            feat_info = {}
             for i, cpg_id in enumerate(cpg_ids):
-                mis[cpg_id] = self.feature_informations(
-                    cpg_id, train_samples, num_correl_sites,
-                    max_meqtl_sites, nearby_window_size, aggregate,
-                    feat_store
+                feat_info[cpg_id] = self.feature_informations(
+                    cpg_id, train_samples, num_correl_sites, max_meqtl_sites,
+                    nearby_window_size, aggregate, binarize, feat_store
                     )
-                if i % 100 == 0:
-                    print(f"Finished {i/len(cpg_ids)}% of CpGs", flush=True)
+                if i % 10 == 0:
+                    print(f"Finished {(i*100)/len(cpg_ids)}% of CpGs", flush=True)
             # remove any elements that are length 0
-            mis = {k: v for k, v in mis.items() if len(v) > 0}
-            mis_df = pd.DataFrame(data = mis)
-            return mis_df
+            feat_info = {k: v for k, v in feat_info.items() if len(v) > 0}
+            feat_info_df = pd.DataFrame(data = feat_info)
+            return feat_info_df
         else:
-            print("'do' must be one of 'train', 'evaluate', 'mutual_info'")
+            print("'do' must be one of 'train', 'evaluate', 'eval_features'")
             sys.exit(1)
