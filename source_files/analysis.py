@@ -67,7 +67,11 @@ def compare_mf_mutated_sample_vs_avg(mutation_in_measured_cpg_df, out_dir, all_m
     p = sns.kdeplot(data=to_plot_df, x='Methylation Fraction', hue='Type', fill=True, common_norm=False, clip=[0,1], palette = ['steelblue', 'maroon', 'grey'], ax=axes, legend=False)
 
     fig.savefig(os.path.join(out_dir, '{}_methylation_fraction_comparison.png'.format(dataset)))
-
+    # seperately save kde of just mutated, just non mutated, and just site of no CpG mutation
+    # set transparent background
+    fig2, axes2 = plt.subplots(dpi=200)
+    p2 = sns.kdeplot(data=to_plot_df[to_plot_df['Type'] == 'Non mutated CpGs'], x='Methylation Fraction', fill=True, common_norm=False, clip=[0,1], palette = ['grey'], ax=axes2, legend=False)
+    
     # hexbin plot of mutation_in_measured_cpg_df['methyl_fraction'] vs mutation_in_measured_cpg_df['avg_methyl_frac']
     fig, axes = plt.subplots(dpi=200)
     p3 = axes.hexbin(mutation_in_measured_cpg_df['avg_methyl_frac'], mutation_in_measured_cpg_df['methyl_fraction'], gridsize=50, bins='log', cmap='inferno')
@@ -182,12 +186,12 @@ def main(illumina_cpg_locs_df, out_dir, all_mut_df, all_methyl_df_t, all_meta_df
     os.makedirs(os.path.join(out_dir, "bootstrap"), exist_ok=True)
 
     # do mutation analysis 
-    mut_in_measured_cpg_df = plot_mutations(all_mut_df, all_meta_df, dataset_names_list, out_dir, illumina_cpg_locs_df, all_methyl_df_t)
+    #mut_in_measured_cpg_df = plot_mutations(all_mut_df, all_meta_df, dataset_names_list, out_dir, illumina_cpg_locs_df, all_methyl_df_t)
     # subset to only C>T mutations
     # TODO: remove this return if possible
     
     mut_in_measured_cpg_w_methyl_age_df, all_methyl_age_df_t = methylation_fraction_comparison(all_mut_df, illumina_cpg_locs_df, all_methyl_df_t, out_dir, all_meta_df, age_bin_size = age_bin_size)
 
-    return mut_in_measured_cpg_w_methyl_age_df, all_methyl_age_df_t
+    #return mut_in_measured_cpg_w_methyl_age_df, all_methyl_age_df_t
     
     

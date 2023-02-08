@@ -38,6 +38,42 @@ def drop_cpgs_by_chrom(all_methyl_df_t, chroms_to_drop_l, illumina_cpg_locs_df):
     cols_to_keep = set(all_methyl_df_t.columns.to_list()) - set(cpgs_to_drop.to_list())
     return all_methyl_df_t.loc[:,cols_to_keep]
 
+def mutual_info(
+    X: pd.DataFrame,
+    covariate: pd.Series, 
+    bins: int = 10
+    ) -> pd.Series:
+    '''
+    Estimates mutual information between X (samples x CpG sites, samples x features, etc.) /
+    and some covariate. Uses methylation in self.all_methyl_age_df_t
+    @ X: samples X something matrix
+    @ covariate: pandas series of covariate to use
+    @ bins: number of bins to use for discretization
+    '''
+    # transpose X so can be input in usual dimension
+    X = X.T
+    assert len(covariate.index) == len(X.columns), \
+        'dimensions of covariate are %s, but X matrix are %s' \
+            %  (covariate.shape, X.shape)
+    def shan_entropy(c): # inner func for entropy
+        c_normalized = c / float(np.sum(c))
+        c_normalized = c_normalized[np.nonzero(c_normalized)]
+        H = -sum(c_normalized* np.log2(c_normalized))  
+        return H
+    MI = []
+    for col in X.values:
+        nas = np.logical_and(~np.isnan(col), ~np.isnan(covariate))
+        c_XY = np.histogram2d(col[nas], covariate[nas],bins)[0]
+        c_X = np.histogram(col[nas], bins)[0]
+        c_Y = np.histogram(covariate[nas], bins)[0]
+        H_X = shan_entropy(c_X)
+        H_Y = shan_entropy(c_Y)
+        H_XY =shan_entropy(c_XY)
+        MI.append(H_X + H_Y - H_XY)
+    MI = pd.Series(MI, index=X.index)
+    return MI
+
+
 def quantileNormalize(methyl_df):
     """ 
     From https://github.com/ShawnLYU/Quantile_Normalizeor
