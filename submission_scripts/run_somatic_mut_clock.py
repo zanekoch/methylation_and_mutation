@@ -1,6 +1,6 @@
 import sys
 sys.path.append('/cellar/users/zkoch/methylation_and_mutation/source_files')
-import get_data, utils, somatic_mut_clock
+import get_data, utils, methylation_pred, mutation_features
 import argparse
 import os
 import pandas as pd
@@ -40,7 +40,9 @@ def read_icgc_data() -> tuple:
     icgc_mi_df.sort_values(by='mutual_info', ascending=False, inplace=True)
     return icgc_mut_w_age_df, illumina_cpg_locs_df, icgc_methyl_age_df_t, icgc_mi_df
 
-def read_tcga_data(tissue_type) -> tuple:
+def read_tcga_data(
+    dataset: str
+    ) -> tuple:
     print("reading in data")
     # read in data
     out_dir = "/cellar/users/zkoch/methylation_and_mutation/output_dirs/output_010423"
@@ -57,8 +59,8 @@ def read_tcga_data(tissue_type) -> tuple:
     # add ages to all_methyl_df_t
     all_mut_w_age_df, all_methyl_age_df_t = utils.add_ages_to_mut_and_methyl(all_mut_df, all_meta_df, all_methyl_df_t)
     mi_df = pd.read_parquet('/cellar/users/zkoch/methylation_and_mutation/dependency_files/mutual_informations/tcga_combinedMI_top10MI.parquet')
-    if tissue_type != "":
-        mi_df = mi_df[tissue_type]
+    if dataset != "":
+        mi_df = mi_df[dataset]
     else:
         mi_df = mi_df['combined']
     mi_df = mi_df.to_frame()
@@ -66,115 +68,87 @@ def read_tcga_data(tissue_type) -> tuple:
     #mi_df.sort_values(by='mutual_info', ascending=False, inplace=True)
     return all_mut_w_age_df, illumina_cpg_locs_df, all_methyl_age_df_t, mi_df
 
+def run(
+    do: str,
+    consortium: str,
+    dataset: str, 
+    cross_val_num: int,
+    out_dir: str, 
+    start_top_cpgs: int, 
+    end_top_cpgs: int,
+    aggregate: str
+    ) -> None:
+    """
+    Driver function for generating features or training models
+    @ do: str, either "feat_gen" or "train_models"
+    @ consortium: str, either "tcga" or "icgc"
+    @ dataset: str, either "BRCA", "COAD", ...
+    @ train_samples: list of samples to train on
+    @ test_samples: list of samples to test on
+    @ out_dir: directory to save output to
+    @ start_top_cpgs: start of range of top cpgs to use
+    @ end_top_cpgs: end of range of top cpgs to use
+    @ aggregate: feature aggregation strategy True, False, or Both
+    @ returns: None
+    """
+    if consortium == "ICGC":
+        all_mut_w_age_df, illumina_cpg_locs_df, all_methyl_age_df_t, mi_df = read_icgc_data()
+        matrix_qtl_dir = "/cellar/users/zkoch/methylation_and_mutation/output_dirs/icgc_muts_011423"
+    elif consortium == "TCGA":
+        all_mut_w_age_df, illumina_cpg_locs_df, all_methyl_age_df_t, mi_df = read_tcga_data(dataset)
+        matrix_qtl_dir = "/cellar/users/zkoch/methylation_and_mutation/data/matrixQtl_data/muts"
+
+    if do == "feat_gen":
+        # create mutation feature generating object
+        mut_feat = mutation_features.mutationFeatures(
+            all_mut_w_age_df = all_mut_w_age_df, illumina_cpg_locs_df = illumina_cpg_locs_df, 
+            all_methyl_age_df_t = all_methyl_age_df_t, out_dir = out_dir, consortium = consortium,
+            dataset = dataset, cross_val_num = cross_val_num, 
+            matrix_qtl_dir = matrix_qtl_dir
+            )
+        # choose which CpGs to generate features for, comes back sorted
+        cpg_pred_priority = mut_feat.choose_cpgs_to_train(mi_df = mi_df, bin_size=20000, sort_by = ['mutual_info', 'count'])
+        chosen_cpgs = cpg_pred_priority.iloc[start_top_cpgs: end_top_cpgs]['#id'].to_list()
+        # run the feature generation
+        mut_feat.create_all_feat_mats(
+            cpg_ids = chosen_cpgs, aggregate=aggregate,
+            num_correl_sites=5000, num_correl_ext_sites=100, 
+            max_meqtl_sites=100, nearby_window_size=25000
+            )
+        mut_feat.save_mutation_features(
+            start_top_cpgs = start_top_cpgs, cross_val_num = cross_val_num
+            )
 
 def main():
     # parse arguments 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--dataset', type=str, help='TCGA or ICGC')
-    parser.add_argument('--do', type=str, help='train, evaluate, predict, or feature information')
-    parser.add_argument('--out_dir', type=str, help='TCGA or ICGC')    
-    parser.add_argument('--num_correl_sites', type=int, help='number of correl sites to use for prediction')
-    parser.add_argument('--max_meqtl_sites', type=int, help='max_meqtl_sites')
-    parser.add_argument('--nearby_window_size', type=int, help='nearby_window_size')
-    parser.add_argument('--start_top_cpgs', type=int, help='start top cpgs', default=0)
-    parser.add_argument('--num_top_cpgs', type=int, help='num_top_cpgs')
-    parser.add_argument('--samples_fn', type=str, help='path to file with samples to use', default="")
-    parser.add_argument('--aggregate', type=str, help='aggregate')
-    parser.add_argument('--binarize', type=str, help='binarize')
-    parser.add_argument('--scramble', type=str, help='scramble')
-    parser.add_argument('--trained_model_dir', type=str, help='train_model_dir', default="")
-    parser.add_argument('--bin_size', type=int, help='bin size', default="")
-    parser.add_argument('--tissue_type', type=str, help='subset to only train models for one tissue', default="")
-    parser.add_argument('--feat_store', type=str, help='optional feature store', default="")
-    parser.add_argument('--do_prediction', type=str, help='optional prediction while training', default="")
-    
+    parser.add_argument('--do', type=str, help='feat_gen or train_models')
+    parser.add_argument('--consortium', type=str, help='TCGA or ICGC')
+    parser.add_argument('--dataset', type=str, help='tissue type to run, e.g. BRCA, COAD, ...', default="")
+    parser.add_argument('--cross_val', type=int, help='cross val fold number, assuming 5')
+    parser.add_argument('--out_dir', type=str, help='path to output directory')
+    parser.add_argument('--start_top_cpgs', type=int, help='index of top cpgs to start with')
+    parser.add_argument('--end_top_cpgs', type=int, help='index of top cpgs to end with')
+    parser.add_argument('--aggregate', type=str, help='False, True, or Both')
     # parse arguments
     args = parser.parse_args()
-    dataset = args.dataset
     do = args.do
+    consortium = args.consortium
+    dataset = args.dataset
+    cross_val_num = args.cross_val
     out_dir = args.out_dir
-    num_correl_sites = args.num_correl_sites
-    max_meqtl_sites = args.max_meqtl_sites
-    nearby_window_size = args.nearby_window_size
     start_top_cpgs = args.start_top_cpgs
-    num_top_cpgs = args.num_top_cpgs
+    end_top_cpgs = args.end_top_cpgs
     aggregate = args.aggregate
-    binarize = True if  args.binarize == "True" else False
-    scramble = True if args.scramble == "True" else False
-    do_prediction = True if args.do_prediction == "True" else False
-    samples_fn = args.samples_fn
-    trained_model_dir = args.trained_model_dir
-    tissue_type = args.tissue_type
-    feat_store = args.feat_store
-    bin_size = args.bin_size
-
-    # if out_dir doesn't exist, create it
-    if not os.path.exists(out_dir):
-        os.makedirs(out_dir)
-    # print all the arguments
-    print("dataset: ", dataset, "do: ", do, "out_dir: ", out_dir, "num_correl_sites: ", num_correl_sites, "max_meqtl_sites: ", max_meqtl_sites, "nearby_window_size: ", nearby_window_size, "start_top_cpgs: ", start_top_cpgs, "num_top_cpgs: ", num_top_cpgs, "aggregate: ", aggregate, "binarize: ", binarize, "scramble: ", scramble, "samples_fn: ", samples_fn, "trained_model_dir: ", trained_model_dir, "bin_size: ", bin_size, "tissue_type: ", tissue_type)
-    # read in data
-    if dataset == "TCGA":
-        all_mut_w_age_df, illumina_cpg_locs_df, all_methyl_age_df_t, mi_df = read_tcga_data(tissue_type)
-        matrix_qtl_dir = "/cellar/users/zkoch/methylation_and_mutation/data/matrixQtl_data/muts"
-    elif dataset == "ICGC":
-        all_mut_w_age_df, illumina_cpg_locs_df, all_methyl_age_df_t, mi_df = read_icgc_data()
-        matrix_qtl_dir = "/cellar/users/zkoch/methylation_and_mutation/output_dirs/icgc_muts_011423"
-    # create a mutationClock object with  data
-    mut_clock = somatic_mut_clock.mutationClock(
-        all_mut_w_age_df = all_mut_w_age_df, 
-        illumina_cpg_locs_df = illumina_cpg_locs_df, 
-        all_methyl_age_df_t = all_methyl_age_df_t,
-        output_dir = out_dir,
-        tissue_type = tissue_type, 
-        matrix_qtl_dir = matrix_qtl_dir
+    print(f"running {do} {consortium} {dataset} and outputting to {out_dir}")
+    # run 
+    run(
+        do = do, consortium = consortium, dataset = dataset, cross_val_num = cross_val_num,
+        out_dir = out_dir, start_top_cpgs = start_top_cpgs,
+        end_top_cpgs = end_top_cpgs, aggregate = aggregate
         )
-    if samples_fn != "": # if samples specifies get list
-        with open(samples_fn, 'r') as f:
-            samples = f.read().splitlines()
-    else: # otherwise use this tissue's samples
-        samples = mut_clock.all_methyl_age_df_t.index.values.tolist()
-    print("Got data, now training and evaluating")
-    # choose which CpGs to train model for
-    cpg_pred_priority = mut_clock.choose_cpgs_to_train(training_samples = samples, mi_df = mi_df, bin_size = 10000)
-    chosen_cpgs = cpg_pred_priority.iloc[start_top_cpgs:start_top_cpgs + num_top_cpgs]['#id'].values
+        
 
-    # predict using trained models, train models and dump, or evaluate
-    if do == 'predict':
-        predicted_methyl = mut_clock.predict_all_cpgs(
-            cpg_ids = chosen_cpgs, samples = samples, 
-            model_dir = trained_model_dir, aggregate = aggregate, 
-            binarize = binarize, scrambled = scramble
-            )
-        predicted_methyl.to_parquet(
-            os.path.join(out_dir, f"predicted_methyl_{dataset}_{num_correl_sites}correl_{max_meqtl_sites}matrixQtl_{nearby_window_size}nearby_{start_top_cpgs}startTopCpGs_{num_top_cpgs}numCpGs_{aggregate}Aggregate_{binarize}binarize_{bin_size}binSize_{scramble}ScrambledRF.parquet")
-            )
-        print(
-            f"Done, wrote results to predicted_methyl_{dataset}_{num_correl_sites}correl_{max_meqtl_sites}matrixQtl_{nearby_window_size}nearby_{start_top_cpgs}startTopCpGs_{num_top_cpgs}numCpGs_{aggregate}Aggregate_{binarize}binarize_{bin_size}binSize_{scramble}ScrambledRF.parquet"
-            )
-    else: # evaluate or train
-        result_df = mut_clock.driver(
-            do = do, num_correl_sites = num_correl_sites, max_meqtl_sites = max_meqtl_sites,
-            nearby_window_size = nearby_window_size, cpg_ids = chosen_cpgs, 
-            train_samples = samples, aggregate = aggregate, binarize = binarize, 
-            feat_store = feat_store, scramble = scramble, do_prediction = do_prediction
-            )
-        if do == "evaluate":
-            result_df.to_parquet(
-                os.path.join(out_dir, f"evaluate_results_{dataset}_{num_correl_sites}correl_{max_meqtl_sites}matrixQtl_{nearby_window_size}nearby_{start_top_cpgs}startTopCpGs_{num_top_cpgs}numCpGs_{aggregate}Aggregate_{binarize}binarize_{bin_size}binSize.parquet")
-                )
-            print(
-                f"Done, wrote results to evaluate_results_{dataset}_{num_correl_sites}correl_{max_meqtl_sites}matrixQtl_{nearby_window_size}nearby_{start_top_cpgs}startTopCpGs_{num_top_cpgs}numCpGs_{aggregate}Aggregate_{binarize}binarize_{bin_size}binSize.parquet"
-                )
-        elif do == 'eval_features':
-            result_df.to_parquet(
-                os.path.join(out_dir, f"feat_evaluate_results_{dataset}_{num_correl_sites}correl_{max_meqtl_sites}matrixQtl_{nearby_window_size}nearby_{start_top_cpgs}startTopCpGs_{num_top_cpgs}numCpGs_{aggregate}Aggregate_{binarize}binarize_{bin_size}binSize.parquet")
-                )
-            print(
-                f"Done, wrote results to feat_evaluate_results_{dataset}_{num_correl_sites}correl_{max_meqtl_sites}matrixQtl_{nearby_window_size}nearby_{start_top_cpgs}startTopCpGs_{num_top_cpgs}numCpGs_{aggregate}Aggregate_{binarize}binarize_{bin_size}binSize.parquet"
-                )
-        else: # train
-            print(f"Dumped trained models and predictions to {out_dir}")
         
 
 if __name__ == "__main__":

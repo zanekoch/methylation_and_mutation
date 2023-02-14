@@ -17,9 +17,9 @@ class mutationFeatures:
         illumina_cpg_locs_df: pd.DataFrame, 
         all_methyl_age_df_t: pd.DataFrame,
         out_dir: str,
+        consortium: str,
         dataset: str,
-        train_samples: list,
-        test_samples: list,
+        cross_val_num: int,
         matrix_qtl_dir: str
         ):
         self.all_mut_w_age_df = all_mut_w_age_df
@@ -27,14 +27,18 @@ class mutationFeatures:
         self.all_methyl_age_df_t = all_methyl_age_df_t
         self.out_dir = out_dir
         self.dataset = dataset
-        self.train_samples = train_samples
-        self.test_samples = test_samples
+        self.consortium = consortium
+        self.cross_val_num = cross_val_num
+        # pre-process the mutation and methylation data
+        self._preproc_mut_and_methyl()
+        # choose train and test samples based on cross validation number
+        self.train_samples, self.test_samples = self.cross_val_samples()
         self.matrix_qtl_dir = matrix_qtl_dir
         # create empty cache
         self.matrixQTL_store = {}
-        # pre-process the mutation and methylation data
-        self._preproc_mut_and_methyl()
         self.all_samples = self.all_methyl_age_df_t.index.to_list()
+        # create empty feature store
+        self.mutation_features_store = {}
     
     def _preproc_mut_and_methyl(
         self
@@ -84,6 +88,20 @@ class mutationFeatures:
             self.all_methyl_age_df_t['dataset'] = dset_col
         else: # only do gender if one dataset is specified
             self.all_methyl_age_df_t = pd.get_dummies(self.all_methyl_age_df_t, columns=["gender"])
+
+    def cross_val_samples(self):
+        """
+        Choose train and test samples based on cross validation number and dataset
+        @ return: train_samples, test_samples
+        """
+        # implicitly subsets to only this dataset's samples bc of preproc_mut_and_methyl
+        all_samples = self.all_methyl_age_df_t.index.to_list()
+        num_samples = len(all_samples)
+        split_size = int(num_samples/5)
+        split_samples = [all_samples[i:i + split_size] for i in range(0, num_samples, split_size)]
+        test_samples = split_samples[self.cross_val_num]
+        train_samples = list(set(all_samples).difference(set(test_samples)))
+        return train_samples, test_samples
 
     def _select_correl_sites(
         self,
@@ -228,7 +246,8 @@ class mutationFeatures:
             for key in predictor_groups:
                 predictor_sites.update(predictor_groups[key])
             predictor_sites = list(predictor_sites)
-            # get the mutation status of predictor sites
+            # get the mutation status of predictor sites, this implicitly drops 
+            # predictor sites with no mutation in any sample (train or test)
             mut_status = self.all_mut_w_age_df.loc[
                 self.all_mut_w_age_df['mut_loc'].isin(predictor_sites),
                 ['DNA_VAF', 'case_submitter_id', 'mut_loc']
@@ -281,13 +300,15 @@ class mutationFeatures:
             ]
         covariate_df = self.all_methyl_age_df_t.loc[all_samples, coviariate_col_names]
         feat_mat = pd.merge(feat_mat, covariate_df, left_index=True, right_index=True)
+        
         y = self.all_methyl_age_df_t.loc[all_samples, cpg_id]
         return feat_mat, y
     
     def choose_cpgs_to_train(
         self,
         mi_df: pd.DataFrame,
-        bin_size: int = 20000
+        bin_size: int = 20000,
+        sort_by: list = ['count', 'mutual_info']
         ) -> pd.DataFrame:
         """
         Based on count of mutations nearby and mutual information, choose cpgs to train models for
@@ -327,7 +348,7 @@ class mutationFeatures:
         # get mi for each cpg
         cpg_pred_priority = cpg_pred_priority.merge(mi_df, left_on='#id', right_index=True, how='left')
         # sort by count and mi
-        cpg_pred_priority.sort_values(by=['count', 'mutual_info'], ascending=[False, False], inplace=True)
+        cpg_pred_priority.sort_values(by=sort_by, ascending=[False, False], inplace=True)
         # reset index
         cpg_pred_priority.reset_index(inplace=True, drop=True)
         return cpg_pred_priority
@@ -351,7 +372,7 @@ class mutationFeatures:
         """
         feat_mats = {}
         target_values = {}
-        for cpg_id in cpg_ids:
+        for i, cpg_id in enumerate(cpg_ids):
             # first get the predictor groups
             predictor_groups = self._get_predictor_site_groups(
                 cpg_id, num_correl_sites, num_correl_ext_sites, 
@@ -361,6 +382,8 @@ class mutationFeatures:
             feat_mats[cpg_id], target_values[cpg_id] = self._create_feature_mat(
                 cpg_id, predictor_groups, aggregate
                 )
+            if i % 10 == 0:
+                print(f"Finished {i} of {len(cpg_ids)}", flush=True)
         # create a dictionary to allow for easy data persistence
         self.mutation_features_store = {
             'dataset': self.dataset,
@@ -377,25 +400,25 @@ class mutationFeatures:
             }
             
     def save_mutation_features(
-        self
+        self,
+        start_top_cpgs: str = "",
+        cross_val_num: str = ""
         ) -> None:
         """
         Write out the essential data as a dictionary to a file in a directory
         """
         # create file name based on mutation_features_store meta values
-        fn = os.path.join(self.out_dir, 
-                            self.mutation_features_store['dataset'] + '_'
-                            + str(self.mutation_features_store['num_correl_sites']) + 'correl_'
-                            + str(self.mutation_features_store['num_correl_ext_sites']) + 'correlExt_'
-                            + str(self.mutation_features_store['max_meqtl_sites']) + 'meqtl_'
-                            + str(self.mutation_features_store['nearby_window_size']) + 'nearby_'
-                            + str(self.mutation_features_store['aggregate']) + 'agg_'
-                            + str(len(self.mutation_features_store['cpg_ids'])) + 'numCpGs.features'
-                            )
+        meta_str = self.consortium + '_' + self.mutation_features_store['dataset'] + '_' + str(self.mutation_features_store['num_correl_sites']) + 'correl_' + str(self.mutation_features_store['num_correl_ext_sites']) + 'correlExt_' + str(self.mutation_features_store['max_meqtl_sites']) + 'meqtl_'+ str(self.mutation_features_store['nearby_window_size']) + 'nearby_' + str(self.mutation_features_store['aggregate']) + 'agg_' + str(len(self.mutation_features_store['cpg_ids'])) + 'numCpGs_' + str(start_top_cpgs) + 'startTopCpGs_' + str(cross_val_num) + 'crossValNum'
+        # create directory if it doesn't exist
+        directory = os.path.join(self.out_dir, meta_str)
+        if not os.path.exists(directory):
+            os.makedirs(directory)
         # pickle self.mutation_features_store
+        fn = os.path.join(self.out_dir, meta_str, meta_str + '.features.pkl')
         with open(fn, 'wb') as f:
             pickle.dump(self.mutation_features_store, f, protocol=pickle.HIGHEST_PROTOCOL)
         print('Saved mutation features to\n' + fn)
+        return fn
         
     def load_mutation_features(
         self, 

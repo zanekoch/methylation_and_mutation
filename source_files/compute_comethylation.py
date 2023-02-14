@@ -57,10 +57,14 @@ class mutationScan:
         self.illumina_cpg_locs_df = self.illumina_cpg_locs_df.loc[(self.illumina_cpg_locs_df['chr'] != 'X') & (self.illumina_cpg_locs_df['chr'] != 'Y')]
 
     def correct_pvals(
-        self, all_metrics_df
+        self, 
+        all_metrics_df
         ):
         """
         Correct each mutation events pvalue based on the background pvalues
+        @ all_metrics_df: a dataframe with all the metrics for each mutation event
+        @ returns: A dataframe specifying if each mutation event was significant when corrected for background pvalues,
+        for each statistical test
         """
         def get_sigs(mut_row, cutoffs):
             this_mut_cutoffs = cutoffs[mut_row['mut_event']]
@@ -82,6 +86,7 @@ class mutationScan:
                 this_background_pvals = background_pvals.loc[
                     (background_pvals['index_event'] == mut_event),
                     :]
+                # get the 5th percentile value for each pvalue of this mut event's background sites
                 background_pvals_cutoffs = one_cutoff(this_background_pvals, num_mut_events)
                 cutoffs[mut_event].append(background_pvals_cutoffs)
             return cutoffs
@@ -89,11 +94,15 @@ class mutationScan:
         # get just the mutated sample row for each mutation event (background or not)
         mut_metrics_df = all_metrics_df.loc[all_metrics_df['mutated_sample'] == True]
         mut_metrics_dropped = mut_metrics_df.drop_duplicates(subset=['mut_event'], keep='first')
+        # get unique mutation events
         mut_events = mut_metrics_dropped.loc[
-            (mut_metrics_dropped['index_event'] == 'self'), 'mut_event'].unique()
+            (mut_metrics_dropped['index_event'] == 'self'), 'mut_event'
+            ].unique()
         cutoffs = get_cutoffs(mut_metrics_dropped, mut_events)
         real_muts = mut_metrics_dropped.loc[mut_metrics_dropped['index_event'] == 'self'].reset_index(drop=True)
-        real_muts[['mf_pval2_sig', 'mf_pval_sig', 'delta_mf_pval2_sig', 'delta_mf_pval_sig','abs_delta_mf_pval_sig']] = real_muts.apply(lambda mut_row: get_sigs(mut_row, cutoffs), axis=1)
+        real_muts[['mf_pval2_sig', 'mf_pval_sig', 'delta_mf_pval2_sig', 'delta_mf_pval_sig', 'abs_delta_mf_pval_sig']] = real_muts.apply(
+            lambda mut_row: get_sigs(mut_row, cutoffs), axis=1
+            )
         return real_muts
 
     def volcano_plot(
@@ -419,7 +428,8 @@ class mutationScan:
             samples_to_exclude = self._detect_effect_in_other_samples(mut_row['comparison_sites'], mut_row)
             # drop entries of matched_samples that are in samples_to_exclude 
             matched_samples = [s for s in matched_samples if s not in samples_to_exclude]
-            # limit to 25 samples, no more, no less
+            # limit to matched_sample_num samples, no more, no less, 
+            # to avoid statistical bias towards samples with more similar samples
             if len(matched_samples) < self.matched_sample_num:
                 return None
             else:
@@ -496,16 +506,28 @@ class mutationScan:
         no_close_mut = self._find_collisions(this_sample_muts)
         # randomly select num_background_events #ids from illumina_cpg_locs_df, on different chrom that mutation
         no_close_mut = no_close_mut.loc[no_close_mut['chr'] != mut_row['chr']]"""
+        
+        # randomly select num_background_events #ids from illumina_cpg_locs_df, on different chroms than the mutation
         rand_cpgs = self.illumina_cpg_locs_df[self.illumina_cpg_locs_df['chr'] != mut_row['chr']].sample(n=self.num_background_events, random_state=1)
-        # give same attributes same as mutation event
+        # assign these the same attributes same as the mutation event
         rand_cpgs['dataset'] = mut_row['dataset']
         rand_cpgs['case_submitter_id'] = mut_row['case_submitter_id']
         rand_cpgs['index_event'] = mut_row['mut_event']
         rand_cpgs['matched_samples'] = [mut_row['matched_samples'] for row in range(len(rand_cpgs))]
-        # get comparison sites for each event
-        rand_cpgs['comparison_sites'] = rand_cpgs.apply(lambda background_mut_event: self.illumina_cpg_locs_df.loc[
+        
+        """# get comparison sites for each event by randomly sampling from the sites that are on same chrom as the background event
+        rand_cpgs['comparison_sites'] = rand_cpgs.apply(
+            lambda background_mut_event: self.illumina_cpg_locs_df.loc[
                 (self.illumina_cpg_locs_df['chr'] == background_mut_event['chr']), '#id'
                 ].sample(n=self.num_correl_sites, random_state=1).to_list(), axis = 1)
+        # get comparison sites for each event by choosing the most correlated sites in matched_samples
+        rand_cpgs['comparison_sites'] = rand_cpgs.apply(
+            lambda mut_event: self._select_correl_sites(mut_event, corr_direction), axis = 1
+            )"""
+            
+        rand_cpgs['comparison_sites'] = rand_cpgs.apply(
+            lambda mut_event: self._select_correl_sites_preproc(mut_event, corr_direction), axis = 1
+            )
         return rand_cpgs
 
     def _choose_background_events(
@@ -518,16 +540,13 @@ class mutationScan:
         making sure that the chosen sites are not within self.max_dist of a mutation and are on a different chromosome from the
         mutation event
         """
-        # create empty dataframe chosen_background_events with columns: dataset, case_submitter_id, index_event, comparison_sites
-        #chosen_background_events = pd.DataFrame(columns=['dataset', 'case_submitter_id', 'index_event', 'comparison_sites'])
-        # for each mutation event in comparison_sites_df
         chosen_background_events_l = []
-        # track with tdqm
-
-        for _, mut_row in tqdm(comparison_sites_df.iterrows(), desc = "getting background sites", miniters=len(comparison_sites_df)/100):
-                rand_cpgs = self._get_random_sites(mut_row, corr_direction)
-                chosen_background_events_l.append(rand_cpgs)
-
+        # for each mutation event in comparison_sites_df, choose self.num_background_events locations and associated comparison sites
+        for i, mut_row in tqdm(comparison_sites_df.iterrows(), desc = "getting background sites", total = len(comparison_sites_df)):
+                # returns a DataFrame with the chosen background event and their comparison sites
+                rand_mut_events_and_comp_sites = self._get_random_sites(mut_row, corr_direction)
+                chosen_background_events_l.append(rand_mut_events_and_comp_sites)
+        # combine these randomly chosen background events with the actual mutation events, populating columns
         chosen_background_events = pd.concat(chosen_background_events_l)
         chosen_background_events['comparison_dists'] = [[i for i in range(self.num_correl_sites)] for _ in range(len(chosen_background_events))]
         chosen_background_events['mut_cpg'] = chosen_background_events['chr'] + ':' + chosen_background_events['start'].astype(str)
@@ -611,43 +630,51 @@ class mutationScan:
 
     def _find_correl_measured_cpgs(
         self, 
-        min_VAF_percentile: float,
-        max_delta_mf_percentile: float,
+        start_num_mut_to_process: int,
+        end_num_mut_to_process: int,
         corr_direction: str
         ) -> pd.DataFrame:
+        """
+        Find the mutation events that meet the criteria (min_VAF, max_delta_mf) and get choose
+        comparison sites to be those CpGs which are most correlated with the mutation event CpG 
+        in matched samples
+        @ min_VAF_percentile: the minimum VAF percentile for a mutation event to be considered
+        @ max_delta_mf_percentile: the maximum delta MF percentile for a mutation event to be considered
+        @ corr_direction: 'pos' or 'neg' for positive or negative correlation
+        """
         pd.options.mode.chained_assignment = None  # default='warn'
         # subset to mutations in the measured CpGs (i.e. in the illumina CpGs)
         valid_muts_w_illum = self.all_mut_w_age_illum_df.loc[
                 self.all_mut_w_age_illum_df['#id'].isin(self.illumina_cpg_locs_df['#id'])
                 ]
-
         print("Number mutation events being processed: {}".format(len(valid_muts_w_illum)), flush=True)
-        # get same age and tissue samples for each, keeping only rows with at least self.matched_sample_num
+        # get same age and tissue samples for each, keeping only mutations with at least self.matched_sample_num
         tqdm.pandas(desc="Getting matched samples", miniters=len(valid_muts_w_illum)/100)
         valid_muts_w_illum['matched_samples'] = valid_muts_w_illum.progress_apply(
             lambda mut_event: self._same_age_and_tissue_samples(mut_event['case_submitter_id']), axis = 1
             )
-        valid_muts_w_illum = valid_muts_w_illum.loc[valid_muts_w_illum['matched_samples'].apply(len) >= self.matched_sample_num]
-
+        valid_muts_w_illum = valid_muts_w_illum.loc[
+            valid_muts_w_illum['matched_samples'].apply(len) >= self.matched_sample_num
+            ]
         # get the delta MF of the mutated site
         tqdm.pandas(desc="Getting mut site delta MF", miniters=len(valid_muts_w_illum)/100)
         valid_muts_w_illum['mut_delta_mf'] = valid_muts_w_illum.progress_apply(
             lambda mut_event: self._mut_site_delta_mf(mut_event), axis=1
             )
-        # subset to mutations with a VAF and mut_delta_mf above the given percentiles
-        # and at least a negative mut_delta_mf 
-        valid_muts_w_illum = valid_muts_w_illum.loc[
+        # sort mutations by mut_delta_mf and DNA_VAF
+        valid_muts_w_illum = valid_muts_w_illum.sort_values(by=['mut_delta_mf', 'DNA_VAF'], ascending=[True, False])
+        # select top mutations for further processing
+        valid_muts_w_illum = valid_muts_w_illum.iloc[start_num_mut_to_process:end_num_mut_to_process, :]
+        """valid_muts_w_illum = valid_muts_w_illum.loc[
                 (valid_muts_w_illum['DNA_VAF'] >= np.percentile(valid_muts_w_illum['DNA_VAF'], min_VAF_percentile))
                 & (valid_muts_w_illum['mut_delta_mf'] <= np.percentile(valid_muts_w_illum['mut_delta_mf'], max_delta_mf_percentile))
                 & (valid_muts_w_illum['mut_delta_mf'] < 0), :
-                ]
-        print("Number mutation events being processed after filtering: {}".format(len(valid_muts_w_illum)), flush=True)
-
+                ]"""
+        print("Number mutation events being processed after filtering for matched sample number: {}".format(len(valid_muts_w_illum)), flush=True)
         tqdm.pandas(desc="Getting comparison sites", miniters=len(valid_muts_w_illum)/100)
         valid_muts_w_illum['comparison_sites'] = valid_muts_w_illum.progress_apply(
             lambda mut_event: self._select_correl_sites(mut_event, corr_direction), axis = 1
             )
-
         valid_muts_w_illum['comparison_dists'] = [
             [i for i in range(self.num_correl_sites)] 
             for _ in range(len(valid_muts_w_illum))
@@ -662,8 +689,8 @@ class mutationScan:
 
     def look_for_disturbances(
         self, 
-        min_VAF_percentile: float,
-        max_delta_mf_percentile: float,
+        start_num_mut_to_process: int,
+        end_num_mut_to_process: int,
         linkage_method: str,
         out_dir: str,
         corr_direction: str,
@@ -680,28 +707,34 @@ class mutationScan:
         """
         # PHASE 1: choose mutation events and comparison sites
         ######################################################
-        # for each mutation, get a list of the CpGs #id in illum_locs that are within max_dist of the mutation 'start'
+        # for each mutation, get a list of the CpGs #id in illum_locs that are 
+        # within max_dist of the mutation 'start' or top correlated, depending on linkage_method
         if comparison_sites_df is None:
             if linkage_method == 'dist':
-                comparison_sites_df = self._find_nearby_measured_cpgs(min_VAF_percentile, corr_direction)
+                """comparison_sites_df = self._find_nearby_measured_cpgs(min_VAF_percentile, corr_direction)
                 # drop rows of comparison_sites_df where comparison_sites has length 0
-                comparison_sites_df = comparison_sites_df[comparison_sites_df['comparison_sites'].apply(lambda x: len(x) > 0)]
+                comparison_sites_df = comparison_sites_df[comparison_sites_df['comparison_sites'].apply(lambda x: len(x) > 0)]"""
             elif linkage_method == 'correl':
                 comparison_sites_df = self._find_correl_measured_cpgs(
-                    min_VAF_percentile, max_delta_mf_percentile, corr_direction
+                    start_num_mut_to_process, end_num_mut_to_process, corr_direction
                     )
             else:
                 raise ValueError('linkage_method must be "dist" or "correl"')
-            print("Got comparison sites", flush=True)
+            # TODO: make background events work with distance
             # for each selected mutation event, choose background sites
             if self.num_background_events > 0:
+                # update comparison_sites_df to include background mutation events
                 comparison_sites_df = self._choose_background_events(comparison_sites_df, corr_direction = corr_direction)
-                print("Got background sites", flush=True)
             # convert comparison_sites_df to dask and write to multiple parquet files
             comparison_sites_dd = dask.dataframe.from_pandas(comparison_sites_df, npartitions = 100)
-            comparison_sites_dd.to_parquet(os.path.join(out_dir, "comparison_sites_{}VAF_{}corrSites_{}_qnorm3SD_{}background".format(min_VAF_percentile, self.num_correl_sites, corr_direction, self.num_background_events)), engine = 'pyarrow', schema='infer')
-            print("Wrote comparison sites to parquet", flush=True)
-
+            comparison_sites_fn = os.path.join(
+                out_dir, "comparison_sites_{}-{}Muts_{}corrSites_{}_qnorm3SD_{}background".format(
+                    start_num_mut_to_process, end_num_mut_to_process, self.num_correl_sites, corr_direction, self.num_background_events
+                    )
+                )
+            comparison_sites_dd.to_parquet(comparison_sites_fn, engine = 'pyarrow', schema='infer')
+            print(f"Wrote comparison sites df to {comparison_sites_fn}", flush=True)
+            
         # PHASE 2: compare methylation fractions at comparison sites
         #########################################################
         # for each mutation with nearby measured site, compare the methylation of the nearby measured sites
@@ -711,6 +744,11 @@ class mutationScan:
         #all_metrics_df.reset_index(inplace=True, drop=True)
         # write out to parquet using dask
         all_metrics_dd = dask.dataframe.from_pandas(all_metrics_df, npartitions = 100)
-        all_metrics_dd.to_parquet(os.path.join(out_dir, "all_metrics_{}VAF_{}corrSites_{}_qnorm3SD_{}background".format(min_VAF_percentile, self.num_correl_sites, corr_direction, self.num_background_events)), engine = 'pyarrow')
-        print("writing results to {}".format(os.path.join(out_dir, "all_metrics_{}VAF_{}corrSites_{}_qnorm3SD_{}background".format(min_VAF_percentile, self.num_correl_sites, corr_direction, self.num_background_events))), flush=True)
+        all_metrics_fn = os.path.join(
+            out_dir, "all_metrics_{}-{}Muts_{}corrSites_{}_qnorm3SD_{}background".format(
+                start_num_mut_to_process, end_num_mut_to_process, self.num_correl_sites, corr_direction, self.num_background_events
+                )
+            )
+        all_metrics_dd.to_parquet(all_metrics_fn, engine = 'pyarrow')
+        print(f"writing results to {all_metrics_fn}", flush=True)
         return comparison_sites_df, all_metrics_df
