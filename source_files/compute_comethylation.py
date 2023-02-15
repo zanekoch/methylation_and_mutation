@@ -58,28 +58,41 @@ class mutationScan:
 
     def correct_pvals(
         self, 
-        all_metrics_df
+        all_metrics_df: pd.DataFrame,
+        one_background: bool = False
         ):
         """
         Correct each mutation events pvalue based on the background pvalues
         @ all_metrics_df: a dataframe with all the metrics for each mutation event
-        @ returns: A dataframe specifying if each mutation event was significant when corrected for background pvalues,
-        for each statistical test
+        @ returns: The all_metrics_df with the sig columns added
         """
         def get_sigs(mut_row, cutoffs):
             this_mut_cutoffs = cutoffs[mut_row['mut_event']]
             return mut_row[this_mut_cutoffs[0].index] < this_mut_cutoffs[0]
 
         def one_cutoff(background_pvals, num_mut_events):
-            # for each column, get the 5th percentile value
-            background_pvals_cutoffs = background_pvals[['mf_pval2', 'mf_pval', 'delta_mf_pval2', 'delta_mf_pval','abs_delta_mf_pval']].quantile(0.05) / num_mut_events
+            # for each column, get the 5th percentile value and bonf. correct it
+            background_pvals_cutoffs = background_pvals[
+                ['mf_pval2', 'mf_pval', 'delta_mf_pval2', 'delta_mf_pval','abs_delta_mf_pval']
+                ].quantile(0.05) / num_mut_events
             return background_pvals_cutoffs
 
+        def get_cutoffs_one_background(metrics_df, mut_events):
+            num_mut_events = len(mut_events)
+            background_pvals = metrics_df.loc[
+                (metrics_df['is_background'] == True) # get background samples
+                & (metrics_df['mutated_sample'] == True) # and get just one of them
+                , :].drop_duplicates(subset=['mut_event']) # get just one row per background mut event
+            all_background_pvals_cutoff = one_cutoff(background_pvals, num_mut_events)
+            return all_background_pvals_cutoff
+            
         def get_cutoffs(metrics_df, mut_events):
             num_mut_events = len(mut_events)
             cutoffs = defaultdict(list)
             background_pvals = metrics_df.loc[
-                (metrics_df['is_background'] == True), :]
+                (metrics_df['is_background'] == True) # get background samples
+                & (metrics_df['mutated_sample'] == True) # and get just one of them
+                , :].drop_duplicates(subset=['mut_event']) # get just one row per background mut event
             # for each mutation event
             for mut_event in mut_events:
                 # get this mut event's background sites
@@ -91,19 +104,24 @@ class mutationScan:
                 cutoffs[mut_event].append(background_pvals_cutoffs)
             return cutoffs
 
-        # get just the mutated sample row for each mutation event (background or not)
-        mut_metrics_df = all_metrics_df.loc[all_metrics_df['mutated_sample'] == True]
-        mut_metrics_dropped = mut_metrics_df.drop_duplicates(subset=['mut_event'], keep='first')
-        # get unique mutation events
-        mut_events = mut_metrics_dropped.loc[
-            (mut_metrics_dropped['index_event'] == 'self'), 'mut_event'
-            ].unique()
-        cutoffs = get_cutoffs(mut_metrics_dropped, mut_events)
-        real_muts = mut_metrics_dropped.loc[mut_metrics_dropped['index_event'] == 'self'].reset_index(drop=True)
-        real_muts[['mf_pval2_sig', 'mf_pval_sig', 'delta_mf_pval2_sig', 'delta_mf_pval_sig', 'abs_delta_mf_pval_sig']] = real_muts.apply(
-            lambda mut_row: get_sigs(mut_row, cutoffs), axis=1
-            )
-        return real_muts
+        # get real mutation events
+        real_muts = all_metrics_df.loc[
+            (all_metrics_df['index_event'] == 'self') # redundant, makes sure not a background site
+            & (all_metrics_df['mutated_sample'] == True) # makes sure is the mutated sample, for uniqueness
+            & (all_metrics_df['is_background'] == False) # makes sure not a background site
+            , : ]
+        # and get the unique mutation events from these
+        mut_events = real_muts['mut_event'].unique()
+        if one_background:
+            cutoffs = get_cutoffs_one_background(all_metrics_df, mut_events)
+            all_metrics_df[['mf_pval2_sig', 'mf_pval_sig', 'delta_mf_pval2_sig', 'delta_mf_pval_sig', 'abs_delta_mf_pval_sig']] = all_metrics_df[['mf_pval2', 'mf_pval', 'delta_mf_pval2', 'delta_mf_pval','abs_delta_mf_pval']] < cutoffs
+            return all_metrics_df
+        else:
+            cutoffs = get_cutoffs(all_metrics_df, mut_events)
+            all_metrics_df[['mf_pval2_sig', 'mf_pval_sig', 'delta_mf_pval2_sig', 'delta_mf_pval_sig', 'abs_delta_mf_pval_sig']] = all_metrics_df.apply(
+                lambda mut_row: get_sigs(mut_row, cutoffs), axis=1
+                )
+            return all_metrics_df
 
     def volcano_plot(
         self,
@@ -115,15 +133,19 @@ class mutationScan:
         """
         # TODO: deal with pvalues == 0
         # first select only the rows with measurements for the mutated sample
-        mut_metrics_df = all_metrics_df.loc[(all_metrics_df['mutated_sample'] == True) & (all_metrics_df['is_background'] == False), :]
-        mut_metrics_df['abs_delta_mf_median'] = mut_metrics_df['delta_mf_median'].abs()
+        real_muts_df = all_metrics_df.loc[
+            (all_metrics_df['index_event'] == 'self') # redundant, makes sure not a background site
+            & (all_metrics_df['mutated_sample'] == True) # makes sure is the mutated sample, for uniqueness
+            & (all_metrics_df['is_background'] == False) # makes sure not a background site
+            , : ]
+        real_muts_df['abs_delta_mf_median'] = real_muts_df['delta_mf_median'].abs()
 
         # then get median delta_mf for each event
-        med_delta_mf = mut_metrics_df.groupby('mut_event')['delta_mf_median'].median()
-        abs_median_delta_mf = mut_metrics_df.groupby('mut_event')['abs_delta_mf_median'].median()
+        med_delta_mf = real_muts_df.groupby('mut_event')['delta_mf_median'].median()
+        abs_median_delta_mf = real_muts_df.groupby('mut_event')['abs_delta_mf_median'].median()
         # doesn't matter if min, max, or mean cause all pvals are same for a mut event
-        pvals = mut_metrics_df.groupby('mut_event')[pval_col].min()
-        sigs = mut_metrics_df.groupby('mut_event')[pval_col + '_sig'].min()
+        pvals = real_muts_df.groupby('mut_event')[pval_col].min()
+        sigs = real_muts_df.groupby('mut_event')[pval_col + '_sig'].min()
         grouped_volc_metrics = pd.merge(abs_median_delta_mf, pd.merge(sigs, pd.merge(med_delta_mf, pvals, on='mut_event'), on='mut_event'), on='mut_event')
         grouped_volc_metrics['log10_pval'] = grouped_volc_metrics[pval_col].apply(lambda x: -np.log10(x))
         _, axes = plt.subplots(1, 2, figsize=(12, 6), dpi=100, gridspec_kw={'width_ratios': [3, 1]})
@@ -138,9 +160,9 @@ class mutationScan:
         axes[0].set_ylabel('-log10 p-value')
         # barplot of the number of significant and non-significant mutations
         sns.countplot(x = pval_col + '_sig', data = grouped_volc_metrics, palette = {True: 'maroon', False: 'grey'}, ax = axes[1])
-        axes[1].set_xlabel('')
         # set x ticks
-        axes[1].set_xticklabels([f'Significant', f'Not significant'])
+        axes[1].set_xlabel('Corrected p-value')
+        axes[1].set_xticklabels([f'Not significant', f'Significant' ])
         axes[1].set_ylabel('Count of mutation events')
 
         # same but absolute cumul
@@ -155,10 +177,9 @@ class mutationScan:
         axes[0].set_ylabel('-log10 p-value')
         # barplot of the number of significant and non-significant mutations
         sns.countplot(x = pval_col + '_sig', data = grouped_volc_metrics, palette = {True: 'maroon', False: 'grey'}, ax = axes[1])
-        axes[1].set_xlabel('Bonferroni p-value')
-        axes[1].set_xticklabels([f'p >= sig. threshold', f'p < sig. threshold'])
+        axes[1].set_xlabel('Corrected p-value')
+        axes[1].set_xticklabels([f'Not significant',f'Significant' ])
         axes[1].set_ylabel('Count of mutation events')
-        return grouped_volc_metrics
 
     def extent_of_effect(
         self,
@@ -500,13 +521,16 @@ class mutationScan:
         mut_row: pd.Series,
         corr_direction: str
         ) -> pd.DataFrame:
+        """
+        Choose a random set of background sites and comparison sites for these background sites
+        """
+        
         """# get this sample's mutation events
         this_sample_muts = self.all_mut_w_age_df.loc[self.all_mut_w_age_df['case_submitter_id'] == mut_row['case_submitter_id'], :]
         # get the sites that are not close to a mutation in this sample
         no_close_mut = self._find_collisions(this_sample_muts)
         # randomly select num_background_events #ids from illumina_cpg_locs_df, on different chrom that mutation
         no_close_mut = no_close_mut.loc[no_close_mut['chr'] != mut_row['chr']]"""
-        
         # randomly select num_background_events #ids from illumina_cpg_locs_df, on different chroms than the mutation
         rand_cpgs = self.illumina_cpg_locs_df[self.illumina_cpg_locs_df['chr'] != mut_row['chr']].sample(n=self.num_background_events, random_state=1)
         # assign these the same attributes same as the mutation event
@@ -661,15 +685,10 @@ class mutationScan:
         valid_muts_w_illum['mut_delta_mf'] = valid_muts_w_illum.progress_apply(
             lambda mut_event: self._mut_site_delta_mf(mut_event), axis=1
             )
-        # sort mutations by mut_delta_mf and DNA_VAF
+        # sort mutations low to high by mut_delta_mf and and high to low by DNA_VAF
         valid_muts_w_illum = valid_muts_w_illum.sort_values(by=['mut_delta_mf', 'DNA_VAF'], ascending=[True, False])
         # select top mutations for further processing
         valid_muts_w_illum = valid_muts_w_illum.iloc[start_num_mut_to_process:end_num_mut_to_process, :]
-        """valid_muts_w_illum = valid_muts_w_illum.loc[
-                (valid_muts_w_illum['DNA_VAF'] >= np.percentile(valid_muts_w_illum['DNA_VAF'], min_VAF_percentile))
-                & (valid_muts_w_illum['mut_delta_mf'] <= np.percentile(valid_muts_w_illum['mut_delta_mf'], max_delta_mf_percentile))
-                & (valid_muts_w_illum['mut_delta_mf'] < 0), :
-                ]"""
         print("Number mutation events being processed after filtering for matched sample number: {}".format(len(valid_muts_w_illum)), flush=True)
         tqdm.pandas(desc="Getting comparison sites", miniters=len(valid_muts_w_illum)/100)
         valid_muts_w_illum['comparison_sites'] = valid_muts_w_illum.progress_apply(

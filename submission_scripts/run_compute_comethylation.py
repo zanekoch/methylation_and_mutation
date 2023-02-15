@@ -9,10 +9,10 @@ data_dir = "/cellar/users/zkoch/methylation_and_mutation/data"
 methylation_dir = '/cellar/users/zkoch/methylation_and_mutation/data/dropped3SD_qnormed_methylation'
 corr_dir = '/cellar/users/zkoch/methylation_and_mutation/dependency_files/chr_dset_corrs'
 
-start_num_mut_to_process = 0
-end_num_mut_to_process = 500
+start_num_mut_to_process = 2500
+end_num_mut_to_process = 5000
 corr_direction = 'neg'
-print(f"Running comethyylation disturbance analysis with {start_num_mut_to_process} to {end_num_mut_to_process} mutations, {corr_direction} correlation direction and writing to {out_dir}", flush=True)
+print(f"Running comethylation disturbance analysis with {start_num_mut_to_process} to {end_num_mut_to_process} mutations, {corr_direction} correlation direction and writing to {out_dir}", flush=True)
 
 illumina_cpg_locs_df, all_mut_df, all_methyl_df, all_methyl_df_t, all_meta_df, dataset_names_list = get_data.main(
     illum_cpg_locs_fn = os.path.join(dependency_f_dir, "illumina_cpg_450k_locations.csv"),
@@ -29,7 +29,7 @@ mut_scan = compute_comethylation.mutationScan(
     all_mut_w_age_df, illumina_cpg_locs_df, 
     all_methyl_age_df_t, corr_dir = corr_dir,
     age_bin_size = 5, max_dist = 1000,
-    num_correl_sites = 100, num_background_events = 100,
+    num_correl_sites = 100, num_background_events = 0,
     matched_sample_num = 20
     )
 
