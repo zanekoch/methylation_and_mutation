@@ -69,18 +69,21 @@ def read_tcga_data(
     return all_mut_w_age_df, illumina_cpg_locs_df, all_methyl_age_df_t, mi_df
 
 def run(
-    do: str,
+    generate_features: bool,
+    train_models: bool,
     consortium: str,
     dataset: str, 
     cross_val_num: int,
     out_dir: str, 
     start_top_cpgs: int, 
     end_top_cpgs: int,
-    aggregate: str
+    aggregate: str,
+    mut_feat_store_fns: list
     ) -> None:
     """
     Driver function for generating features or training models
-    @ do: str, either "feat_gen" or "train_models"
+    @ generate_features: bool, whether to generate features
+    @ train_models: bool, whether to train models
     @ consortium: str, either "tcga" or "icgc"
     @ dataset: str, either "BRCA", "COAD", ...
     @ train_samples: list of samples to train on
@@ -89,16 +92,18 @@ def run(
     @ start_top_cpgs: start of range of top cpgs to use
     @ end_top_cpgs: end of range of top cpgs to use
     @ aggregate: feature aggregation strategy True, False, or Both
+    @ mut_feat_store_fns: list of mutation feature store filenames
     @ returns: None
     """
     if consortium == "ICGC":
+        # TODO: make ICGC single dataset work
         all_mut_w_age_df, illumina_cpg_locs_df, all_methyl_age_df_t, mi_df = read_icgc_data()
         matrix_qtl_dir = "/cellar/users/zkoch/methylation_and_mutation/output_dirs/icgc_muts_011423"
     elif consortium == "TCGA":
         all_mut_w_age_df, illumina_cpg_locs_df, all_methyl_age_df_t, mi_df = read_tcga_data(dataset)
         matrix_qtl_dir = "/cellar/users/zkoch/methylation_and_mutation/data/matrixQtl_data/muts"
 
-    if do == "feat_gen":
+    if generate_features:
         # create mutation feature generating object
         mut_feat = mutation_features.mutationFeatures(
             all_mut_w_age_df = all_mut_w_age_df, illumina_cpg_locs_df = illumina_cpg_locs_df, 
@@ -118,21 +123,42 @@ def run(
         mut_feat.save_mutation_features(
             start_top_cpgs = start_top_cpgs, cross_val_num = cross_val_num
             )
+    elif train_models:
+        methyl_pred = methylation_pred.methylationPrediction(
+            mut_feat_store_fns = mut_feat_store_fns,
+            model_type = 'xgboost'
+            )
+        methyl_pred.train_all_models()
+        methyl_pred.apply_all_models()
+        methyl_pred.save_models_and_preds()
+    else:
+        raise ValueError("Must specify either generate_features or train_models")
 
 def main():
     # parse arguments 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--do', type=str, help='feat_gen or train_models')
+    parser.add_argument('--feat_gen', type=bool, help='whether to generate features', default=False)
+    parser.add_argument('--train_models', type=bool, help='whether to train models', default=False)
+    parser.add_argument('--mut_feat_store_fns', type=str, help='glob path to feature files', default="")
     parser.add_argument('--consortium', type=str, help='TCGA or ICGC')
     parser.add_argument('--dataset', type=str, help='tissue type to run, e.g. BRCA, COAD, ...', default="")
-    parser.add_argument('--cross_val', type=int, help='cross val fold number, assuming 5')
+    parser.add_argument('--cross_val', type=int, help='cross val fold number, assuming 5', default=0)
     parser.add_argument('--out_dir', type=str, help='path to output directory')
-    parser.add_argument('--start_top_cpgs', type=int, help='index of top cpgs to start with')
-    parser.add_argument('--end_top_cpgs', type=int, help='index of top cpgs to end with')
-    parser.add_argument('--aggregate', type=str, help='False, True, or Both')
-    # parse arguments
+    parser.add_argument('--start_top_cpgs', type=int, help='index of top cpgs to start with', default=0)
+    parser.add_argument('--end_top_cpgs', type=int, help='index of top cpgs to end with', default=0)
+    parser.add_argument('--aggregate', type=str, help='False, True, or Both', default="Both")
+    # parse
     args = parser.parse_args()
-    do = args.do
+    # make sure not asking for features and models at the same time
+    assert not (args.feat_gen and args.train_models), "cannot generate features and train models at the same time"
+    # if training models, need to specify a glob path to the feature files
+    assert not (args.train_models and args.mut_feat_store_fns == ""), "must specify glob path to feature files if training models"    
+    generate_features = args.feat_gen
+    train_models = args.train_models
+    # expand the glob path into a list of filenames
+    mut_feat_store_fns = glob.glob(args.mut_feat_store_fns)
+    print(args.mut_feat_store_fns, flush=True)
+    print(mut_feat_store_fns, flush=True)
     consortium = args.consortium
     dataset = args.dataset
     cross_val_num = args.cross_val
@@ -140,12 +166,14 @@ def main():
     start_top_cpgs = args.start_top_cpgs
     end_top_cpgs = args.end_top_cpgs
     aggregate = args.aggregate
-    print(f"running {do} {consortium} {dataset} and outputting to {out_dir}")
+    print(f"cross val {cross_val_num} running {generate_features} generate features {train_models} train models {consortium} {dataset} and outputting to {out_dir}")
     # run 
     run(
-        do = do, consortium = consortium, dataset = dataset, cross_val_num = cross_val_num,
+        generate_features = generate_features, train_models = train_models,
+        consortium = consortium, dataset = dataset, cross_val_num = cross_val_num,
         out_dir = out_dir, start_top_cpgs = start_top_cpgs,
-        end_top_cpgs = end_top_cpgs, aggregate = aggregate
+        end_top_cpgs = end_top_cpgs, aggregate = aggregate,
+        mut_feat_store_fns = mut_feat_store_fns
         )
         
 
