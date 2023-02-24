@@ -16,15 +16,17 @@ class mutationFeatures:
         all_mut_w_age_df: pd.DataFrame,
         illumina_cpg_locs_df: pd.DataFrame, 
         all_methyl_age_df_t: pd.DataFrame,
+        meqtl_db: pd.DataFrame,
         out_dir: str,
         consortium: str,
         dataset: str,
         cross_val_num: int,
-        matrix_qtl_dir: str
+        matrix_qtl_dir: str,
         ):
         self.all_mut_w_age_df = all_mut_w_age_df
         self.illumina_cpg_locs_df = illumina_cpg_locs_df
         self.all_methyl_age_df_t = all_methyl_age_df_t
+        self.meqtl_db = meqtl_db
         self.out_dir = out_dir
         self.dataset = dataset
         self.consortium = consortium
@@ -88,6 +90,9 @@ class mutationFeatures:
             self.all_methyl_age_df_t['dataset'] = dset_col
         else: # only do gender if one dataset is specified
             self.all_methyl_age_df_t = pd.get_dummies(self.all_methyl_age_df_t, columns=["gender"])
+        # subset meqtl_db to only cpgs in all_methyl_age_df_t 
+        self.meqtl_db = self.meqtl_db.loc[
+            self.meqtl_db['cpg'].isin(self.all_methyl_age_df_t.columns), :]
 
     def cross_val_samples(self):
         """
@@ -166,9 +171,21 @@ class mutationFeatures:
         else:
             meqtl_df = self.matrixQTL_store[chrom]
         # get the meQTLs for this CpG
-        neg_meqtls = meqtl_df.loc[(meqtl_df['#id'] == cpg_id) & (meqtl_df['beta'] < 0), :].nsmallest(max_meqtl_sites, 'p-value')['SNP'].to_list()
-        pos_meqtls = meqtl_df.loc[(meqtl_df['#id'] == cpg_id) & (meqtl_df['beta'] > 0), :].nsmallest(max_meqtl_sites, 'p-value')['SNP'].to_list()
+        neg_meqtls = meqtl_df.loc[
+            (meqtl_df['#id'] == cpg_id) 
+            & (meqtl_df['beta'] < 0),
+            :].nsmallest(max_meqtl_sites, 'p-value')['SNP'].to_list()
+        pos_meqtls = meqtl_df.loc[
+            (meqtl_df['#id'] == cpg_id) 
+            & (meqtl_df['beta'] > 0),
+            :].nsmallest(max_meqtl_sites, 'p-value')['SNP'].to_list()
         return neg_meqtls, pos_meqtls
+    
+    def _select_db_sites(self, cpg_id, num_db_sites):
+        this_cpg_meqtls = self.meqtl_db[self.meqtl_db['cpg'] == cpg_id]
+        neg_cpg_meqtls = this_cpg_meqtls.nsmallest(num_db_sites, 'beta_a1')['snp'].to_list()
+        pos_cpg_meqtls = this_cpg_meqtls.nlargest(num_db_sites, 'beta_a1')['snp'].to_list()
+        return neg_cpg_meqtls, pos_cpg_meqtls
     
     def _get_predictor_site_groups(
         self, 
@@ -176,7 +193,8 @@ class mutationFeatures:
         num_correl_sites: int = 5000,
         num_correl_ext_sites: int = 100,
         max_meqtl_sites: int = 100,
-        nearby_window_size: int = 25000
+        nearby_window_size: int = 25000,
+        num_db_sites: int = 500
         ) -> list:
         """
         Get the sites to be used as predictors of cpg_id's methylation
@@ -218,6 +236,13 @@ class mutationFeatures:
             ]
         # get sites from matrixQTL 
         predictor_site_groups['matrixqtl_neg_beta'], predictor_site_groups['matrixqtl_pos_beta'] = self._get_matrixQTL_sites(cpg_id, chrom, max_meqtl_sites=max_meqtl_sites)
+        # extend matrixQTL sites
+        predictor_site_groups['matrixqtl_neg_beta_ext'] = extend(predictor_site_groups['matrixqtl_neg_beta'])
+        predictor_site_groups['matrixqtl_pos_beta_ext'] = extend(predictor_site_groups['matrixqtl_pos_beta'])
+        # get database meQtls
+        predictor_site_groups['db_neg_beta'], predictor_site_groups['db_pos_beta'] = self._select_db_sites(cpg_id, num_db_sites)
+        predictor_site_groups['db_neg_beta_ext'] = extend(predictor_site_groups['db_neg_beta'])
+        predictor_site_groups['db_pos_beta_ext'] = extend(predictor_site_groups['db_pos_beta'])
         return predictor_site_groups
     
     def _create_feature_mat(
@@ -306,13 +331,14 @@ class mutationFeatures:
     
     def choose_cpgs_to_train(
         self,
-        mi_df: pd.DataFrame,
+        metric_df: pd.DataFrame,
         bin_size: int = 20000,
-        sort_by: list = ['count', 'mutual_info']
+        sort_by: list = ['count', 'mutual_info'],
+        mean: bool = False
         ) -> pd.DataFrame:
         """
         Based on count of mutations nearby and mutual information, choose cpgs to train models for
-        @ mi_df: dataframe of mutual information
+        @ metric_df: dataframe of mutual information or corrs
         @ bin_size: size of bins to count mutations in
         @ returns: cpg_pred_priority, dataframe of cpgs with priority for prediction
         """
@@ -324,8 +350,13 @@ class mutationFeatures:
             """
             mut_bin_counts_dfs = []
             for chrom in all_mut_w_age_df['chr'].unique():
-                chr_df = all_mut_w_age_df.loc[(all_mut_w_age_df['chr'] == chrom) & (all_mut_w_age_df['case_submitter_id'].isin(self.train_samples))]
-                counts, edges = np.histogram(chr_df['start'], bins = np.arange(0, chr_df['start'].max(), bin_size))
+                chr_df = all_mut_w_age_df.loc[
+                    (all_mut_w_age_df['chr'] == chrom) 
+                    & (all_mut_w_age_df['case_submitter_id'].isin(self.train_samples))
+                    ]
+                counts, edges = np.histogram(
+                    chr_df['start'], bins = np.arange(0, chr_df['start'].max(), bin_size)
+                    )
                 one_mut_bin_counts_df = pd.DataFrame({'count': counts, 'bin_edge_l': edges[:-1]})
                 one_mut_bin_counts_df['chr'] = chrom
                 mut_bin_counts_dfs.append(one_mut_bin_counts_df)
@@ -333,6 +364,23 @@ class mutationFeatures:
             mut_bin_counts_df.reset_index(inplace=True, drop=True)
             return mut_bin_counts_df
         
+        def mean_mutation_bin_count(
+            all_mut_w_age_df: pd.DataFrame
+            ) -> pd.DataFrame:
+            mut_bin_counts_dfs = []
+            for chrom in all_mut_w_age_df['chr'].unique():
+                chr_df = all_mut_w_age_df.loc[
+                    (all_mut_w_age_df['chr'] == chrom) 
+                    & (all_mut_w_age_df['case_submitter_id'].isin(self.train_samples))
+                    ]
+                count_per_sample = chr_df.groupby('case_submitter_id').apply(mutation_bin_count)
+                mean_counts = count_per_sample.groupby('bin_edge_l')['count'].mean()
+                one_chr_mean_counts_df = pd.DataFrame({'count': mean_counts, 'bin_edge_l': mean_counts.index, 'chr': chrom})
+                mut_bin_counts_dfs.append(one_chr_mean_counts_df)
+            mut_bin_counts_df = pd.concat(mut_bin_counts_dfs, axis = 0)
+            mut_bin_counts_df.reset_index(inplace=True, drop=True)
+            return mut_bin_counts_df
+            
         def round_down(num) -> int:
             """
             Round N down to nearest bin_size
@@ -340,13 +388,19 @@ class mutationFeatures:
             return num - (num % bin_size)
         
         # count mutations in each bin
-        mutation_bin_counts_df = mutation_bin_count(self.all_mut_w_age_df)
+        if mean:
+            mutation_bin_counts_df = mean_mutation_bin_count(self.all_mut_w_age_df)
+        else:
+            mutation_bin_counts_df = mutation_bin_count(self.all_mut_w_age_df)
         # get count for each cpg
         illumina_cpg_locs_w_methyl_df = self.illumina_cpg_locs_df.loc[self.illumina_cpg_locs_df['#id'].isin(self.all_methyl_age_df_t.columns)]
         illumina_cpg_locs_w_methyl_df.loc[:,'rounded_start'] = illumina_cpg_locs_w_methyl_df.loc[:, 'start'].apply(round_down)
-        cpg_pred_priority = illumina_cpg_locs_w_methyl_df.merge(mutation_bin_counts_df, left_on=['chr', 'rounded_start'], right_on=['chr', 'bin_edge_l'], how='left')
+        cpg_pred_priority = illumina_cpg_locs_w_methyl_df.merge(
+            mutation_bin_counts_df, left_on=['chr', 'rounded_start'],
+            right_on=['chr', 'bin_edge_l'], how='left'
+            )
         # get mi for each cpg
-        cpg_pred_priority = cpg_pred_priority.merge(mi_df, left_on='#id', right_index=True, how='left')
+        cpg_pred_priority = cpg_pred_priority.merge(metric_df, left_on='#id', right_index=True, how='left')
         # sort by count and mi
         cpg_pred_priority.sort_values(by=sort_by, ascending=[False, False], inplace=True)
         # reset index
@@ -360,7 +414,8 @@ class mutationFeatures:
         num_correl_sites: int = 5000,
         num_correl_ext_sites: int = 100,
         max_meqtl_sites: int = 100,
-        nearby_window_size: int = 25000
+        nearby_window_size: int = 25000,
+        num_db_sites: int = 500
         ) -> dict:
         """
         Create the training matrix for the given cpg_id and predictor_sites
@@ -373,10 +428,11 @@ class mutationFeatures:
         feat_mats = {}
         target_values = {}
         for i, cpg_id in enumerate(cpg_ids):
+            print(cpg_id)
             # first get the predictor groups
             predictor_groups = self._get_predictor_site_groups(
                 cpg_id, num_correl_sites, num_correl_ext_sites, 
-                max_meqtl_sites, nearby_window_size
+                max_meqtl_sites, nearby_window_size, num_db_sites
                 )
             # then create the feature matrix from these
             feat_mats[cpg_id], target_values[cpg_id] = self._create_feature_mat(

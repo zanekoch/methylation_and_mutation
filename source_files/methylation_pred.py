@@ -13,7 +13,8 @@ class methylationPrediction:
     def __init__(
         self,
         mut_feat_store_fns: list,
-        model_type: str
+        model_type: str,
+        scramble: bool = False
         ) -> None:
         """
         Constructor for methylationPrediction object
@@ -22,6 +23,7 @@ class methylationPrediction:
         @ returns: None
         """
         self.mut_feat_store_fns = mut_feat_store_fns
+        self.scramble = scramble
         # combine the mutation feature stores into one
         self.mut_feat_store = self.combine_feat_stores()
         # set the train and test samples to be same as those used to generate the mutation feature store
@@ -102,9 +104,17 @@ class methylationPrediction:
         """       
         # for each cpg in the store, apply its trained model
         for i, cpg_id in enumerate(self.mut_feat_store['cpg_ids']):
+            if self.scramble:
+                X = self.mut_feat_store['feat_mats'][cpg_id]
+                # randomly scramble the rows of the feature matrix, but keep the same order of samples
+                save_index = X.index.copy(deep=True)
+                X = X.sample(frac=1, random_state = 0)
+                X.index = save_index
+            else:
+                X = self.mut_feat_store['feat_mats'][cpg_id]
             self.apply_one_model(
                 cpg_id = cpg_id,
-                X = self.mut_feat_store['feat_mats'][cpg_id],
+                X = X,
                 y = self.mut_feat_store['target_values'][cpg_id],
                 )
             if i % 100 == 0:
@@ -135,7 +145,7 @@ class methylationPrediction:
             model = sklearn.linear_model.LassoCV()
         elif self.model_type == 'xgboost':
             model = xgb.XGBRegressor()
-            
+        
         # fit model to training samples
         model.fit(X.loc[self.train_samples], y.loc[self.train_samples]) 
                 
@@ -154,10 +164,18 @@ class methylationPrediction:
         """    
         # for each cpg in the store train a model
         for i, cpg_id in enumerate(self.mut_feat_store['cpg_ids']):
+            if self.scramble:
+                X = self.mut_feat_store['feat_mats'][cpg_id]
+                # randomly scramble the rows of the feature matrix, but keep the same order of samples
+                save_index = X.index.copy(deep=True)
+                X = X.sample(frac=1, random_state = 0)
+                X.index = save_index
+            else:
+                X = self.mut_feat_store['feat_mats'][cpg_id]
             # for each feature set in the store train a model
             self.train_one_model(
                 cpg_id = cpg_id,
-                X = self.mut_feat_store['feat_mats'][cpg_id],
+                X = X,
                 y = self.mut_feat_store['target_values'][cpg_id]
                 )
             if i % 10 == 0:
@@ -179,8 +197,8 @@ class methylationPrediction:
             pickle.dump(self.trained_models, f)
         # create dataframes from predictions and performances
         self.pred_df = pd.DataFrame(self.predictions, index = self.test_samples)
-        self.perf_df = pd.DataFrame(self.prediction_performance)
+        self.perf_df = pd.DataFrame(self.prediction_performance).T
         # write to parquet files
-        self.pred_df.to_parquet(f"{out_dir}/methyl_predictions_{self.model_type}.parquet")
-        self.perf_df.to_parquet(f"{out_dir}/prediction_performance_{self.model_type}.parquet")
+        self.pred_df.to_parquet(f"{out_dir}/methyl_predictions_{self.model_type}_{self.scramble}scramble.parquet")
+        self.perf_df.to_parquet(f"{out_dir}/prediction_performance_{self.model_type}_{self.scramble}scramble.parquet")
         

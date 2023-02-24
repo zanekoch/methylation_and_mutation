@@ -57,7 +57,10 @@ def read_tcga_data(
         meta_fn = os.path.join(data_dir, "PANCAN_meta.tsv")
         )
     # add ages to all_methyl_df_t
-    all_mut_w_age_df, all_methyl_age_df_t = utils.add_ages_to_mut_and_methyl(all_mut_df, all_meta_df, all_methyl_df_t)
+    all_mut_w_age_df, all_methyl_age_df_t = utils.add_ages_to_mut_and_methyl(
+        all_mut_df, all_meta_df, all_methyl_df_t
+        )
+    # mi dfs
     mi_df = pd.read_parquet('/cellar/users/zkoch/methylation_and_mutation/dependency_files/mutual_informations/tcga_combinedMI_top10MI.parquet')
     if dataset != "":
         mi_df = mi_df[dataset]
@@ -65,7 +68,6 @@ def read_tcga_data(
         mi_df = mi_df['combined']
     mi_df = mi_df.to_frame()
     mi_df.columns = ['mutual_info']
-    #mi_df.sort_values(by='mutual_info', ascending=False, inplace=True)
     return all_mut_w_age_df, illumina_cpg_locs_df, all_methyl_age_df_t, mi_df
 
 def run(
@@ -102,23 +104,42 @@ def run(
     elif consortium == "TCGA":
         all_mut_w_age_df, illumina_cpg_locs_df, all_methyl_age_df_t, mi_df = read_tcga_data(dataset)
         matrix_qtl_dir = "/cellar/users/zkoch/methylation_and_mutation/data/matrixQtl_data/muts"
-
+    
     if generate_features:
+        # read in meQtl db
+        godmc_meqtls = pd.read_parquet(
+            '/cellar/users/zkoch/methylation_and_mutation/data/meQTL/goDMC_meQTL/goDMC_meQTLs.parquet'
+            )
         # create mutation feature generating object
         mut_feat = mutation_features.mutationFeatures(
             all_mut_w_age_df = all_mut_w_age_df, illumina_cpg_locs_df = illumina_cpg_locs_df, 
-            all_methyl_age_df_t = all_methyl_age_df_t, out_dir = out_dir, consortium = consortium,
-            dataset = dataset, cross_val_num = cross_val_num, 
-            matrix_qtl_dir = matrix_qtl_dir
+            all_methyl_age_df_t = all_methyl_age_df_t, meqtl_db = godmc_meqtls, out_dir = out_dir, 
+            consortium = consortium, dataset = dataset, cross_val_num = cross_val_num, 
+            matrix_qtl_dir = matrix_qtl_dir, 
             )
-        # choose which CpGs to generate features for, comes back sorted
-        cpg_pred_priority = mut_feat.choose_cpgs_to_train(mi_df = mi_df, bin_size=20000, sort_by = ['mutual_info', 'count'])
+         
+        """# choose which CpGs to generate features for, comes back sorted
+        cpg_pred_priority = mut_feat.choose_cpgs_to_train(
+            metric_df = mi_df, bin_size=20000, sort_by = ['mutual_info', 'count'], mean = True
+            )"""
+        # get age correlation of CpGs
+        corrs = mut_feat.all_methyl_age_df_t.loc[mut_feat.train_samples].corrwith(
+            mut_feat.all_methyl_age_df_t.loc[mut_feat.train_samples, 'age_at_index']
+            )
+        corrs.drop(['age_at_index', 'gender_MALE', 'gender_FEMALE'], inplace=True)
+        corrs = corrs.to_frame()
+        corrs.columns = ['corr']
+        cpg_pred_priority = mut_feat.choose_cpgs_to_train(
+            metric_df = corrs, bin_size=20000, sort_by = ['corr', 'count'], mean = True
+            )
+        # choose the top cpgs sorted by cpg_pred_priority
         chosen_cpgs = cpg_pred_priority.iloc[start_top_cpgs: end_top_cpgs]['#id'].to_list()
         # run the feature generation
         mut_feat.create_all_feat_mats(
             cpg_ids = chosen_cpgs, aggregate=aggregate,
             num_correl_sites=5000, num_correl_ext_sites=100, 
-            max_meqtl_sites=100, nearby_window_size=25000
+            max_meqtl_sites=1000, nearby_window_size=25000,
+            num_db_sites = 5000
             )
         mut_feat.save_mutation_features(
             start_top_cpgs = start_top_cpgs, cross_val_num = cross_val_num
@@ -157,8 +178,6 @@ def main():
     train_models = args.train_models
     # expand the glob path into a list of filenames
     mut_feat_store_fns = glob.glob(args.mut_feat_store_fns)
-    print(args.mut_feat_store_fns, flush=True)
-    print(mut_feat_store_fns, flush=True)
     consortium = args.consortium
     dataset = args.dataset
     cross_val_num = args.cross_val
