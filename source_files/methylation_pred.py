@@ -24,7 +24,7 @@ class methylationPrediction:
         """
         self.mut_feat_store_fns = mut_feat_store_fns
         self.scramble = scramble
-        # combine the mutation feature stores into one
+        # combine the mutation feature stores into one, or if only 1 read it in
         self.mut_feat_store = self.combine_feat_stores()
         # set the train and test samples to be same as those used to generate the mutation feature store
         self.train_samples = self.mut_feat_store['train_samples']
@@ -46,27 +46,25 @@ class methylationPrediction:
         mut_feat_stores = []
         for mut_feat_store_fn in self.mut_feat_store_fns:
             with open(mut_feat_store_fn, 'rb') as f:
-                mut_feat_stores.append(pickle.load(f))
-        # for each key of each store, add the values to the combined store
-        for next_mut_feat_store in mut_feat_stores:
-            for key in next_mut_feat_store.keys():
-                # if key stores a piece of meta data, add it to the combined store just once
-                if key in ['dataset', 'train_samples', 'test_samples', 'aggregate', 'num_correl_sites', 'num_correl_ext_sites', 'max_meqtl_sites', 'nearby_window_size']:
-                    if key not in mut_feat_store.keys():
-                        mut_feat_store[key] = next_mut_feat_store[key]
-                # otherwise if key stores a list of data values, each time add the values to the combined store
-                elif key == 'cpg_ids':
-                    if key not in mut_feat_store.keys():
-                        mut_feat_store[key] = next_mut_feat_store[key]
-                    else:
-                        mut_feat_store[key] = mut_feat_store[key] + next_mut_feat_store[key]
-                # otherwise key stores a dictionary of data values
-                elif key in ['feat_mats', 'target_values']:
-                    if key not in mut_feat_store.keys():
-                        mut_feat_store[key] = next_mut_feat_store[key]
-                    else:
-                        # combine the dictionaries
-                        mut_feat_store[key].update(next_mut_feat_store[key])
+                next_mut_feat_store = pickle.load(f)
+                for key in next_mut_feat_store.keys():
+                    # if key stores a piece of meta data, add it to the combined store just once
+                    if key in ['dataset', 'train_samples', 'test_samples', 'aggregate', 'num_correl_sites', 'num_correl_ext_sites', 'max_meqtl_sites', 'nearby_window_size']:
+                        if key not in mut_feat_store.keys():
+                            mut_feat_store[key] = next_mut_feat_store[key]
+                    # otherwise if key stores a list of data values, each time add the values to the combined store
+                    elif key == 'cpg_ids':
+                        if key not in mut_feat_store.keys():
+                            mut_feat_store[key] = next_mut_feat_store[key]
+                        else:
+                            mut_feat_store[key] = mut_feat_store[key] + next_mut_feat_store[key]
+                    elif key in ['feat_mats', 'target_values']:
+                        if key not in mut_feat_store.keys():
+                            mut_feat_store[key] = next_mut_feat_store[key]
+                        else:
+                            # combine the dictionaries
+                            mut_feat_store[key].update(next_mut_feat_store[key])
+                print(f"Done reading {mut_feat_store_fn}", flush=True)
         return mut_feat_store
 
     def apply_one_model(
@@ -118,7 +116,7 @@ class methylationPrediction:
                 y = self.mut_feat_store['target_values'][cpg_id],
                 )
             if i % 100 == 0:
-                print(f'Predicted methylation for {i} CpGs of {len(self.mut_feat_store["cpg_ids"])}')
+                print(f'Predicted methylation for {i} CpGs of {len(self.mut_feat_store["cpg_ids"])}', flush=True)
         return
 
     def train_one_model(
@@ -178,8 +176,8 @@ class methylationPrediction:
                 X = X,
                 y = self.mut_feat_store['target_values'][cpg_id]
                 )
-            if i % 10 == 0:
-                print(f"done {i} CpGs of {len(self.mut_feat_store['cpg_ids'])}")
+            if i % 100 == 0:
+                print(f"done {i} CpGs of {len(self.mut_feat_store['cpg_ids'])}", flush=True)
         return
     
     def save_models_and_preds(
@@ -201,4 +199,5 @@ class methylationPrediction:
         # write to parquet files
         self.pred_df.to_parquet(f"{out_dir}/methyl_predictions_{self.model_type}_{self.scramble}scramble.parquet")
         self.perf_df.to_parquet(f"{out_dir}/prediction_performance_{self.model_type}_{self.scramble}scramble.parquet")
+        print(f"wrote out trained models, predictions, and performances to {out_dir}", flush=True)
         

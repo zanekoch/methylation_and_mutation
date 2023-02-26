@@ -107,13 +107,13 @@ def run(
     
     if generate_features:
         # read in meQtl db
-        godmc_meqtls = pd.read_parquet(
+        """godmc_meqtls = pd.read_parquet(
             '/cellar/users/zkoch/methylation_and_mutation/data/meQTL/goDMC_meQTL/goDMC_meQTLs.parquet'
-            )
+            )"""
         # create mutation feature generating object
         mut_feat = mutation_features.mutationFeatures(
             all_mut_w_age_df = all_mut_w_age_df, illumina_cpg_locs_df = illumina_cpg_locs_df, 
-            all_methyl_age_df_t = all_methyl_age_df_t, meqtl_db = godmc_meqtls, out_dir = out_dir, 
+            all_methyl_age_df_t = all_methyl_age_df_t, out_dir = out_dir, 
             consortium = consortium, dataset = dataset, cross_val_num = cross_val_num, 
             matrix_qtl_dir = matrix_qtl_dir, 
             )
@@ -138,8 +138,8 @@ def run(
         mut_feat.create_all_feat_mats(
             cpg_ids = chosen_cpgs, aggregate=aggregate,
             num_correl_sites=5000, num_correl_ext_sites=100, 
-            max_meqtl_sites=1000, nearby_window_size=25000,
-            num_db_sites = 5000
+            max_meqtl_sites=1000, nearby_window_size=50000,
+            num_db_sites = 500
             )
         mut_feat.save_mutation_features(
             start_top_cpgs = start_top_cpgs, cross_val_num = cross_val_num
@@ -177,6 +177,7 @@ def main():
     generate_features = args.feat_gen
     train_models = args.train_models
     # expand the glob path into a list of filenames
+    # may just be one file, but this still makes a list
     mut_feat_store_fns = glob.glob(args.mut_feat_store_fns)
     consortium = args.consortium
     dataset = args.dataset
