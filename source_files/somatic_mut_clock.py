@@ -15,38 +15,39 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.svm import SVR
 
 class mutationClock:
+    """
+    Train epigenetic clocks on predicted methylation and actual methylation, comparing
+    """
     def __init__(
         self,
-        all_mut_w_age_df: pd.DataFrame,
-        illumina_cpg_locs_df: pd.DataFrame, 
+        predicted_methyl_fns: list,
+        predicted_perf_fns: list,
         all_methyl_age_df_t: pd.DataFrame,
+        illumina_cpg_locs_df: pd.DataFrame, 
         output_dir: str,
-        matrix_qtl_dir: str = "/cellar/users/zkoch/methylation_and_mutation/data/matrixQtl_data/muts",
         tissue_type: str = ""
         ) -> None:
-        self.all_mut_w_age_df = all_mut_w_age_df
-        self.illumina_cpg_locs_df = illumina_cpg_locs_df
+        """
+        @ predicted_methyl_fns: a list of paths to the predicted methylation files
+        @ all_methyl_age_df_t: a dataframe of all the methylation data, with age as the index
+        @ illumina_cpg_locs_df: a dataframe of the locations of the CpGs in the methylation data
+        @ output_dir: the path to the output directory where the results will be saved
+        @ tissue_type: the tissue type to use for the analysis
+        """
+        self.predicted_methyl_df = self._combine_fns(predicted_methyl_fns, axis = 1)
+        self.performance_df = self._combine_fns(predicted_perf_fns, axis=0)
+        # add age_r2 to performance_df
+        self.performance_df['age_r2'] = self.predicted_methyl_df.corrwith(self.all_methyl_age_df_t['age_at_index'], axis = 1)
         self.all_methyl_age_df_t = all_methyl_age_df_t
+        self.illumina_cpg_locs_df = illumina_cpg_locs_df
         self.output_dir = output_dir
-        self.matrix_qtl_dir = matrix_qtl_dir
-        # if a mut_loc column does not exit, add it
-        if 'mut_loc' not in self.all_mut_w_age_df.columns:
-            self.all_mut_w_age_df['mut_loc'] = self.all_mut_w_age_df['chr'] + ':' \
-                                         + self.all_mut_w_age_df['start'].astype(str)
-        # only non X and Y chromosomes and that occured in samples with measured methylation
-        self.all_mut_w_age_df = self.all_mut_w_age_df.loc[
-            (self.all_mut_w_age_df['chr'] != 'X') 
-            & (self.all_mut_w_age_df['chr'] != 'Y')
-            & (self.all_mut_w_age_df['chr'] != 'MT')
-            & (self.all_mut_w_age_df['case_submitter_id'].isin(self.all_methyl_age_df_t.index)),
-            :]
-        # join self.all_mut_w_age_df with the illumina_cpg_locs_df
-        all_mut_w_age_illum_df = self.all_mut_w_age_df.copy(deep=True)
-        all_mut_w_age_illum_df['start'] = pd.to_numeric(self.all_mut_w_age_df['start'])
-        self.all_mut_w_age_illum_df = all_mut_w_age_illum_df.merge(
-                                        self.illumina_cpg_locs_df, on=['chr', 'start'], how='left'
-                                        )
-        # subset illumina_cpg_locs_df to only the CpGs that are measured, and remove XY
+        self.tissue_type = tissue_type
+        # if tissue type is specified, subset the data to only this tissue type
+        if self.tissue_type != "":
+            self.all_methyl_age_df_t = self.all_methyl_age_df_t.loc[self.all_methyl_age_df_t['dataset'] == tissue_type, :]
+        self.test_samples = self.predicted_methyl_df.index
+        self.train_samples = self.all_methyl_age_df_t.index.difference(self.test_samples)
+        """ # subset illumina_cpg_locs_df to only the CpGs that are measured, and remove XY
         self.illumina_cpg_locs_df = self.illumina_cpg_locs_df.loc[
             self.illumina_cpg_locs_df['#id'].isin(self.all_methyl_age_df_t.columns)
             & (self.illumina_cpg_locs_df['chr'] != 'X') 
@@ -56,148 +57,59 @@ class mutationClock:
         self.all_methyl_age_df_t = self.all_methyl_age_df_t.loc[:, 
             set(self.all_methyl_age_df_t.columns).intersection(set(self.illumina_cpg_locs_df['#id'].to_list() + ['dataset', 'gender', 'age_at_index']))
             ]
-        # one hot encode gender and tissue type
-        dset_col = self.all_methyl_age_df_t['dataset'].to_list()
-        self.all_methyl_age_df_t = pd.get_dummies(self.all_methyl_age_df_t, columns=["gender", "dataset"])
-        # add back in the dataset column
-        self.all_methyl_age_df_t['dataset'] = dset_col
-        # cache :P
-        self.matrixQTL_store = {}
-        # if tissue type is specified, subset the data to only this tissue type
-        if tissue_type != "":
-            self.all_methyl_age_df_t = self.all_methyl_age_df_t.loc[self.all_methyl_age_df_t['dataset'] == tissue_type, :]
-            self.all_mut_w_age_df = self.all_mut_w_age_df.loc[self.all_mut_w_age_df['dataset'] == tissue_type, :]
+        """
         
+    def _combine_fns(
+        self,
+        fns: list,
+        axis: int
+        ) -> pd.DataFrame:
+        """
+        Combine the data from multiple files into one dataframe
+        @ fns: a list of paths to the predicted methylation files or performance files
+        @ axis: the axis to concatenate the dataframes on
+        """
+        all_dfs = []
+        for fn in fns:
+            df = pd.read_parquet(fn)
+            all_dfs.append(df)    
+        combined_df = pd.concat(all_dfs, axis=axis)
+        return combined_df
  
     def train_epi_clock(
         self,
-        X: pd.DataFrame,
-        y: pd.Series,
-        out_fn: str,
-        cpg_ids: list = []
-        ):
+        samples: list,
+        cpgs: list
+        ) -> None:
         """
         Trains an epigenetic clock to predict chronological age from cpg methylation
         @ X: a df with samples as rows and cpgs as columns. Predicted methylation
         @ y: a series of chronological ages for the samples
         @ out_fn: the file to save the trained model to
-        @ cpg_subset: a list of cpgs to use as predictors, e.g. accurately predictable or high MI. If empty, all cpgs are used
         @ return: the trained model
         """
-        if len(cpg_ids) > 0:
-            X = X[cpg_ids]
+        X = self.all_methyl_age_df_t.loc[self.train_samples, cpgs]
+        y = self.all_methyl_age_df_t.loc[self.train_samples, 'age_at_index']
         # Create an ElasticNetCV object
         model = ElasticNetCV(
             cv=5, random_state=0, max_iter=10000,
-            selection = 'random', n_jobs=-1, verbose=1
+            selection = 'random', n_jobs=-1, verbose=1,
             )
-        # Fit the model using cross-validation
-        cv = KFold(n_splits=3, shuffle=True, random_state=0)
-        maes, r2s, preds, tests = [], [], [], []
-        # do the cross validation
-        for train_index, test_index in cv.split(X):
-            X_train, X_test = X.iloc[train_index, :], X.iloc[test_index, :]
-            y_train, y_test = y.iloc[train_index], y.iloc[test_index]
-            model.fit(X_train, y_train)
-            pred = model.predict(X_test)
-            preds.append(pred)
-            tests.append(y_test)
-            maes.append(mean_absolute_error(y_test, pred))
-            r2s.append(r2_score(y_test, pred))
-        # create dataframe with  r2s, maes, preds, tests as columns
-        results_df = pd.DataFrame({'r2': r2s, 'mae': maes, 'preds': preds, 'tests': tests})
-        return results_df
+        model.fit(X, y)
+        self.trained_model = model
+        # write the model to a .pkl file in output_dir
+        out_fn = os.path.join(self.output_dir, f"{self.tissue_type}_trained_epiClock.pkl")
+        with open(out_fn, 'wb') as f:
+            pickle.dump(model, f)
+        
     
-    def visualize_clock_perf(
-        self, 
-        results_df: pd.DataFrame
-        ) -> None:
-        fig, axes = plt.subplots(1, len(results_df), figsize=(15, 4), sharex=True, dpi=100)
-        for i in range(len(results_df)):
-            to_plot = results_df.loc[i, 'tests'].to_frame().join(self.all_methyl_age_df_t.loc[:, 'dataset'])
-            to_plot['preds'] = results_df.loc[i, 'preds']
-            to_plot.columns = ['Actual age (years)', 'Dataset', 'Predicted age']
-            sns.scatterplot(data=to_plot, x='Actual age (years)', y='Predicted age', hue='Dataset', ax=axes[i], legend=False)
-            # axes[i].scatter(results_df.loc[i, 'tests'], results_df.loc[i, 'preds'], s=4, c=)
-            # plot the identity line
-            axes[i].plot([15, 95], [15, 95], color='red', linestyle='--')
-            axes[i].set_xlabel('Actual age (years)')
-            axes[i].set_ylabel('Predicted age (years)')
-            # write r2 and mae in upper left corner
-            axes[i].text(.01, .99, f"R2 = {results_df.loc[i, 'r2']:.3f}", ha='left', va='top',  transform=axes[i].transAxes )
-            axes[i].text(.01, .9, f"MAE = {results_df.loc[i, 'mae']:.3f}", ha='left', va='top',  transform=axes[i].transAxes)
-    
-    
-    
-    def driver(
-        self, 
-        do: str,
-        num_correl_sites: int,
-        max_meqtl_sites: int,
-        nearby_window_size: int,
-        cpg_ids: list = [],
-        train_samples: list = [],
-        aggregate: str = "False",
-        binarize: bool = False,
-        feat_store: str = "",
-        scramble: bool = False,
-        do_prediction: bool = False
-        ):
+    def apply_epi_clock(
+        self,
+        X: pd.DataFrame,
+        ) -> pd.Series:
         """
-        Train the predictor for all CpGs
+        Apply a trained epigenetic clock to predict chronological age from cpg methylation
+        @ X: a df with samples as rows and cpgs as columns to use for prediction
+        @ returns: a series of predicted ages
         """
-        # get the list of all CpGs
-        if len(cpg_ids) == 0:
-            cpg_ids = self.illumina_cpg_locs_df['#id'].to_list()
-        # get the list samples to train with
-        if len(train_samples) == 0:
-            train_samples = self.all_methyl_age_df_t.index.to_list()
-        else: # intersection with all_methyl_age_df_t index, so if a training sample is a diff tissue type it will be removed
-            train_samples = list(set(train_samples) & set(self.all_methyl_age_df_t.index.to_list()))
-        # do one of 3 options
-        if do == 'train':
-            predicted_methyl = []
-            # for each cpg, train the predictor and save trained model
-            for i, cpg_id in enumerate(cpg_ids):
-                preds = self.train_predictor(
-                    cpg_id, train_samples, num_correl_sites, max_meqtl_sites,
-                    nearby_window_size, aggregate, binarize, scramble, feat_store,
-                    do_prediction
-                    )
-                if do_prediction:
-                    predicted_methyl.append(preds)
-                if i % 10 == 0:
-                    print(f"Finished {100*i/len(cpg_ids)}% of CpGs", flush=True)
-            if do_prediction:
-                predicted_methyl_df = pd.concat(predicted_methyl, axis=1)
-                predicted_methyl_df.to_parquet(os.path.join(self.output_dir, f'predicted_methyl_{num_correl_sites}correl_{max_meqtl_sites}matrixQtl_{nearby_window_size}nearby_{aggregate}Aggregate_{binarize}binarize_{scramble}Scrambled_best_mi_linreg.parquet'))
-        elif do == 'evaluate': # evaluate
-            result_dfs = []
-            for i, cpg_id in enumerate(cpg_ids):
-                result_df = self.evaluate_predictor(
-                    cpg_id, train_samples, num_correl_sites, max_meqtl_sites,
-                    nearby_window_size, aggregate, binarize, feat_store, scramble
-                    )
-                # check if result_df is empty
-                if len(result_df) != 0:
-                    result_dfs.append(result_df)
-                if i % 10 == 0:
-                    print(f"Finished {100*i/len(cpg_ids)}% of CpGs", flush=True)
-            result_df = pd.concat(result_dfs)
-            return result_df
-        elif do == 'eval_features':
-            feat_info = {}
-            for i, cpg_id in enumerate(cpg_ids):
-                feat_info[cpg_id] = self.feature_informations(
-                    cpg_id, train_samples, num_correl_sites, max_meqtl_sites,
-                    nearby_window_size, aggregate, binarize, feat_store
-                    )
-                if i % 10 == 0:
-                    print(f"Finished {(i*100)/len(cpg_ids)}% of CpGs", flush=True)
-            # remove any elements that are length 0
-            feat_info = {k: v for k, v in feat_info.items() if len(v) > 0}
-            feat_info_df = pd.DataFrame(data = feat_info)
-            return feat_info_df
-        else:
-            print("'do' must be one of 'train', 'evaluate', 'eval_features'")
-            sys.exit(1)
+        return self.trained_model.predict(X)

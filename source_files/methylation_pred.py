@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 import pickle
 import sklearn
+from sklearn.linear_model import LinearRegression, ElasticNetCV
 import xgboost as xgb
 
 class methylationPrediction:
@@ -14,7 +15,8 @@ class methylationPrediction:
         self,
         mut_feat_store_fns: list,
         model_type: str,
-        scramble: bool = False
+        scramble: bool = False,
+        trained_models_fns: list = []
         ) -> None:
         """
         Constructor for methylationPrediction object
@@ -30,7 +32,13 @@ class methylationPrediction:
         self.train_samples = self.mut_feat_store['train_samples']
         self.test_samples = self.mut_feat_store['test_samples']
         self.model_type = model_type
-        self.trained_models = {}
+        # if trained models are provided, read them in
+        if len(trained_models_fns) == 0:
+            self.trained_models = {}
+        else:
+            for trained_models_fn in trained_models_fns:
+                with open(trained_models_fn, 'rb') as f:
+                    self.trained_models = pickle.load(f)
         self.predictions = {}
         self.prediction_performance = {}
 
@@ -79,18 +87,20 @@ class methylationPrediction:
         @ X: the mutation feature matrix for the CpG site
         @ y: the target methylation values for the CpG site
         """
-        # subset X and y to test samples
-        X_test = X.loc[self.test_samples]
-        y_test = y.loc[self.test_samples]
         # predict methylation for test samples
         model = self.trained_models[cpg_id]
-        y_pred = model.predict(X_test)
+        y_pred = model.predict(X)
         self.predictions[cpg_id] = y_pred
-        # measure performance
-        r2 = np.corrcoef(y_test, y_pred)[0,1]**2
-        mae = np.mean(np.abs(y_test - y_pred))
+        # get the number row that corresponds to the test samples in y
+        y_test_index = y.index.get_indexer(self.test_samples)
+        # get predictions for test samples
+        y_pred_test = y_pred[y_test_index]
+        y_test = y.loc[self.test_samples]
+        # measure performance on test samples
+        with np.errstate(divide='ignore'):
+            r2 = np.corrcoef(y_test, y_pred_test)[0,1]**2
+        mae = np.mean(np.abs(y_test - y_pred_test))
         self.prediction_performance[cpg_id] = {'r2': r2, 'mae': mae}
-        return
 
     def apply_all_models(
         self
@@ -110,6 +120,7 @@ class methylationPrediction:
                 X.index = save_index
             else:
                 X = self.mut_feat_store['feat_mats'][cpg_id]
+            # do prediction
             self.apply_one_model(
                 cpg_id = cpg_id,
                 X = X,
@@ -134,7 +145,10 @@ class methylationPrediction:
         @ returns: None
         """
         if self.model_type == 'elasticNet':
-            model = sklearn.linear_model.ElasticNetCV()
+            model = ElasticNetCV(
+                cv=5, random_state=0, max_iter=25000,
+                selection = 'random', n_jobs=-1
+                )
         elif self.model_type == 'linreg':
             model = sklearn.linear_model.LinearRegression()
         elif self.model_type == 'rand_forest':
@@ -146,7 +160,6 @@ class methylationPrediction:
         
         # fit model to training samples
         model.fit(X.loc[self.train_samples], y.loc[self.train_samples]) 
-                
         # add to trained models dictionary
         self.trained_models[cpg_id] = model
         return
@@ -193,8 +206,10 @@ class methylationPrediction:
         # write out files to there, including the model type in name
         with open(f"{out_dir}/trained_models_{self.model_type}.pkl", 'wb') as f:
             pickle.dump(self.trained_models, f)
-        # create dataframes from predictions and performances
-        self.pred_df = pd.DataFrame(self.predictions, index = self.test_samples)
+        # create dataframes from predictions and performances, set keys of predictions as index
+        # get index from the first mutation feature store index (they are all the same)
+        all_samples = self.mut_feat_store['feat_mats'][self.mut_feat_store['cpg_ids'][0]].index
+        self.pred_df = pd.DataFrame(self.predictions, index = all_samples)
         self.perf_df = pd.DataFrame(self.prediction_performance).T
         # write to parquet files
         self.pred_df.to_parquet(f"{out_dir}/methyl_predictions_{self.model_type}_{self.scramble}scramble.parquet")

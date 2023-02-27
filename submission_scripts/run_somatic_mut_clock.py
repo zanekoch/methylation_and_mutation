@@ -145,11 +145,13 @@ def run(
             start_top_cpgs = start_top_cpgs, cross_val_num = cross_val_num
             )
     elif train_models:
+        trained_models_fn = os.path.join(mut_feat_store_fns[0][:mut_feat_store_fns[0].rfind('/')], "trained_models_elasticNet.pkl")
         methyl_pred = methylation_pred.methylationPrediction(
             mut_feat_store_fns = mut_feat_store_fns,
-            model_type = 'xgboost'
+            model_type = 'elasticNet',
+            trained_models_fns = [trained_models_fn]
             )
-        methyl_pred.train_all_models()
+        #methyl_pred.train_all_models()
         methyl_pred.apply_all_models()
         methyl_pred.save_models_and_preds()
     else:
