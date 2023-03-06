@@ -34,9 +34,13 @@ class mutationClock:
         ) -> None:
         """
         @ predicted_methyl_fns: a list of paths to the predicted methylation files
+        @ predicted_perf_fns: a list of paths to the performance files
+        @ scrambled_predicted_methyl_fns: a list of paths to the scrambled predicted methylation files
         @ all_methyl_age_df_t: a dataframe of all the methylation data, with age as the index
         @ illumina_cpg_locs_df: a dataframe of the locations of the CpGs in the methylation data
         @ output_dir: the path to the output directory where the results will be saved
+        @ train_samples: a list of the training samples, from mut_feat
+        @ test_samples: a list of the testing samples, from mut_feat
         @ tissue_type: the tissue type to use for the analysis
         """
         self.predicted_methyl_df = self._combine_fns(predicted_methyl_fns, axis = 1)

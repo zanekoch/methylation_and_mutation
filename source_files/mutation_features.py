@@ -22,7 +22,6 @@ class mutationFeatures:
         dataset: str,
         cross_val_num: int,
         matrix_qtl_dir: str,
-        use_old: bool = False
         ):
         self.all_mut_w_age_df = all_mut_w_age_df
         self.illumina_cpg_locs_df = illumina_cpg_locs_df
@@ -35,10 +34,7 @@ class mutationFeatures:
         # pre-process the mutation and methylation data
         self._preproc_mut_and_methyl()
         # choose train and test samples based on cross validation number
-        if use_old:
-            self.train_samples, self.test_samples = self.cross_val_samples_old()
-        else:
-            self.train_samples, self.test_samples = self.cross_val_samples()
+        self.train_samples, self.test_samples = self.cross_val_samples()
         self.matrix_qtl_dir = matrix_qtl_dir
         # create empty cache
         self.matrixQTL_store = {}
