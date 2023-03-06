@@ -4,7 +4,7 @@ import sys
 import os
 import pickle
 import ray
-
+from sklearn.model_selection import StratifiedKFold
 
 class mutationFeatures:
     """
@@ -16,17 +16,18 @@ class mutationFeatures:
         all_mut_w_age_df: pd.DataFrame,
         illumina_cpg_locs_df: pd.DataFrame, 
         all_methyl_age_df_t: pd.DataFrame,
-        #meqtl_db: pd.DataFrame,
+        meqtl_db: pd.DataFrame,
         out_dir: str,
         consortium: str,
         dataset: str,
         cross_val_num: int,
         matrix_qtl_dir: str,
+        use_old: bool = False
         ):
         self.all_mut_w_age_df = all_mut_w_age_df
         self.illumina_cpg_locs_df = illumina_cpg_locs_df
         self.all_methyl_age_df_t = all_methyl_age_df_t
-        """self.meqtl_db = meqtl_db"""
+        self.meqtl_db = meqtl_db
         self.out_dir = out_dir
         self.dataset = dataset
         self.consortium = consortium
@@ -34,7 +35,10 @@ class mutationFeatures:
         # pre-process the mutation and methylation data
         self._preproc_mut_and_methyl()
         # choose train and test samples based on cross validation number
-        self.train_samples, self.test_samples = self.cross_val_samples()
+        if use_old:
+            self.train_samples, self.test_samples = self.cross_val_samples_old()
+        else:
+            self.train_samples, self.test_samples = self.cross_val_samples()
         self.matrix_qtl_dir = matrix_qtl_dir
         # create empty cache
         self.matrixQTL_store = {}
@@ -91,10 +95,10 @@ class mutationFeatures:
         else: # only do gender if one dataset is specified
             self.all_methyl_age_df_t = pd.get_dummies(self.all_methyl_age_df_t, columns=["gender"])
         # subset meqtl_db to only cpgs in all_methyl_age_df_t 
-        """self.meqtl_db = self.meqtl_db.loc[
-            self.meqtl_db['cpg'].isin(self.all_methyl_age_df_t.columns), :]"""
+        self.meqtl_db = self.meqtl_db.loc[
+            self.meqtl_db['cpg'].isin(self.all_methyl_age_df_t.columns), :]
 
-    def cross_val_samples(self):
+    def cross_val_samples_old(self):
         """
         Choose train and test samples based on cross validation number and dataset
         @ return: train_samples, test_samples
@@ -106,6 +110,21 @@ class mutationFeatures:
         split_samples = [all_samples[i:i + split_size] for i in range(0, num_samples, split_size)]
         test_samples = split_samples[self.cross_val_num]
         train_samples = list(set(all_samples).difference(set(test_samples)))
+        return train_samples, test_samples
+    
+    def cross_val_samples(self):
+        """
+        Choose train and test samples based on cross validation number and dataset
+        @ return: train_samples, test_samples
+        """
+        # implicitly subsets to only this dataset's samples bc of preproc_mut_and_methyl
+        skf = StratifiedKFold(n_splits=3, random_state=10, shuffle=True)
+        # select the self.cross_val_num fold
+        for i, (train_index, test_index) in enumerate(skf.split(self.all_methyl_age_df_t, self.all_methyl_age_df_t.loc[:, 'age_at_index'])):
+            if i == self.cross_val_num:
+                train_samples = self.all_methyl_age_df_t.iloc[train_index].index.to_list()
+                test_samples = self.all_methyl_age_df_t.iloc[test_index].index.to_list()
+                break
         return train_samples, test_samples
 
     def _select_correl_sites(
@@ -183,8 +202,8 @@ class mutationFeatures:
     
     def _select_db_sites(self, cpg_id, num_db_sites):
         this_cpg_meqtls = self.meqtl_db[self.meqtl_db['cpg'] == cpg_id]
-        neg_cpg_meqtls = this_cpg_meqtls.nsmallest(num_db_sites, 'beta_a1')['snp'].to_list()
-        pos_cpg_meqtls = this_cpg_meqtls.nlargest(num_db_sites, 'beta_a1')['snp'].to_list()
+        neg_cpg_meqtls = this_cpg_meqtls[this_cpg_meqtls['beta_a1'] < 0].nsmallest(num_db_sites, 'beta_a1')['snp'].to_list()
+        pos_cpg_meqtls = this_cpg_meqtls[this_cpg_meqtls['beta_a1'] > 0].nlargest(num_db_sites, 'beta_a1')['snp'].to_list()
         return neg_cpg_meqtls, pos_cpg_meqtls
     
     def _get_predictor_site_groups(
@@ -204,11 +223,10 @@ class mutationFeatures:
         @ nearby_window_size: the window size to be used to find nearby sites
         @ returns: dict of types of genomic locations of the sites to be used as predictors in format chr:start
         """
-        def extend(loc_list):
+        def extend(loc_list, extend_amount = 250):
             """
             Return the list of locations with each original loc extended out 250bp in each direction
             """
-            extend_amount = 250
             return [loc.split(':')[0] + ':' + str(int(loc.split(':')[1]) + i) 
                     for loc in loc_list 
                     for i in range(-extend_amount, extend_amount + 1)]
@@ -240,9 +258,9 @@ class mutationFeatures:
         predictor_site_groups['matrixqtl_neg_beta_ext'] = extend(predictor_site_groups['matrixqtl_neg_beta'])
         predictor_site_groups['matrixqtl_pos_beta_ext'] = extend(predictor_site_groups['matrixqtl_pos_beta'])
         # get database meQtls
-        """predictor_site_groups['db_neg_beta'], predictor_site_groups['db_pos_beta'] = self._select_db_sites(cpg_id, num_db_sites)
-        predictor_site_groups['db_neg_beta_ext'] = extend(predictor_site_groups['db_neg_beta'])
-        predictor_site_groups['db_pos_beta_ext'] = extend(predictor_site_groups['db_pos_beta'])"""
+        predictor_site_groups['db_neg_beta'], predictor_site_groups['db_pos_beta'] = self._select_db_sites(cpg_id, num_db_sites)
+        predictor_site_groups['db_neg_beta_ext'] = extend(predictor_site_groups['db_neg_beta'], extend_amount=250)
+        predictor_site_groups['db_pos_beta_ext'] = extend(predictor_site_groups['db_pos_beta'], extend_amount=250)
         return predictor_site_groups
     
     def _create_feature_mat(
@@ -416,7 +434,7 @@ class mutationFeatures:
         max_meqtl_sites: int = 100,
         nearby_window_size: int = 25000,
         num_db_sites: int = 500
-        ) -> dict:
+        ):
         """
         Create the training matrix for the given cpg_id and predictor_sites
         @ cpg_ids: the ids of the CpGs
@@ -428,7 +446,6 @@ class mutationFeatures:
         feat_mats = {}
         target_values = {}
         for i, cpg_id in enumerate(cpg_ids):
-            print(cpg_id)
             # first get the predictor groups
             predictor_groups = self._get_predictor_site_groups(
                 cpg_id, num_correl_sites, num_correl_ext_sites, 
@@ -451,6 +468,7 @@ class mutationFeatures:
             'num_correl_ext_sites': num_correl_ext_sites,
             'max_meqtl_sites': max_meqtl_sites,
             'nearby_window_size': nearby_window_size,
+            'num_db_sites': num_db_sites,
             'feat_mats': feat_mats,
             'target_values': target_values
             }
@@ -464,7 +482,7 @@ class mutationFeatures:
         Write out the essential data as a dictionary to a file in a directory
         """
         # create file name based on mutation_features_store meta values
-        meta_str = self.consortium + '_' + self.mutation_features_store['dataset'] + '_' + str(self.mutation_features_store['num_correl_sites']) + 'correl_' + str(self.mutation_features_store['num_correl_ext_sites']) + 'correlExt_' + str(self.mutation_features_store['max_meqtl_sites']) + 'meqtl_'+ str(self.mutation_features_store['nearby_window_size']) + 'nearby_' + str(self.mutation_features_store['aggregate']) + 'agg_' + str(len(self.mutation_features_store['cpg_ids'])) + 'numCpGs_' + str(start_top_cpgs) + 'startTopCpGs_' + str(cross_val_num) + 'crossValNum'
+        meta_str = self.consortium + '_' + self.mutation_features_store['dataset'] + '_' + str(self.mutation_features_store['num_correl_sites']) + 'correl_' + str(self.mutation_features_store['num_correl_ext_sites']) + 'correlExt_' + str(self.mutation_features_store['max_meqtl_sites']) + 'meqtl_'+ str(self.mutation_features_store['nearby_window_size']) + 'nearby_' + str(self.mutation_features_store['aggregate']) + 'agg_' + str(len(self.mutation_features_store['cpg_ids'])) + 'numCpGs_' + str(start_top_cpgs) + 'startTopCpGs_' + str(self.mutation_features_store['num_db_sites']) + 'maxDBsites_' + str(cross_val_num) + 'crossValNum'
         # create directory if it doesn't exist
         directory = os.path.join(self.out_dir, meta_str)
         if not os.path.exists(directory):

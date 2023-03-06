@@ -98,9 +98,9 @@ class methylationPrediction:
         y_test = y.loc[self.test_samples]
         # measure performance on test samples
         with np.errstate(divide='ignore'):
-            r2 = np.corrcoef(y_test, y_pred_test)[0,1]**2
+            r = np.corrcoef(y_test, y_pred_test)[0,1]
         mae = np.mean(np.abs(y_test - y_pred_test))
-        self.prediction_performance[cpg_id] = {'r2': r2, 'mae': mae}
+        self.prediction_performance[cpg_id] = {'testing_methyl_r': r, 'testing_methyl_mae': mae}
 
     def apply_all_models(
         self
@@ -204,7 +204,7 @@ class methylationPrediction:
         if out_dir == "":
             out_dir = self.mut_feat_store_fns[0][:self.mut_feat_store_fns[0].rfind('/')]
         # write out files to there, including the model type in name
-        with open(f"{out_dir}/trained_models_{self.model_type}.pkl", 'wb') as f:
+        with open(f"{out_dir}/trained_models_{self.model_type}_{self.scramble}scramble.pkl", 'wb') as f:
             pickle.dump(self.trained_models, f)
         # create dataframes from predictions and performances, set keys of predictions as index
         # get index from the first mutation feature store index (they are all the same)

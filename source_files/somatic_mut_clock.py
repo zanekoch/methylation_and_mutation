@@ -13,6 +13,8 @@ from sklearn.metrics import mean_absolute_error, r2_score
 from sklearn.linear_model import ElasticNetCV, RidgeCV, LinearRegression, SGDRegressor
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.svm import SVR
+import xgboost as xgb
+
 
 class mutationClock:
     """
@@ -22,9 +24,12 @@ class mutationClock:
         self,
         predicted_methyl_fns: list,
         predicted_perf_fns: list,
+        scrambled_predicted_methyl_fns: list,
         all_methyl_age_df_t: pd.DataFrame,
         illumina_cpg_locs_df: pd.DataFrame, 
         output_dir: str,
+        train_samples: list,
+        test_samples: list,
         tissue_type: str = ""
         ) -> None:
         """
@@ -36,8 +41,7 @@ class mutationClock:
         """
         self.predicted_methyl_df = self._combine_fns(predicted_methyl_fns, axis = 1)
         self.performance_df = self._combine_fns(predicted_perf_fns, axis=0)
-        # add age_r2 to performance_df
-        self.performance_df['age_r2'] = self.predicted_methyl_df.corrwith(self.all_methyl_age_df_t['age_at_index'], axis = 1)
+        self.scrambled_predicted_methyl_df = self._combine_fns(scrambled_predicted_methyl_fns, axis = 1)
         self.all_methyl_age_df_t = all_methyl_age_df_t
         self.illumina_cpg_locs_df = illumina_cpg_locs_df
         self.output_dir = output_dir
@@ -45,20 +49,28 @@ class mutationClock:
         # if tissue type is specified, subset the data to only this tissue type
         if self.tissue_type != "":
             self.all_methyl_age_df_t = self.all_methyl_age_df_t.loc[self.all_methyl_age_df_t['dataset'] == tissue_type, :]
-        self.test_samples = self.predicted_methyl_df.index
-        self.train_samples = self.all_methyl_age_df_t.index.difference(self.test_samples)
-        """ # subset illumina_cpg_locs_df to only the CpGs that are measured, and remove XY
-        self.illumina_cpg_locs_df = self.illumina_cpg_locs_df.loc[
-            self.illumina_cpg_locs_df['#id'].isin(self.all_methyl_age_df_t.columns)
-            & (self.illumina_cpg_locs_df['chr'] != 'X') 
-            & (self.illumina_cpg_locs_df['chr'] != 'Y')
-            ]
-        # drop CpGs that are not in the illumina_cpg_locs_df (i.e. on XY)
-        self.all_methyl_age_df_t = self.all_methyl_age_df_t.loc[:, 
-            set(self.all_methyl_age_df_t.columns).intersection(set(self.illumina_cpg_locs_df['#id'].to_list() + ['dataset', 'gender', 'age_at_index']))
-            ]
-        """
+        self.test_samples = test_samples
+        self.train_samples = train_samples
         
+        
+    def _populate_performance(self):
+        """
+        Add interesting column to self.performance_df
+        """
+        # add training CpG real age correlation
+        self.performance_df['training_real_mf_age_r'] = self.all_methyl_age_df_t.loc[self.train_samples, self.performance_df.index ].corrwith(self.all_methyl_age_df_t.loc[self.train_samples, 'age_at_index'])
+        # add training CpG predicted age correlation
+        self.performance_df['training_pred_mf_age_r'] = self.predicted_methyl_df.loc[self.train_samples, :].corrwith(self.all_methyl_age_df_t.loc[self.train_samples, 'age_at_index'])
+        # add correlation between training predicted methylation and training actual methylation
+        self.performance_df['training_pred_real_mf_r'] = self.predicted_methyl_df.loc[self.train_samples, :].corrwith(self.all_methyl_age_df_t.loc[self.train_samples, self.performance_df.index])
+        # get correlation between testing scrambled predicted methylation and testing actual methylation
+        self.performance_df['testing_scrambled_real_mf_r'] = self.scrambled_predicted_methyl_df.loc[self.test_samples, :].corrwith(self.all_methyl_age_df_t.loc[self.test_samples, self.performance_df.index])
+        # add correlation of predicted testing samples with age
+        self.performance_df['testing_pred_mf_age_r'] = self.predicted_methyl_df.loc[self.test_samples, :].corrwith(self.all_methyl_age_df_t.loc[self.test_samples, 'age_at_index'])
+        # and actual testing samples with age
+        self.performance_df['testing_real_mf_age_r'] = self.all_methyl_age_df_t.loc[self.test_samples, self.performance_df.index].corrwith(self.all_methyl_age_df_t.loc[self.test_samples, 'age_at_index'])
+    
+    
     def _combine_fns(
         self,
         fns: list,
@@ -76,40 +88,55 @@ class mutationClock:
         combined_df = pd.concat(all_dfs, axis=axis)
         return combined_df
  
+    def feature_selection(self):
+        """
+        Perform feature selection on the predicted methylation data of the training samples
+        """
+        # get correlation of each CpG with age
+        training_age_corr = self.predicted_methyl_df.loc[self.train_samples].corrwith(self.all_methyl_age_df_t.loc[self.train_samples, 'age_at_index'], axis = 0)
+        # get correlation between each cpg's predicted methylation and actual methylation in all_methyl_age_df_t for training samples
+        #training_methyl_corr = self.predicted_methyl_df.loc[self.train_samples].corrwith(self.all_methyl_age_df_t.loc[self.train_samples, self.predicted_methyl_df.columns], axis = 0)
+        return training_age_corr
+ 
     def train_epi_clock(
         self,
-        samples: list,
-        cpgs: list
+        X, 
+        y
         ) -> None:
         """
         Trains an epigenetic clock to predict chronological age from cpg methylation
         @ X: a df with samples as rows and cpgs as columns. Predicted methylation
         @ y: a series of chronological ages for the samples
-        @ out_fn: the file to save the trained model to
         @ return: the trained model
         """
-        X = self.all_methyl_age_df_t.loc[self.train_samples, cpgs]
-        y = self.all_methyl_age_df_t.loc[self.train_samples, 'age_at_index']
+        # X = self.all_methyl_age_df_t.loc[samples, cpgs]
+        #y = self.all_methyl_age_df_t.loc[samples, 'age_at_index']
+        #X = self.predicted_methyl_df.loc[samples, cpgs]
+        # model = xgb.XGBRegressor()
+        # model = RandomForestRegressor(n_estimators=1000, max_depth=100, n_jobs=-1, verbose=1)
+        
         # Create an ElasticNetCV object
         model = ElasticNetCV(
             cv=5, random_state=0, max_iter=10000,
-            selection = 'random', n_jobs=-1, verbose=1,
+            selection = 'random', n_jobs=-1, verbose=0
             )
-        model.fit(X, y)
-        self.trained_model = model
-        # write the model to a .pkl file in output_dir
-        out_fn = os.path.join(self.output_dir, f"{self.tissue_type}_trained_epiClock.pkl")
-        with open(out_fn, 'wb') as f:
-            pickle.dump(model, f)
         
-    
+        model.fit(X, y)
+        return model
+        # write the model to a .pkl file in output_dir
+        #out_fn = os.path.join(self.output_dir, f"{self.tissue_type}_{len(cpgs)}numCpgsMostAgeCorr_trained_epiClock.pkl")
+        """with open(out_fn, 'wb') as f:
+            pickle.dump(model, f)"""
+        
+   
     def apply_epi_clock(
         self,
         X: pd.DataFrame,
+        model: object
         ) -> pd.Series:
         """
         Apply a trained epigenetic clock to predict chronological age from cpg methylation
         @ X: a df with samples as rows and cpgs as columns to use for prediction
         @ returns: a series of predicted ages
         """
-        return self.trained_model.predict(X)
+        return model.predict(X)

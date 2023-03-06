@@ -71,8 +71,7 @@ def read_tcga_data(
     return all_mut_w_age_df, illumina_cpg_locs_df, all_methyl_age_df_t, mi_df
 
 def run(
-    generate_features: bool,
-    train_models: bool,
+    do: str,
     consortium: str,
     dataset: str, 
     cross_val_num: int,
@@ -84,8 +83,6 @@ def run(
     ) -> None:
     """
     Driver function for generating features or training models
-    @ generate_features: bool, whether to generate features
-    @ train_models: bool, whether to train models
     @ consortium: str, either "tcga" or "icgc"
     @ dataset: str, either "BRCA", "COAD", ...
     @ train_samples: list of samples to train on
@@ -104,24 +101,27 @@ def run(
     elif consortium == "TCGA":
         all_mut_w_age_df, illumina_cpg_locs_df, all_methyl_age_df_t, mi_df = read_tcga_data(dataset)
         matrix_qtl_dir = "/cellar/users/zkoch/methylation_and_mutation/data/matrixQtl_data/muts"
-    
+    if do == "Feat_gen":
+        generate_features = True
+    elif do == "Train_models":
+        train_models = True
+    elif do == "Both":
+        generate_features = True
+        train_models = True
+    mut_feat_store_fn = ""
     if generate_features:
+        print("generating features", flush=True)
         # read in meQtl db
-        """godmc_meqtls = pd.read_parquet(
-            '/cellar/users/zkoch/methylation_and_mutation/data/meQTL/goDMC_meQTL/goDMC_meQTLs.parquet'
-            )"""
+        godmc_meqtls = pd.read_parquet(
+            '/cellar/users/zkoch/methylation_and_mutation/data/meQTL/goDMC_meQTL/goDMC_meQTLs_for_mutClock.parquet'
+            )
         # create mutation feature generating object
         mut_feat = mutation_features.mutationFeatures(
             all_mut_w_age_df = all_mut_w_age_df, illumina_cpg_locs_df = illumina_cpg_locs_df, 
-            all_methyl_age_df_t = all_methyl_age_df_t, out_dir = out_dir, 
+            all_methyl_age_df_t = all_methyl_age_df_t, meqtl_db = godmc_meqtls, out_dir = out_dir, 
             consortium = consortium, dataset = dataset, cross_val_num = cross_val_num, 
-            matrix_qtl_dir = matrix_qtl_dir, 
+            matrix_qtl_dir = matrix_qtl_dir
             )
-         
-        """# choose which CpGs to generate features for, comes back sorted
-        cpg_pred_priority = mut_feat.choose_cpgs_to_train(
-            metric_df = mi_df, bin_size=20000, sort_by = ['mutual_info', 'count'], mean = True
-            )"""
         # get age correlation of CpGs
         corrs = mut_feat.all_methyl_age_df_t.loc[mut_feat.train_samples].corrwith(
             mut_feat.all_methyl_age_df_t.loc[mut_feat.train_samples, 'age_at_index']
@@ -129,39 +129,51 @@ def run(
         corrs.drop(['age_at_index', 'gender_MALE', 'gender_FEMALE'], inplace=True)
         corrs = corrs.to_frame()
         corrs.columns = ['corr']
-        cpg_pred_priority = mut_feat.choose_cpgs_to_train(
-            metric_df = corrs, bin_size=20000, sort_by = ['corr', 'count'], mean = True
-            )
+        corrs['corr'] = corrs['corr'].abs()
         # choose the top cpgs sorted by cpg_pred_priority
+        cpg_pred_priority = mut_feat.choose_cpgs_to_train(
+            metric_df = corrs, bin_size=50000, sort_by = ['corr', 'count'], mean = True
+            )
         chosen_cpgs = cpg_pred_priority.iloc[start_top_cpgs: end_top_cpgs]['#id'].to_list()
         # run the feature generation
         mut_feat.create_all_feat_mats(
             cpg_ids = chosen_cpgs, aggregate=aggregate,
-            num_correl_sites=5000, num_correl_ext_sites=100, 
-            max_meqtl_sites=1000, nearby_window_size=50000,
-            num_db_sites = 500
+            num_correl_sites=500, num_correl_ext_sites=500, 
+            max_meqtl_sites=1000, nearby_window_size = 50000,
+            num_db_sites = 25000
             )
-        mut_feat.save_mutation_features(
+        mut_feat_store_fn = mut_feat.save_mutation_features(
             start_top_cpgs = start_top_cpgs, cross_val_num = cross_val_num
             )
-    elif train_models:
-        trained_models_fn = os.path.join(mut_feat_store_fns[0][:mut_feat_store_fns[0].rfind('/')], "trained_models_elasticNet.pkl")
+    mut_feat_store_fns = [mut_feat_store_fn]
+    if train_models:
+        print("training models", flush=True)
+        #trained_models_fn = os.path.join(mut_feat_store_fns[0][:mut_feat_store_fns[0].rfind('/')], "trained_models_elasticNet.pkl")
         methyl_pred = methylation_pred.methylationPrediction(
             mut_feat_store_fns = mut_feat_store_fns,
-            model_type = 'elasticNet',
-            trained_models_fns = [trained_models_fn]
+            model_type = 'xgboost',
+            scramble = False
+            #trained_models_fns = [trained_models_fn]
             )
-        #methyl_pred.train_all_models()
+        methyl_pred.train_all_models()
         methyl_pred.apply_all_models()
         methyl_pred.save_models_and_preds()
-    else:
-        raise ValueError("Must specify either generate_features or train_models")
+        # also do scrambled
+        methyl_pred = methylation_pred.methylationPrediction(
+            mut_feat_store_fns = mut_feat_store_fns,
+            model_type = 'xgboost',
+            scramble = True
+            #trained_models_fns = [trained_models_fn]
+            )
+        methyl_pred.train_all_models()
+        methyl_pred.apply_all_models()
+        methyl_pred.save_models_and_preds()
+    
 
 def main():
     # parse arguments 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--feat_gen', type=bool, help='whether to generate features', default=False)
-    parser.add_argument('--train_models', type=bool, help='whether to train models', default=False)
+    parser.add_argument('--do', type=str, help='whether to generate features, train models, or both')
     parser.add_argument('--mut_feat_store_fns', type=str, help='glob path to feature files', default="")
     parser.add_argument('--consortium', type=str, help='TCGA or ICGC')
     parser.add_argument('--dataset', type=str, help='tissue type to run, e.g. BRCA, COAD, ...', default="")
@@ -172,12 +184,12 @@ def main():
     parser.add_argument('--aggregate', type=str, help='False, True, or Both', default="Both")
     # parse
     args = parser.parse_args()
-    # make sure not asking for features and models at the same time
-    assert not (args.feat_gen and args.train_models), "cannot generate features and train models at the same time"
+    do = args.do
+    # assert do has a valid value
+    assert (do in ['Feat_gen', 'Train_models', 'Both']), "cannot generate features and train models at the same time"
     # if training models, need to specify a glob path to the feature files
-    assert not (args.train_models and args.mut_feat_store_fns == ""), "must specify glob path to feature files if training models"    
-    generate_features = args.feat_gen
-    train_models = args.train_models
+    if do == "train_models":
+        assert (args.mut_feat_store_fns != ""), "must specify glob path to feature files if training models"    
     # expand the glob path into a list of filenames
     # may just be one file, but this still makes a list
     mut_feat_store_fns = glob.glob(args.mut_feat_store_fns)
@@ -188,17 +200,15 @@ def main():
     start_top_cpgs = args.start_top_cpgs
     end_top_cpgs = args.end_top_cpgs
     aggregate = args.aggregate
-    print(f"cross val {cross_val_num} running {generate_features} generate features {train_models} train models {consortium} {dataset} and outputting to {out_dir}")
+    print(f"cross val {cross_val_num}\n doing {do}\n for {consortium} and {dataset}\n and outputting to {out_dir}")
     # run 
     run(
-        generate_features = generate_features, train_models = train_models,
+        do = do,
         consortium = consortium, dataset = dataset, cross_val_num = cross_val_num,
         out_dir = out_dir, start_top_cpgs = start_top_cpgs,
         end_top_cpgs = end_top_cpgs, aggregate = aggregate,
         mut_feat_store_fns = mut_feat_store_fns
         )
-        
-
         
 
 if __name__ == "__main__":
