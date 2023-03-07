@@ -272,19 +272,21 @@ class mutationFeatures:
         self, 
         cpg_id: str, 
         predictor_groups: dict,
-        aggregate: str
+        aggregate: str,
+        extend_amount: int
         ) -> tuple:
         """
         Create the training matrix for the given cpg_id and predictor_sites
         @ cpg_id: the id of the CpG
         @ predictor_groups: dict of lists of sites to be used as predictors of cpg_id's methylation
         @ aggregate: whether to aggregate the mutation status by predictor group
+        @ extend_amount: the amount the predictor sites were extended by
         @ returns: X, y where X is the feature matrix and y is the methylation values of cpg_id across samples
         """
         # make list of all samples to fill in samples that do not have mutations in predictor sites
         all_samples = self.train_samples + self.test_samples
         
-        def noAgg():
+        def noAgg() -> pd.DataFrame:
             """
             Create a feature matrix where each column is a predictor site from predictor_groups
             and values are the variant allele frequencies of the mutations at that site in the sample
@@ -307,28 +309,67 @@ class mutationFeatures:
             feat_mat = feat_mat.reindex(all_samples, fill_value=0)
             return feat_mat
         
-        def agg():
+        def agg(
+            extended_feat_agg: bool = True
+            ) -> pd.DataFrame:
             """
             Create a feature matrix where each column is a predictor group from predictor_groups
             and values are the sum of the variant allele frequencies of the mutations in
             that group in the sample
+            @ extended_feat_agg: Turn each set of sites extended from one site into their own feature.
+            So if chr1:500 was extended by 250, then chr1:250-750 will be a feature.
             """
+            # list of dataframes containing aggregated features
             aggregated_muts = []
-            for _, one_group_sites in predictor_groups.items():
+            extended_feat_agg_muts = []
+            # for each predictor group, e.g. pos_corr, neg_corr, etc.
+            for group_name, group_sites in predictor_groups.items():
+                # get the mutation status of all sites in the group
                 mut_status = self.all_mut_w_age_df.loc[
-                    self.all_mut_w_age_df['mut_loc'].isin(one_group_sites),
+                    self.all_mut_w_age_df['mut_loc'].isin(group_sites),
                     ['DNA_VAF', 'case_submitter_id', 'mut_loc']
                     ]
+                
+                ### Full aggregation across all sites in the group for each sample ### 
+                # and turn these into a samples x loci matrix
                 mut_status = pd.pivot_table(
                     mut_status, index='case_submitter_id', columns='mut_loc',
                     values='DNA_VAF', fill_value = 0
                     )
                 mut_status = mut_status.reindex(all_samples, fill_value=0)
+                # sum across loci within each sample to get samples x aggregate feature matrix
                 agg_mut_status = mut_status.sum(axis=1)
                 aggregated_muts.append(agg_mut_status)
-            # create dataframe from aggreated mutations with columns pred_type
+                
+                ### Aggregation across each extended site for each sample ###
+                # if we want to add, the group name ends with '_ext', 
+                # and there are more than 0 mutated sites in the group 
+                if extended_feat_agg and group_name.endswith('_ext') and mut_status.shape[1] > 0:
+                    # sum every extend_amount columns of mut_status
+                    number_ext_features = (len(group_sites) // extend_amount)
+                    sums, col_names = [], []
+                    for i in range(number_ext_features - 1):
+                        # sum the features in the ith extended feature that are in mut_status
+                        to_sum = set(group_sites[i*extend_amount:(i+1)*extend_amount]).intersection(mut_status.columns)
+                        sums.append(mut_status.loc[:, to_sum].sum(axis=1))
+                        # create the name of the ith extended feature
+                        name = group_sites[i*extend_amount] \
+                                            + '-' \
+                                            + group_sites[(i+1)*extend_amount].split(':')[1]
+                        col_names.append(name)
+                    extended_feats = pd.concat(sums, axis=1)
+                    # rename features 
+                    extended_feats.columns = col_names
+                    # add extended features to extended_feat_agg_muts
+                    extended_feat_agg_muts.append(extended_feats)
+                
+            # create dataframe from aggreated mutations with columns named after pred_type
             agg_feat_mat = pd.concat(aggregated_muts, axis=1)
             agg_feat_mat.columns = predictor_groups.keys()
+            # create df from extended features
+            extended_feat_agg_muts = pd.concat(extended_feat_agg_muts, axis=1)
+            # add extended features to agg_feat_mat
+            agg_feat_mat = pd.concat([agg_feat_mat, extended_feat_agg_muts], axis=1)
             return agg_feat_mat
         
         if aggregate == "Both":
@@ -461,7 +502,7 @@ class mutationFeatures:
                 )
             # then create the feature matrix from these
             feat_mats[cpg_id], target_values[cpg_id] = self._create_feature_mat(
-                cpg_id, predictor_groups, aggregate
+                cpg_id, predictor_groups, aggregate, extend_amount
                 )
             if i % 10 == 0:
                 print(f"Finished {i} of {len(cpg_ids)}", flush=True)
