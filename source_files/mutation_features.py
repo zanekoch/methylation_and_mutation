@@ -348,7 +348,7 @@ class mutationFeatures:
         metric_df: pd.DataFrame,
         bin_size: int = 20000,
         sort_by: list = ['count', 'mutual_info'],
-        mean: bool = False
+        mean: bool = True
         ) -> pd.DataFrame:
         """
         Based on count of mutations nearby and mutual information, choose cpgs to train models for
@@ -407,17 +407,20 @@ class mutationFeatures:
         else:
             mutation_bin_counts_df = mutation_bin_count(self.all_mut_w_age_df)
         # get count for each cpg
-        illumina_cpg_locs_w_methyl_df = self.illumina_cpg_locs_df.loc[self.illumina_cpg_locs_df['#id'].isin(self.all_methyl_age_df_t.columns)]
+        illumina_cpg_locs_w_methyl_df = self.illumina_cpg_locs_df.loc[
+            self.illumina_cpg_locs_df['#id'].isin(self.all_methyl_age_df_t.columns)
+            ]
         illumina_cpg_locs_w_methyl_df.loc[:,'rounded_start'] = illumina_cpg_locs_w_methyl_df.loc[:, 'start'].apply(round_down)
         cpg_pred_priority = illumina_cpg_locs_w_methyl_df.merge(
             mutation_bin_counts_df, left_on=['chr', 'rounded_start'],
             right_on=['chr', 'bin_edge_l'], how='left'
             )
-        # get mi for each cpg
+        # add the input metric
         cpg_pred_priority = cpg_pred_priority.merge(metric_df, left_on='#id', right_index=True, how='left')
-        # sort by count and mi
+        # sort by count and metric
         cpg_pred_priority.sort_values(by=sort_by, ascending=[False, False], inplace=True)
-        # reset index
+        # drop na and reset index
+        cpg_pred_priority.dropna(inplace=True, how='any', axis=0)
         cpg_pred_priority.reset_index(inplace=True, drop=True)
         return cpg_pred_priority
     
