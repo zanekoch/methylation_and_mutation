@@ -206,10 +206,10 @@ class mutationFeatures:
         self, 
         cpg_id: str,
         num_correl_sites: int = 5000,
-        num_correl_ext_sites: int = 100,
         max_meqtl_sites: int = 100,
         nearby_window_size: int = 25000,
-        num_db_sites: int = 500
+        num_db_sites: int = 500,
+        extend_amount: int = 250
         ) -> list:
         """
         Get the sites to be used as predictors of cpg_id's methylation
@@ -219,9 +219,9 @@ class mutationFeatures:
         @ nearby_window_size: the window size to be used to find nearby sites
         @ returns: dict of types of genomic locations of the sites to be used as predictors in format chr:start
         """
-        def extend(loc_list, extend_amount = 250):
+        def extend(loc_list, extend_amount):
             """
-            Return the list of locations with each original loc extended out 250bp in each direction
+            Return the list of locations with each original loc extended out extend_amount in each direction
             """
             return [loc.split(':')[0] + ':' + str(int(loc.split(':')[1]) + i) 
                     for loc in loc_list 
@@ -235,13 +235,14 @@ class mutationFeatures:
             return {}
         # get dict of positions of most positively and negatively correlated CpGs
         predictor_site_groups['pos_corr'], predictor_site_groups['neg_corr'] = self._select_correl_sites(
-            cpg_id, chrom, num_correl_sites=num_correl_sites)
+            cpg_id, chrom, num_correl_sites=num_correl_sites
+            )
         # get extended versions of the num_correl_ext_sites most positively and negatively correlated CpGs
         predictor_site_groups['pos_corr_ext']= extend(
-            predictor_site_groups['pos_corr'][:num_correl_ext_sites]
+            predictor_site_groups['pos_corr'], extend_amount=extend_amount
             )
         predictor_site_groups['neg_corr_ext'] = extend(
-            predictor_site_groups['neg_corr'][:num_correl_ext_sites]
+            predictor_site_groups['neg_corr'], extend_amount=extend_amount
             )
         # get nearby sites
         predictor_site_groups['nearby'] = [
@@ -251,12 +252,20 @@ class mutationFeatures:
         # get sites from matrixQTL 
         predictor_site_groups['matrixqtl_neg_beta'], predictor_site_groups['matrixqtl_pos_beta'] = self._get_matrixQTL_sites(cpg_id, chrom, max_meqtl_sites=max_meqtl_sites)
         # extend matrixQTL sites
-        predictor_site_groups['matrixqtl_neg_beta_ext'] = extend(predictor_site_groups['matrixqtl_neg_beta'])
-        predictor_site_groups['matrixqtl_pos_beta_ext'] = extend(predictor_site_groups['matrixqtl_pos_beta'])
+        predictor_site_groups['matrixqtl_neg_beta_ext'] = extend(
+            predictor_site_groups['matrixqtl_neg_beta'], extend_amount=extend_amount
+            )
+        predictor_site_groups['matrixqtl_pos_beta_ext'] = extend(
+            predictor_site_groups['matrixqtl_pos_beta'], extend_amount=extend_amount
+        )
         # get database meQtls
         predictor_site_groups['db_neg_beta'], predictor_site_groups['db_pos_beta'] = self._select_db_sites(cpg_id, num_db_sites)
-        predictor_site_groups['db_neg_beta_ext'] = extend(predictor_site_groups['db_neg_beta'], extend_amount=250)
-        predictor_site_groups['db_pos_beta_ext'] = extend(predictor_site_groups['db_pos_beta'], extend_amount=250)
+        predictor_site_groups['db_neg_beta_ext'] = extend(
+            predictor_site_groups['db_neg_beta'], extend_amount=extend_amount
+            )
+        predictor_site_groups['db_pos_beta_ext'] = extend(
+            predictor_site_groups['db_pos_beta'], extend_amount=extend_amount
+            )
         return predictor_site_groups
     
     def _create_feature_mat(
@@ -429,10 +438,10 @@ class mutationFeatures:
         cpg_ids: list, 
         aggregate: str,
         num_correl_sites: int = 5000,
-        num_correl_ext_sites: int = 100,
         max_meqtl_sites: int = 100,
         nearby_window_size: int = 25000,
-        num_db_sites: int = 500
+        num_db_sites: int = 500,
+        extend_amount: int = 250
         ):
         """
         Create the training matrix for the given cpg_id and predictor_sites
@@ -447,8 +456,8 @@ class mutationFeatures:
         for i, cpg_id in enumerate(cpg_ids):
             # first get the predictor groups
             predictor_groups = self._get_predictor_site_groups(
-                cpg_id, num_correl_sites, num_correl_ext_sites, 
-                max_meqtl_sites, nearby_window_size, num_db_sites
+                cpg_id, num_correl_sites, max_meqtl_sites,
+                nearby_window_size, num_db_sites, extend_amount
                 )
             # then create the feature matrix from these
             feat_mats[cpg_id], target_values[cpg_id] = self._create_feature_mat(
@@ -464,9 +473,9 @@ class mutationFeatures:
             'cpg_ids': cpg_ids,
             'aggregate': aggregate,
             'num_correl_sites': num_correl_sites,
-            'num_correl_ext_sites': num_correl_ext_sites,
             'max_meqtl_sites': max_meqtl_sites,
             'nearby_window_size': nearby_window_size,
+            'extend_amount': extend_amount,
             'num_db_sites': num_db_sites,
             'feat_mats': feat_mats,
             'target_values': target_values
