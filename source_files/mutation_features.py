@@ -389,7 +389,8 @@ class mutationFeatures:
             ]
         covariate_df = self.all_methyl_age_df_t.loc[all_samples, coviariate_col_names]
         feat_mat = pd.merge(feat_mat, covariate_df, left_index=True, right_index=True)
-        
+        # convert to float16 to save memory
+        feat_mat = feat_mat.astype('float16')
         y = self.all_methyl_age_df_t.loc[all_samples, cpg_id]
         return feat_mat, y
     
