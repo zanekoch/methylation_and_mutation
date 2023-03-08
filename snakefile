@@ -19,21 +19,32 @@ out_dir = "/cellar/users/zkoch/methylation_and_mutation/data/matrixQtl_data/clum
 ##################
 CHROMS = [str(i) for i in range(1,23)]
 MUT_PER_FILE = 10000
+CLUMP_WINDOW_SIZE = 1000
 mut_df = pd.read_parquet(mut_fn)
-NUM_UNIQUE_MUTS = len(mut_df['mut_loc'].unique()) # constantish
-
+# set NUM_UNIQUE_MUTS to the number of unique mutations in the mutation file or number of clumps
+if CLUMP_WINDOW_SIZE > 1:
+  def round_down(num, divisor):
+    return num - (num%divisor)
+  mut_df['binary_MAF'] = 1
+  # clump start is 'start' rounded down to nearest 1000
+  mut_df['clump_start'] = mut_df['start'].apply(lambda x: round_down(x, CLUMP_WINDOW_SIZE))
+  mut_df['clump_loc'] = mut_df['chr'].astype(str) + ':' + mut_df['clump_start'].astype(str)
+  # combine rows with the same sample, chr, and clump_start values by adding the MAF values
+  grouped_mut_df = mut_df.groupby(
+      ['sample', 'clump_loc']
+      ).agg({'MAF': 'sum', 'binary_MAF': 'sum'}).reset_index()
+  NUM_UNIQUE_MUTS = len(grouped_mut_df['clump_loc'].unique()) # constantish
+else:
+  NUM_UNIQUE_MUTS = len(mut_df['mut_loc'].unique()) # constantish
 
 rule all:
   input:
+    # testing 
+    expand("{mut_fn}", mut_fn = [os.path.join(out_dir, f"muts_{i}.csv.gz") for i in range(0, NUM_UNIQUE_MUTS, MUT_PER_FILE)])
     # when want to run matrixQTL
-    expand(os.path.join(out_dir, "chr{chrom}_meqtl.parquet"), chrom=CHROMS)
+    # expand(os.path.join(out_dir, "chr{chrom}_meqtl.parquet"), chrom=CHROMS)
 
-rule clump_mutations:
-  """
-  Clump mutations that are within 1000 bp of each other into one mutation
-  """
-
-rule partition_mutations:
+rule clump_and_partition_mutations:
   """
   Partition the mutation file into smaller files
   """
@@ -44,7 +55,7 @@ rule partition_mutations:
   output:
     expand("{mut_fn}", mut_fn = [os.path.join(out_dir, f"muts_{i}.csv.gz") for i in range(0, NUM_UNIQUE_MUTS, MUT_PER_FILE)])
   shell:
-    "python /cellar/users/zkoch/methylation_and_mutation/snake_source_files/partition_mutations.py --mut_fn {input.mut_fn} --out_dir {out_dir} --mut_per_file {MUT_PER_FILE}"
+    "python /cellar/users/zkoch/methylation_and_mutation/snake_source_files/clump_and_partition_mutations.py --mut_fn {input.mut_fn} --out_dir {out_dir} --mut_per_file {MUT_PER_FILE} --clump_window_size {CLUMP_WINDOW_SIZE}"
 
 rule matrixQTL:
   """
