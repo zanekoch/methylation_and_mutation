@@ -10,9 +10,9 @@ import pandas as pd
 methyl_fn = "/cellar/users/zkoch/methylation_and_mutation/data/matrixQtl_data/methyl.csv.gz" #"/cellar/users/zkoch/methylation_and_mutation/data/icgc/for_matrixQTL/icgc_methyl_df_cpgXsamples.csv.gz"
 # the file that contains the mutation data
 ## must have, at least, columns 'mut_loc' (chr:pos), 'sample', and 'MAF'
-mut_fn = "/cellar/users/zkoch/methylation_and_mutation/data/matrixQtl_data/muts.parquet" #"/cellar/users/zkoch/methylation_and_mutation/data/icgc/for_matrixQTL/icgc_mut_df.parquet"
+mut_fn = "/cellar/users/zkoch/methylation_and_mutation/data/matrixQtl_data/tcga_muts.parquet" #"/cellar/users/zkoch/methylation_and_mutation/data/icgc/for_matrixQTL/icgc_mut_df.parquet"
 # output directory where partitioned mutation files, matrixQTL outputs, and predictors will be stored
-out_dir = "/cellar/users/zkoch/methylation_and_mutation/data/matrixQtl_data/muts" #"/cellar/users/zkoch/methylation_and_mutation/output_dirs/icgc_muts_011423"
+out_dir = "/cellar/users/zkoch/methylation_and_mutation/data/matrixQtl_data/clumped_muts" #"/cellar/users/zkoch/methylation_and_mutation/output_dirs/icgc_muts_011423"
 
 ##################
 # define constants and constantishs
@@ -20,25 +20,23 @@ out_dir = "/cellar/users/zkoch/methylation_and_mutation/data/matrixQtl_data/muts
 CHROMS = [str(i) for i in range(1,23)]
 MUT_PER_FILE = 10000
 mut_df = pd.read_parquet(mut_fn)
-NUM_UNIQUE_MUTS = 2420000 # len(mut_df['mut_loc'].unique()) # constantish
-
-# the number of cpgs to partition the methylation data based on
-# TODO: make this dynamically set based on the number of cpgs in methyl_fn
-total_cpgs = 267152
-cpg_starts = [i for i in range(0, total_cpgs, 1000)]
-cpg_ends = [i for i in range(999, total_cpgs, 1000)]
-cpg_ends.append(total_cpgs)
-cpgs = list(zip(cpg_starts, cpg_ends))
+NUM_UNIQUE_MUTS = len(mut_df['mut_loc'].unique()) # constantish
 
 
 rule all:
   input:
-    # when want to train predictors
-    # expand(os.path.join(predictors_dir, "{cpg[0]}_{cpg[1]}.txt"), cpg = cpgs)
     # when want to run matrixQTL
     expand(os.path.join(out_dir, "chr{chrom}_meqtl.parquet"), chrom=CHROMS)
 
+rule clump_mutations:
+  """
+  Clump mutations that are within 1000 bp of each other into one mutation
+  """
+
 rule partition_mutations:
+  """
+  Partition the mutation file into smaller files
+  """
   input:
     mut_fn = mut_fn
   conda:
@@ -49,6 +47,9 @@ rule partition_mutations:
     "python /cellar/users/zkoch/methylation_and_mutation/snake_source_files/partition_mutations.py --mut_fn {input.mut_fn} --out_dir {out_dir} --mut_per_file {MUT_PER_FILE}"
 
 rule matrixQTL:
+  """
+  Given a partitioned mutation file and the methylation file, run matrixQTL
+  """
   input:
     expand("{mut_fn}", mut_fn = [os.path.join(out_dir, f"muts_{i}.csv.gz") for i in range(0, NUM_UNIQUE_MUTS, MUT_PER_FILE)]),
     mut_fn = "{muts_fn}",
@@ -61,6 +62,9 @@ rule matrixQTL:
     "Rscript /cellar/users/zkoch/methylation_and_mutation/snake_source_files/run_matrixQTL.R {input.mut_fn} {input.methyl_fn}"
 
 rule group_meqtls:
+  """
+  Take the output of matrixQTL and group the results by CpG chromosome
+  """
   input:
     expand("{mut_fn}.meqtl", mut_fn = [os.path.join(out_dir, f"muts_{i}.csv.gz") for i in range(0, NUM_UNIQUE_MUTS, MUT_PER_FILE)])
   conda:
@@ -69,25 +73,3 @@ rule group_meqtls:
     os.path.join(out_dir, "chr{chrom}_meqtl.parquet")
   shell:
     "python /cellar/users/zkoch/methylation_and_mutation/snake_source_files/group_meqtls_by_cpg.py --chrom {wildcards.chrom} --out_fn {output}"
-
-rule balance_train_test_split:
-  output:
-    os.path.join(out_dir, "train_samples.txt"),
-    os.path.join(out_dir, "test_samples.txt")
-  conda:
-    "big_data"
-  shell:
-    "python /cellar/users/zkoch/methylation_and_mutation/snake_source_files/balance_train_test_split.py --out_dir {out_dir}"
-
-rule train_methyl_predictors:
-  input:
-    expand(os.path.join(out_dir, "chr{chrom}_meqtl.parquet"), chrom=CHROMS),
-    train_samples_fn = os.path.join(out_dir, "train_samples.txt"),
-    test_samples_fn = os.path.join(out_dir, "test_samples.txt")
-  output:
-    os.path.join(out_dir, "{cpg_start}_{cpg_end}.txt")
-  conda:
-    "big_data"
-  shell:
-    "python /cellar/users/zkoch/methylation_and_mutation/snake_source_files/train_methyl_predictors.py --cpg_start {wildcards.cpg_start} --cpg_end {wildcards.cpg_end} --out_dir {out_dir} --train_samples_fn {input.train_samples_fn}"
-    
