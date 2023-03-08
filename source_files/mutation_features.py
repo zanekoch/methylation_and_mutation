@@ -391,6 +391,9 @@ class mutationFeatures:
         feat_mat = pd.merge(feat_mat, covariate_df, left_index=True, right_index=True)
         # convert to float16 to save memory
         feat_mat = feat_mat.astype('float16')
+        # drop duplicate columns
+        feat_mat = feat_mat.loc[:, ~feat_mat.columns.duplicated()]
+        # target values
         y = self.all_methyl_age_df_t.loc[all_samples, cpg_id]
         return feat_mat, y
     
@@ -532,7 +535,8 @@ class mutationFeatures:
         Write out the essential data as a dictionary to a file in a directory
         """
         # create file name based on mutation_features_store meta values
-        meta_str = self.consortium + '_' + self.mutation_features_store['dataset'] + '_' + str(self.mutation_features_store['num_correl_sites']) + 'correl_' + str(self.mutation_features_store['num_correl_ext_sites']) + 'correlExt_' + str(self.mutation_features_store['max_meqtl_sites']) + 'meqtl_'+ str(self.mutation_features_store['nearby_window_size']) + 'nearby_' + str(self.mutation_features_store['aggregate']) + 'agg_' + str(len(self.mutation_features_store['cpg_ids'])) + 'numCpGs_' + str(start_top_cpgs) + 'startTopCpGs_' + str(self.mutation_features_store['num_db_sites']) + 'maxDBsites_' + str(cross_val_num) + 'crossValNum'
+        meta_str = self.consortium + '_' + self.mutation_features_store['dataset'] + '_' + str(self.mutation_features_store['num_correl_sites']) + 'correl_' + str(self.mutation_features_store['max_meqtl_sites']) + 'meqtl_'+ str(self.mutation_features_store['nearby_window_size']) + 'nearby_' + str(self.mutation_features_store['aggregate']) + 'agg_' + str(len(self.mutation_features_store['cpg_ids'])) + 'numCpGs_' + str(start_top_cpgs) + 'startTopCpGs_' + str(self.mutation_features_store['num_db_sites']) + 'maxDBsites_' + str(self.mutation_features_store['extend_amount']) + 'extendAmount_' + str(cross_val_num) + 'crossValNum'
+        
         # create directory if it doesn't exist
         directory = os.path.join(self.out_dir, meta_str)
         if not os.path.exists(directory):

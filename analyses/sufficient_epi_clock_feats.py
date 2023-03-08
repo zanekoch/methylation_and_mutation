@@ -110,7 +110,7 @@ print(cpg_groups_df)
 # %%
 r2s, maes = [], []
 for cpg_group in range(cpg_groups_df.shape[0]):
-    model = sklearn.linear_model.ElasticNetCV(max_iter=20000, cv=5, n_jobs=-1)
+    model = sklearn.linear_model.ElasticNetCV(max_iter=20000, cv=3, n_jobs=-1)
     chosen_cpgs = cpg_groups_df.loc[cpg_group, 'cpgs_to_train']
     X = all_methyl_age_df_t.loc[mut_feat.train_samples, chosen_cpgs]
     y = all_methyl_age_df_t.loc[mut_feat.train_samples, 'age_at_index']
@@ -126,6 +126,6 @@ cpg_groups_df['r2'] = r2s
 cpg_groups_df['mae'] = maes
 
 # %%
-cpg_groups_df.to_parquet(os.path.join(out_dir, "epi_clock_perf_by_feat_group_and_num_5000-150000.parquet"))
+cpg_groups_df.to_parquet(os.path.join(out_dir, "epi_clock_perf_by_feat_group_and_num_5000-150000_2.parquet"))
 
 

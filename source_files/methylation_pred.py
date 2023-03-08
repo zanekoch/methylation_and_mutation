@@ -4,6 +4,7 @@ import pickle
 import sklearn
 from sklearn.linear_model import LinearRegression, ElasticNetCV
 import xgboost as xgb
+import sys
 
 class methylationPrediction:
     """
@@ -13,9 +14,10 @@ class methylationPrediction:
     """
     def __init__(
         self,
-        mut_feat_store_fns: list,
         model_type: str,
         scramble: bool = False,
+        mut_feat_store_fns: list = [],
+        mut_feat_store: dict = {},
         trained_models_fns: list = []
         ) -> None:
         """
@@ -24,10 +26,19 @@ class methylationPrediction:
         @ model_type: str, either "xgboost", "linreg", "lasso", "elasticNet", or "rand_forest"
         @ returns: None
         """
-        self.mut_feat_store_fns = mut_feat_store_fns
+        # read in mutation features from file or from dictionary
+        if len(mut_feat_store_fns) == 0 and len(mut_feat_store) == 0:
+            sys.exit("Must provide either a mutation feature store dicitonary or a list of mutation feature store files")
+        elif len(mut_feat_store_fns) > 0 and len(mut_feat_store) > 0:
+            sys.exit("Must provide either a mutation feature store dicitonary or a list of mutation feature store files, not both")
+        elif len(mut_feat_store_fns) > 0:
+            self.mut_feat_store_fns = mut_feat_store_fns
+            # combine the mutation feature stores into one, or if only 1 read it in
+            self.mut_feat_store = self.combine_feat_stores()
+        elif len(mut_feat_store) > 0:
+            self.mut_feat_store = mut_feat_store
+          
         self.scramble = scramble
-        # combine the mutation feature stores into one, or if only 1 read it in
-        self.mut_feat_store = self.combine_feat_stores()
         # set the train and test samples to be same as those used to generate the mutation feature store
         self.train_samples = self.mut_feat_store['train_samples']
         self.test_samples = self.mut_feat_store['test_samples']
@@ -50,8 +61,6 @@ class methylationPrediction:
         @ returns: a dictionary which is the combined mutation feature store
         """
         mut_feat_store = {}
-        # read each into a list
-        mut_feat_stores = []
         for mut_feat_store_fn in self.mut_feat_store_fns:
             with open(mut_feat_store_fn, 'rb') as f:
                 next_mut_feat_store = pickle.load(f)
@@ -128,6 +137,8 @@ class methylationPrediction:
                 )
             if i % 100 == 0:
                 print(f'Predicted methylation for {i} CpGs of {len(self.mut_feat_store["cpg_ids"])}', flush=True)
+        self.pred_df = pd.DataFrame(self.predictions, index = self.train_samples + self.test_samples)
+        self.perf_df = pd.DataFrame(self.prediction_performance).T
         return
 
     def train_one_model(
@@ -208,9 +219,9 @@ class methylationPrediction:
             pickle.dump(self.trained_models, f)
         # create dataframes from predictions and performances, set keys of predictions as index
         # get index from the first mutation feature store index (they are all the same)
-        all_samples = self.mut_feat_store['feat_mats'][self.mut_feat_store['cpg_ids'][0]].index
+        """all_samples = self.mut_feat_store['feat_mats'][self.mut_feat_store['cpg_ids'][0]].index
         self.pred_df = pd.DataFrame(self.predictions, index = all_samples)
-        self.perf_df = pd.DataFrame(self.prediction_performance).T
+        self.perf_df = pd.DataFrame(self.prediction_performance).T"""
         # write to parquet files
         self.pred_df.to_parquet(f"{out_dir}/methyl_predictions_{self.model_type}_{self.scramble}scramble.parquet")
         self.perf_df.to_parquet(f"{out_dir}/prediction_performance_{self.model_type}_{self.scramble}scramble.parquet")

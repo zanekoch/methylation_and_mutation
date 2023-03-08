@@ -13,6 +13,7 @@ methyl_fn = "/cellar/users/zkoch/methylation_and_mutation/data/matrixQtl_data/me
 mut_fn = "/cellar/users/zkoch/methylation_and_mutation/data/matrixQtl_data/muts.parquet" #"/cellar/users/zkoch/methylation_and_mutation/data/icgc/for_matrixQTL/icgc_mut_df.parquet"
 # output directory where partitioned mutation files, matrixQTL outputs, and predictors will be stored
 out_dir = "/cellar/users/zkoch/methylation_and_mutation/data/matrixQtl_data/muts" #"/cellar/users/zkoch/methylation_and_mutation/output_dirs/icgc_muts_011423"
+
 ##################
 # define constants and constantishs
 ##################
@@ -20,7 +21,7 @@ CHROMS = [str(i) for i in range(1,23)]
 MUT_PER_FILE = 10000
 mut_df = pd.read_parquet(mut_fn)
 NUM_UNIQUE_MUTS = 2420000 # len(mut_df['mut_loc'].unique()) # constantish
-##################
+
 # the number of cpgs to partition the methylation data based on
 # TODO: make this dynamically set based on the number of cpgs in methyl_fn
 total_cpgs = 267152
@@ -28,7 +29,7 @@ cpg_starts = [i for i in range(0, total_cpgs, 1000)]
 cpg_ends = [i for i in range(999, total_cpgs, 1000)]
 cpg_ends.append(total_cpgs)
 cpgs = list(zip(cpg_starts, cpg_ends))
-##################
+
 
 rule all:
   input:

@@ -79,6 +79,8 @@ def run(
     start_top_cpgs: int, 
     end_top_cpgs: int,
     aggregate: str,
+    scramble: bool,
+    model: str,
     mut_feat_store_fns: list
     ) -> None:
     """
@@ -91,6 +93,8 @@ def run(
     @ start_top_cpgs: start of range of top cpgs to use
     @ end_top_cpgs: end of range of top cpgs to use
     @ aggregate: feature aggregation strategy True, False, or Both
+    @ scramble: whether to scramble the methylation data
+    @ model: model to use
     @ mut_feat_store_fns: list of mutation feature store filenames
     @ returns: None
     """
@@ -132,42 +136,42 @@ def run(
         corrs['corr'] = corrs['corr'].abs()
         # choose the top cpgs sorted by cpg_pred_priority
         cpg_pred_priority = mut_feat.choose_cpgs_to_train(
-            metric_df = corrs, bin_size=50000, sort_by = ['corr', 'count'], mean = True
+            metric_df = corrs, bin_size=50000, 
+            sort_by = ['count', 'corr'], mean = True
             )
         chosen_cpgs = cpg_pred_priority.iloc[start_top_cpgs: end_top_cpgs]['#id'].to_list()
         # run the feature generation
         mut_feat.create_all_feat_mats(
             cpg_ids = chosen_cpgs, aggregate=aggregate,
-            num_correl_sites=500, num_correl_ext_sites=500, 
-            max_meqtl_sites=1000, nearby_window_size = 50000,
-            num_db_sites = 25000
+            num_correl_sites=500, max_meqtl_sites=1000,
+            nearby_window_size = 50000, num_db_sites = 25000,
+            extend_amount = 250 
             )
         mut_feat_store_fn = mut_feat.save_mutation_features(
             start_top_cpgs = start_top_cpgs, cross_val_num = cross_val_num
             )
-    mut_feat_store_fns = [mut_feat_store_fn]
+        mut_feat_store_fns = [mut_feat_store_fn]
     if train_models:
         print("training models", flush=True)
-        #trained_models_fn = os.path.join(mut_feat_store_fns[0][:mut_feat_store_fns[0].rfind('/')], "trained_models_elasticNet.pkl")
         methyl_pred = methylation_pred.methylationPrediction(
             mut_feat_store_fns = mut_feat_store_fns,
-            model_type = 'xgboost',
+            model_type = model,
             scramble = False
-            #trained_models_fns = [trained_models_fn]
             )
         methyl_pred.train_all_models()
         methyl_pred.apply_all_models()
         methyl_pred.save_models_and_preds()
         # also do scrambled
-        methyl_pred = methylation_pred.methylationPrediction(
-            mut_feat_store_fns = mut_feat_store_fns,
-            model_type = 'xgboost',
-            scramble = True
-            #trained_models_fns = [trained_models_fn]
-            )
-        methyl_pred.train_all_models()
-        methyl_pred.apply_all_models()
-        methyl_pred.save_models_and_preds()
+        if scramble:
+            methyl_pred = methylation_pred.methylationPrediction(
+                mut_feat_store_fns = mut_feat_store_fns,
+                model_type = model,
+                scramble = True
+                #trained_models_fns = [trained_models_fn]
+                )
+            methyl_pred.train_all_models()
+            methyl_pred.apply_all_models()
+            methyl_pred.save_models_and_preds()
     
 
 def main():
@@ -182,7 +186,8 @@ def main():
     parser.add_argument('--start_top_cpgs', type=int, help='index of top cpgs to start with', default=0)
     parser.add_argument('--end_top_cpgs', type=int, help='index of top cpgs to end with', default=0)
     parser.add_argument('--aggregate', type=str, help='False, True, or Both', default="Both")
-    # parse
+    parser.add_argument('--scramble' , type=bool, help='whether to scramble the mutation data', default=False)
+    parser.add_argument('--model', type=str, help='xgboost or elasticNet', default="xgboost")
     args = parser.parse_args()
     do = args.do
     # assert do has a valid value
@@ -200,6 +205,10 @@ def main():
     start_top_cpgs = args.start_top_cpgs
     end_top_cpgs = args.end_top_cpgs
     aggregate = args.aggregate
+    scramble = args.scramble
+    model = args.model
+    if model not in ['xgboost', 'elasticNet']:
+        raise ValueError("model must be xgboost or elasticNet")
     print(f"cross val {cross_val_num}\n doing {do}\n for {consortium} and {dataset}\n and outputting to {out_dir}")
     # run 
     run(
@@ -207,7 +216,7 @@ def main():
         consortium = consortium, dataset = dataset, cross_val_num = cross_val_num,
         out_dir = out_dir, start_top_cpgs = start_top_cpgs,
         end_top_cpgs = end_top_cpgs, aggregate = aggregate,
-        mut_feat_store_fns = mut_feat_store_fns
+        scramble = scramble, model = model, mut_feat_store_fns = mut_feat_store_fns
         )
         
 
