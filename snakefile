@@ -25,8 +25,8 @@ cov_fn = "/cellar/users/zkoch/methylation_and_mutation/data/matrixQtl_data/tcga_
 out_dir = "/cellar/users/zkoch/methylation_and_mutation/data/matrixQtl_data/clumped_muts_CV"
 
 # set number of cross validations
-num_folds = 3
-
+NUM_FOLDS = 3
+NUM_MATRIXQTL_PARTITIONS = 10
 
 ##################
 # define constants and constantishs
@@ -48,7 +48,7 @@ rule all:
     expand(
       os.path.join(out_dir, "chr{chrom}_meqtl_fold_{fold}.parquet"),
       chrom=CHROMS, 
-      fold = [y for y in range(num_folds)]
+      fold = [y for y in range(NUM_FOLDS)]
       )
 
 rule create_folds:
@@ -60,10 +60,10 @@ rule create_folds:
   conda:
     "big_data"
   output:
-    expand(os.path.join(out_dir, "train_samples_fold_{i}.pkl"), i = range(num_folds)),
-    expand(os.path.join(out_dir, "test_samples_fold_{i}.pkl"), i = range(num_folds))
+    expand(os.path.join(out_dir, "train_samples_fold_{i}.pkl"), i = range(NUM_FOLDS)),
+    expand(os.path.join(out_dir, "test_samples_fold_{i}.pkl"), i = range(NUM_FOLDS))
   shell:
-    "python {snake_source_dir}/train_test_split.py --num_folds {num_folds} --covariate_fn {input.cov_fn} --out_dir {out_dir} "
+    "python {snake_source_dir}/train_test_split.py --num_folds {NUM_FOLDS} --covariate_fn {input.cov_fn} --out_dir {out_dir} "
   
 
 rule piv_and_clump_mutations:
@@ -88,13 +88,13 @@ rule matrixQTL:
   input:
     muts_fn = os.path.join(out_dir, "muts_fold_{fold}.csv.gz"),
     methyl_fn = methyl_fn,
-    cov_fn = cov_fn
+    cov_fn = cov_fn,
   conda: 
     "renv"
   output:
-    os.path.join(out_dir, "muts_fold_{fold}.csv.gz.meqtl")
+    os.path.join(out_dir, "muts_fold_{fold}_partition_{partition_num}.meqtl")
   shell:
-    "Rscript {snake_source_dir}/run_matrixQTL.R {input.muts_fn} {input.methyl_fn} {input.cov_fn}"
+    "Rscript {snake_source_dir}/run_matrixQTL.R {input.muts_fn} {input.methyl_fn} {input.cov_fn} {wildcards.partition_num} {NUM_MATRIXQTL_PARTITIONS}"
 
 
 rule group_meqtls:
@@ -102,10 +102,13 @@ rule group_meqtls:
   Take the output of matrixQTL and group the results by CpG chromosome
   """
   input:
-    os.path.join(out_dir, "muts_fold_{fold}.csv.gz.meqtl")
+    expand(
+      os.path.join(out_dir, "muts_fold_{{fold}}_partition_{partition_num}.meqtl"),
+      partition_num = [y for y in range(NUM_MATRIXQTL_PARTITIONS)]
+      )
   conda:
     "big_data"
   output:
     os.path.join(out_dir, "chr{chrom}_meqtl_fold_{fold}.parquet")
   shell:
-    "python {snake_source_dir}/group_meqtls_by_cpg.py --chrom {wildcards.chrom} --out_fn {output} --matrix_qtl_fn {input} --fold {wildcards.fold}"
+    "python {snake_source_dir}/group_meqtls_by_cpg.py --chrom {wildcards.chrom} --out_fn {output} --matrix_qtl_dir {out_dir} --fold {wildcards.fold}"

@@ -6,7 +6,7 @@ import argparse
 def group_by_cpg(
     chrom: str,
     out_fn: str, 
-    matrix_qtl_fn: str,
+    matrix_qtl_dir: str,
     fold_num: int,
     illumina_cpg_locs_fn: str = "/cellar/users/zkoch/methylation_and_mutation/dependency_files/illumina_cpg_450k_locations.csv"
     ) -> None:
@@ -20,15 +20,23 @@ def group_by_cpg(
     """
     # read in the locations of the CpGs in the 450k array
     illumina_cpg_locs_df = pd.read_csv(illumina_cpg_locs_fn, sep=',', dtype={'CHR': str}, low_memory=False)
-    illumina_cpg_locs_df = illumina_cpg_locs_df.rename({"CHR": "chr", "MAPINFO":"start", "IlmnID": "#id"}, axis=1)
+    illumina_cpg_locs_df = illumina_cpg_locs_df.rename(
+        {"CHR": "chr", "MAPINFO":"start", "IlmnID": "#id"}, axis=1
+        )
     illumina_cpg_locs_df = illumina_cpg_locs_df[['#id','chr', 'start', 'Strand']]
     # subset to the CpGs in chrom
     illumina_cpg_locs_df = illumina_cpg_locs_df[illumina_cpg_locs_df['chr'] == chrom]
     print("read in illumina_cpg_locs_df", flush=True)
     
-    meqtl_df = pd.read_csv(matrix_qtl_fn, sep='\t')
-    meqtl_df = meqtl_df.rename({'gene': '#id'}, axis=1)
-    print("read in meqtl_df", flush=True)
+    # read in each partition number of this fold
+    all_matrix_qtl_dfs = []
+    this_fold_matrix_qtl_fns = glob.glob(os.path.join(matrix_qtl_dir, f"muts_fold_{fold_num}_partition_*meqtl"))
+    for matrix_qtl_fn in this_fold_matrix_qtl_fns:                         
+        meqtl_df = pd.read_csv(matrix_qtl_fn, sep='\t')
+        meqtl_df = meqtl_df.rename({'gene': '#id'}, axis=1)
+        all_matrix_qtl_dfs.append(meqtl_df)
+        print(f"read in meqtl_df {matrix_qtl_fn}", flush=True)
+    meqtl_df = pd.concat(all_matrix_qtl_dfs)
     # join with illumina_cpg_locs_df on #id
     this_chr_meqtls = meqtl_df.merge(illumina_cpg_locs_df, on='#id')
     print("merged meqtl_df with illumina_cpg_locs_df", flush=True)
@@ -55,7 +63,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--chrom", type=str, required=True)
     parser.add_argument("--out_fn", type=str, required=True)
-    parser.add_argument("--matrix_qtl_fn", type=str, required=True)
+    parser.add_argument("--matrix_qtl_dir", type=str, required=True)
     parser.add_argument("--fold", type=int, required=False)
     args = parser.parse_args()
-    group_by_cpg(args.chrom, args.out_fn, args.matrix_qtl_fn, args.fold)
+    group_by_cpg(args.chrom, args.out_fn, args.matrix_qtl_dir, args.fold)
