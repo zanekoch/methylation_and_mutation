@@ -35,33 +35,19 @@ CHROMS = [str(i) for i in range(1,23)]
 MUT_PER_FILE = 10000
 CLUMP_WINDOW_SIZE = 1000
 
-# based on the cv_num, choose training and testing samples
+# TODO: because CV changes the number of samples the samples in mutation CV files do not match the overall methylation file
+# - solution 1: make create folds split the methylation file.
+  # This would take forever to re-write the methylation file tho
 
+# - solution 2: make R script subset/only read in methylation for samples in mutation file
 
-# set NUM_UNIQUE_MUTS to the number of unique mutations in the mutation file or number of clumps
-mut_df = pd.read_parquet(mut_fn)
-if CLUMP_WINDOW_SIZE > 1:
-  def round_down(num, divisor):
-    return num - (num%divisor)
-  mut_df['binary_MAF'] = 1
-  # clump start is 'start' rounded down to nearest 1000
-  mut_df['clump_start'] = mut_df['start'].apply(lambda x: round_down(x, CLUMP_WINDOW_SIZE))
-  mut_df['clump_loc'] = mut_df['chr'].astype(str) + ':' + mut_df['clump_start'].astype(str)
-  # combine rows with the same sample, chr, and clump_start values by adding the MAF values
-  grouped_mut_df = mut_df.groupby(
-      ['sample', 'clump_loc']
-      ).agg({'MAF': 'sum', 'binary_MAF': 'sum'}).reset_index()
-  NUM_UNIQUE_MUTS = len(grouped_mut_df['clump_loc'].unique()) # constantish
-else:
-  NUM_UNIQUE_MUTS = len(mut_df['mut_loc'].unique()) # constantish
 
 rule all:
   input:
     # when want to run matrixQTL
-    #expand(os.path.join(out_dir, "chr{chrom}_meqtl.parquet"), chrom=CHROMS)
     expand(
-      "muts_{i}_fold_{fold}.csv.gz", 
-      i = [x for x in range(0, NUM_UNIQUE_MUTS, MUT_PER_FILE)], 
+      os.path.join(out_dir, "chr{chrom}_meqtl_fold_{fold}.parquet"),
+      chrom=CHROMS, 
       fold = [y for y in range(num_folds)]
       )
 
@@ -80,9 +66,9 @@ rule create_folds:
     "python {snake_source_dir}/train_test_split.py --num_folds {num_folds} --covariate_fn {input.cov_fn} --out_dir {out_dir} "
   
 
-rule clump_and_partition_mutations:
+rule piv_and_clump_mutations:
   """
-  Partition the mutation file into smaller files
+  Pivot and optionally clump mutations and write to files
   """
   input:
     mut_fn = mut_fn,
@@ -91,35 +77,35 @@ rule clump_and_partition_mutations:
   conda:
     "big_data"
   output:
-    expand("muts_{i}_fold_{{fold}}.csv.gz", i = [x for x in range(0, NUM_UNIQUE_MUTS, MUT_PER_FILE)])
+    os.path.join(out_dir, "muts_fold_{fold}.csv.gz")
   shell:
-    "python {snake_source_dir}/clump_and_partition_mutations.py --mut_fn {input.mut_fn} --out_dir {out_dir} --mut_per_file {MUT_PER_FILE} --clump_window_size {CLUMP_WINDOW_SIZE} --training_samples_fn {input.train_samples}"
+    "python {snake_source_dir}/clump_and_partition_mutations.py --mut_fn {input.mut_fn} --out_dir {out_dir}  --clump_window_size {CLUMP_WINDOW_SIZE} --training_samples_fn {input.train_samples}"
 
 rule matrixQTL:
   """
-  Given a partitioned mutation file and the methylation file, run matrixQTL
+  Given a a mutation file and the methylation file, run matrixQTL
   """
   input:
-    expand("{mut_fn}", mut_fn = [os.path.join(out_dir, f"muts_{i}.csv.gz") for i in range(0, NUM_UNIQUE_MUTS, MUT_PER_FILE)]),
-    mut_fn = "{muts_fn}",
+    muts_fn = os.path.join(out_dir, "muts_fold_{fold}.csv.gz"),
     methyl_fn = methyl_fn,
     cov_fn = cov_fn
   conda: 
     "renv"
   output:
-    "{muts_fn}.meqtl"
+    os.path.join(out_dir, "muts_fold_{fold}.csv.gz.meqtl")
   shell:
-    "Rscript {snake_source_dir}/run_matrixQTL.R {input.mut_fn} {input.methyl_fn} {input.cov_fn}"
+    "Rscript {snake_source_dir}/run_matrixQTL.R {input.muts_fn} {input.methyl_fn} {input.cov_fn}"
+
 
 rule group_meqtls:
   """
   Take the output of matrixQTL and group the results by CpG chromosome
   """
   input:
-    expand("{mut_fn}.meqtl", mut_fn = [os.path.join(out_dir, f"muts_{i}.csv.gz") for i in range(0, NUM_UNIQUE_MUTS, MUT_PER_FILE)])
+    os.path.join(out_dir, "muts_fold_{fold}.csv.gz.meqtl")
   conda:
     "big_data"
   output:
-    os.path.join(out_dir, "chr{chrom}_meqtl.parquet")
+    os.path.join(out_dir, "chr{chrom}_meqtl_fold_{fold}.parquet")
   shell:
-    "python {snake_source_dir}/group_meqtls_by_cpg.py --chrom {wildcards.chrom} --out_fn {output} --matrix_qtl_dir {out_dir}"
+    "python {snake_source_dir}/group_meqtls_by_cpg.py --chrom {wildcards.chrom} --out_fn {output} --matrix_qtl_fn {input} --fold {wildcards.fold}"

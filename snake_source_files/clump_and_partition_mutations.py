@@ -6,20 +6,18 @@ import pickle
 def read_file(mut_fn, training_samples_fn):
     # read in the mutation file
     mut_df = pd.read_parquet(mut_fn)
-    print(mut_df.shape, flush=True)
-    print(len(mut_df['mut_loc'].unique()), flush=True)
     # read in list of training samples from pkl file
     with open(training_samples_fn, 'rb') as fp:
         train_samples = pickle.load(fp)
     # subset to training samples
     mut_df = mut_df[mut_df['sample'].isin(train_samples)]
+    print(f"Read in mutation file and subset to {len(train_samples)} training samples")
     return mut_df
 
 def clump_partit_mutations(
     mut_df: str, 
     clump_window_size: int,
     out_dir: str,
-    mut_per_file: int,
     fold_num: int
     ) -> pd.DataFrame:
     """
@@ -27,7 +25,6 @@ def clump_partit_mutations(
     @ mut_df: the mutation dataframe
     @ clump_window_size: the size of the window to clump mutations into
     @ out_dir: the directory to write the output to
-    @ mut_per_file: the number of mutations to write out to each .csv.gz file
     @ fold_num: the fold number
     @ returns: None
     """
@@ -51,12 +48,10 @@ def clump_partit_mutations(
             )
         # sort sample columns lexicographically
         clumped_mut_df = clumped_mut_df.reindex(sorted(clumped_mut_df.columns), axis=1)
-        print(clumped_mut_df.shape, flush=True)
-        # write out in mut_per_file chunks to .csv.gz files
-        for i in range(0, clumped_mut_df.shape[0], mut_per_file):
-            clumped_mut_df.iloc[i:i+mut_per_file, :].to_csv(
-                os.path.join(out_dir, f"muts_{i}_fold_{fold_num}.csv.gz"), compression='gzip'
-                )
+        print("Pivoted and clumped mutations to get matrix of shape: ", clumped_mut_df.shape, flush=True)
+        out_fn = os.path.join(out_dir, f"muts_fold_{fold_num}.csv.gz")
+        clumped_mut_df.to_csv(out_fn, compression='gzip')
+        print(f"Wrote out clumped mutations to {out_fn}", flush=True)
     else: # no clumping
         # pivot
         mut_piv = mut_df.pivot_table(
@@ -64,34 +59,30 @@ def clump_partit_mutations(
             )
         # sort sample columns lexicographically
         mut_piv = mut_piv.reindex(sorted(mut_piv.columns), axis=1)
-        print(mut_piv.shape, flush=True)
-        # write out in mut_per_file chunks to .csv.gz files
-        for i in range(0, mut_piv.shape[0], mut_per_file):
-            mut_piv.iloc[i:i+mut_per_file, :].to_csv(
-                os.path.join(out_dir, f"muts_{i}_fold_{fold_num}.csv.gz"), compression='gzip'
-            )
+        print("Pivoted mutations to get matrix of shape: ", mut_piv.shape, flush=True)
+        out_fn = os.path.join(out_dir, f"muts_fold_{fold_num}.csv.gz")
+        mut_piv.to_csv(out_fn, compression='gzip')
+        print(f"Wrote out mutations to {out_fn}", flush=True)
         
     
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--mut_fn", type=str, required=True, help="path to the mutation file. Must hav")
     parser.add_argument("--out_dir", type=str, required=True)
-    parser.add_argument("--mut_per_file", type=int, required=True)
     parser.add_argument("--clump_window_size", type=int, required=True)
     parser.add_argument("--training_samples_fn", type=str, required=True)
     args = parser.parse_args()
     mut_fn = args.mut_fn
     out_dir = args.out_dir
-    mut_per_file = args.mut_per_file
     clump_window_size = args.clump_window_size
     training_samples_fn = args.training_samples_fn
     fold_num = int(training_samples_fn.split('_')[-1].split('.')[0])
     # make the output directory if it doesn't exist
     if not os.path.exists(out_dir):
         os.makedirs(out_dir)
-    print(f"Reading in mutation file {mut_fn} and outputting to {out_dir} in chunks of {mut_per_file} mutations per file")
+    print(f"Reading in mutation file {mut_fn} and outputting to {out_dir}")
     # read in file
     mut_df = read_file(mut_fn, training_samples_fn)
     # partition and write to files, clumping if specified
-    clump_partit_mutations(mut_df, clump_window_size, out_dir, mut_per_file, fold_num)
+    clump_partit_mutations(mut_df, clump_window_size, out_dir, fold_num)
     
