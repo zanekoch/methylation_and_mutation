@@ -22,7 +22,7 @@ cov_fn = "/cellar/users/zkoch/methylation_and_mutation/data/matrixQtl_data/tcga_
 
 # output directory where partitioned mutation files, matrixQTL outputs, and predictors will be stored
 #"/cellar/users/zkoch/methylation_and_mutation/output_dirs/icgc_muts_011423"
-out_dir = "/cellar/users/zkoch/methylation_and_mutation/data/matrixQtl_data/clumped_muts"
+out_dir = "/cellar/users/zkoch/methylation_and_mutation/data/matrixQtl_data/clumped_muts_CV"
 
 # set number of cross validations
 num_folds = 3
@@ -59,8 +59,11 @@ rule all:
   input:
     # when want to run matrixQTL
     #expand(os.path.join(out_dir, "chr{chrom}_meqtl.parquet"), chrom=CHROMS)
-    expand(os.path.join(out_dir, f"train_samples_fold_{{i}}.pkl"), i = range(num_folds)),
-    expand(os.path.join(out_dir, f"test_samples_fold_{{i}}.pkl"), i = range(num_folds))
+    expand(
+      "muts_{i}_fold_{fold}.csv.gz", 
+      i = [x for x in range(0, NUM_UNIQUE_MUTS, MUT_PER_FILE)], 
+      fold = [y for y in range(num_folds)]
+      )
 
 rule create_folds:
   """
@@ -71,23 +74,26 @@ rule create_folds:
   conda:
     "big_data"
   output:
-    expand(os.path.join(out_dir, f"train_samples_fold_{{i}}.pkl"), i = range(num_folds)),
-    expand(os.path.join(out_dir, f"test_samples_fold_{{i}}.pkl"), i = range(num_folds))
+    expand(os.path.join(out_dir, "train_samples_fold_{i}.pkl"), i = range(num_folds)),
+    expand(os.path.join(out_dir, "test_samples_fold_{i}.pkl"), i = range(num_folds))
   shell:
     "python {snake_source_dir}/train_test_split.py --num_folds {num_folds} --covariate_fn {input.cov_fn} --out_dir {out_dir} "
   
+
 rule clump_and_partition_mutations:
   """
   Partition the mutation file into smaller files
   """
   input:
-    mut_fn = mut_fn
+    mut_fn = mut_fn,
+    train_samples = os.path.join(out_dir, "train_samples_fold_{fold}.pkl"),
+    test_samples = os.path.join(out_dir, "test_samples_fold_{fold}.pkl")
   conda:
     "big_data"
   output:
-    expand("{mut_fn}", mut_fn = [os.path.join(out_dir, f"muts_{i}.csv.gz") for i in range(0, NUM_UNIQUE_MUTS, MUT_PER_FILE)])
+    expand("muts_{i}_fold_{{fold}}.csv.gz", i = [x for x in range(0, NUM_UNIQUE_MUTS, MUT_PER_FILE)])
   shell:
-    "python {snake_source_dir}/clump_and_partition_mutations.py --mut_fn {input.mut_fn} --out_dir {out_dir} --mut_per_file {MUT_PER_FILE} --clump_window_size {CLUMP_WINDOW_SIZE}"
+    "python {snake_source_dir}/clump_and_partition_mutations.py --mut_fn {input.mut_fn} --out_dir {out_dir} --mut_per_file {MUT_PER_FILE} --clump_window_size {CLUMP_WINDOW_SIZE} --training_samples_fn {input.train_samples}"
 
 rule matrixQTL:
   """
