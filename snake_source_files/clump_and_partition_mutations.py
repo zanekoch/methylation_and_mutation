@@ -65,7 +65,6 @@ def clump_partit_mutations(
             )
         
     
-        
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--mut_fn", type=str, required=True, help="path to the mutation file. Must hav")

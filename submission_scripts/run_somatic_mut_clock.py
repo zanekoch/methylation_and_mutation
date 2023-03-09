@@ -143,7 +143,7 @@ def run(
         # run the feature generation
         mut_feat.create_all_feat_mats(
             cpg_ids = chosen_cpgs, aggregate=aggregate,
-            num_correl_sites=500, max_meqtl_sites=1000,
+            num_correl_sites = 500, max_meqtl_sites=0,
             nearby_window_size = 50000, num_db_sites = 25000,
             extend_amount = 250 
             )

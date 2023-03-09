@@ -6,8 +6,8 @@ import argparse
 def group_by_cpg(
     chrom: str,
     out_fn: str, 
-    illumina_cpg_locs_fn: str = "/cellar/users/zkoch/methylation_and_mutation/dependency_files/illumina_cpg_450k_locations.csv",
-    matrix_qtl_dir: str = "/cellar/users/zkoch/methylation_and_mutation/data/matrixQtl_data/muts"
+    matrix_qtl_dir: str,
+    illumina_cpg_locs_fn: str = "/cellar/users/zkoch/methylation_and_mutation/dependency_files/illumina_cpg_450k_locations.csv"
     ) -> None:
     """
     Go through each *metql file in matrix_qtl_dir and get the CpG-meQTL pairs for all the CpGs in chrom according to illumina_cpg_locs_fn
@@ -24,7 +24,7 @@ def group_by_cpg(
     illumina_cpg_locs_df = illumina_cpg_locs_df[['#id','chr', 'start', 'Strand']]
     # subset to the CpGs in chrom
     illumina_cpg_locs_df = illumina_cpg_locs_df[illumina_cpg_locs_df['chr'] == chrom]
-    
+    print("read in illumina_cpg_locs_df", flush=True)
     all_meqtls = []
     # for each meqtl file
     for meqtl_fn in meqtl_fns:
@@ -34,6 +34,7 @@ def group_by_cpg(
         # join with illumina_cpg_locs_df on #id
         this_chr_meqtls = meqtl_df.merge(illumina_cpg_locs_df, on='#id')
         all_meqtls.append(this_chr_meqtls)
+        print("read in file: ", meqtl_fn, flush=True)
     # concat all_meqtls
     all_meqtls_df = pd.concat(all_meqtls)
     # rename 'chr' column to 'cpg_chr' and 'start' to 'cpg_start'
@@ -55,5 +56,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--chrom", type=str, required=True)
     parser.add_argument("--out_fn", type=str, required=True)
+    parser.add_argument("--matrix_qtl_dir", type=str, required=True)
     args = parser.parse_args()
-    group_by_cpg(args.chrom, args.out_fn)
+    group_by_cpg(args.chrom, args.out_fn, args.matrix_qtl_dir)

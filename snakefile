@@ -1,18 +1,32 @@
 from glob import glob
 import pandas as pd
+from sklearn.model_selection import StratifiedKFold
+
 
 ##################
 # specify the input files and directories
-##################
 # MUST HAVE SAME NUMBER OF SAMPLES IN EACH FILE AND IN SAME ORDER
-# the file that contains the methylation data
-## samples X CpGs matrix of methylation values [0, 1]
-methyl_fn = "/cellar/users/zkoch/methylation_and_mutation/data/matrixQtl_data/methyl.csv.gz" #"/cellar/users/zkoch/methylation_and_mutation/data/icgc/for_matrixQTL/icgc_methyl_df_cpgXsamples.csv.gz"
+##################
+snake_source_dir="/cellar/users/zkoch/methylation_and_mutation/snake_source_files"
+# the file that contains the methylation data: samples X CpGs matrix of methylation values [0, 1]
+#"/cellar/users/zkoch/methylation_and_mutation/data/icgc/for_matrixQTL/icgc_methyl_df_cpgXsamples.csv.gz"
+methyl_fn = "/cellar/users/zkoch/methylation_and_mutation/data/matrixQtl_data/tcga_methyl.csv.gz" 
+
 # the file that contains the mutation data
 ## must have, at least, columns 'mut_loc' (chr:pos), 'sample', and 'MAF'
-mut_fn = "/cellar/users/zkoch/methylation_and_mutation/data/matrixQtl_data/tcga_muts.parquet" #"/cellar/users/zkoch/methylation_and_mutation/data/icgc/for_matrixQTL/icgc_mut_df.parquet"
+#"/cellar/users/zkoch/methylation_and_mutation/data/icgc/for_matrixQTL/icgc_mut_df.parquet"
+mut_fn = "/cellar/users/zkoch/methylation_and_mutation/data/matrixQtl_data/tcga_muts.parquet" 
+
+# file containing gender, age, and dataset covariates
+cov_fn = "/cellar/users/zkoch/methylation_and_mutation/data/matrixQtl_data/tcga_covariates.csv.gz"
+
 # output directory where partitioned mutation files, matrixQTL outputs, and predictors will be stored
-out_dir = "/cellar/users/zkoch/methylation_and_mutation/data/matrixQtl_data/clumped_muts" #"/cellar/users/zkoch/methylation_and_mutation/output_dirs/icgc_muts_011423"
+#"/cellar/users/zkoch/methylation_and_mutation/output_dirs/icgc_muts_011423"
+out_dir = "/cellar/users/zkoch/methylation_and_mutation/data/matrixQtl_data/clumped_muts"
+
+# set number of cross validations
+num_folds = 3
+
 
 ##################
 # define constants and constantishs
@@ -20,8 +34,12 @@ out_dir = "/cellar/users/zkoch/methylation_and_mutation/data/matrixQtl_data/clum
 CHROMS = [str(i) for i in range(1,23)]
 MUT_PER_FILE = 10000
 CLUMP_WINDOW_SIZE = 1000
-mut_df = pd.read_parquet(mut_fn)
+
+# based on the cv_num, choose training and testing samples
+
+
 # set NUM_UNIQUE_MUTS to the number of unique mutations in the mutation file or number of clumps
+mut_df = pd.read_parquet(mut_fn)
 if CLUMP_WINDOW_SIZE > 1:
   def round_down(num, divisor):
     return num - (num%divisor)
@@ -39,11 +57,25 @@ else:
 
 rule all:
   input:
-    # testing 
-    expand("{mut_fn}", mut_fn = [os.path.join(out_dir, f"muts_{i}.csv.gz") for i in range(0, NUM_UNIQUE_MUTS, MUT_PER_FILE)])
     # when want to run matrixQTL
-    # expand(os.path.join(out_dir, "chr{chrom}_meqtl.parquet"), chrom=CHROMS)
+    #expand(os.path.join(out_dir, "chr{chrom}_meqtl.parquet"), chrom=CHROMS)
+    expand(os.path.join(out_dir, f"train_samples_fold_{{i}}.pkl"), i = range(num_folds)),
+    expand(os.path.join(out_dir, f"test_samples_fold_{{i}}.pkl"), i = range(num_folds))
 
+rule create_folds:
+  """
+  Split samples into train and test sets
+  """
+  input:
+    cov_fn = cov_fn
+  conda:
+    "big_data"
+  output:
+    expand(os.path.join(out_dir, f"train_samples_fold_{{i}}.pkl"), i = range(num_folds)),
+    expand(os.path.join(out_dir, f"test_samples_fold_{{i}}.pkl"), i = range(num_folds))
+  shell:
+    "python {snake_source_dir}/train_test_split.py --num_folds {num_folds} --covariate_fn {input.cov_fn} --out_dir {out_dir} "
+  
 rule clump_and_partition_mutations:
   """
   Partition the mutation file into smaller files
@@ -55,7 +87,7 @@ rule clump_and_partition_mutations:
   output:
     expand("{mut_fn}", mut_fn = [os.path.join(out_dir, f"muts_{i}.csv.gz") for i in range(0, NUM_UNIQUE_MUTS, MUT_PER_FILE)])
   shell:
-    "python /cellar/users/zkoch/methylation_and_mutation/snake_source_files/clump_and_partition_mutations.py --mut_fn {input.mut_fn} --out_dir {out_dir} --mut_per_file {MUT_PER_FILE} --clump_window_size {CLUMP_WINDOW_SIZE}"
+    "python {snake_source_dir}/clump_and_partition_mutations.py --mut_fn {input.mut_fn} --out_dir {out_dir} --mut_per_file {MUT_PER_FILE} --clump_window_size {CLUMP_WINDOW_SIZE}"
 
 rule matrixQTL:
   """
@@ -64,13 +96,14 @@ rule matrixQTL:
   input:
     expand("{mut_fn}", mut_fn = [os.path.join(out_dir, f"muts_{i}.csv.gz") for i in range(0, NUM_UNIQUE_MUTS, MUT_PER_FILE)]),
     mut_fn = "{muts_fn}",
-    methyl_fn = methyl_fn
+    methyl_fn = methyl_fn,
+    cov_fn = cov_fn
   conda: 
     "renv"
   output:
     "{muts_fn}.meqtl"
   shell:
-    "Rscript /cellar/users/zkoch/methylation_and_mutation/snake_source_files/run_matrixQTL.R {input.mut_fn} {input.methyl_fn}"
+    "Rscript {snake_source_dir}/run_matrixQTL.R {input.mut_fn} {input.methyl_fn} {input.cov_fn}"
 
 rule group_meqtls:
   """
@@ -83,4 +116,4 @@ rule group_meqtls:
   output:
     os.path.join(out_dir, "chr{chrom}_meqtl.parquet")
   shell:
-    "python /cellar/users/zkoch/methylation_and_mutation/snake_source_files/group_meqtls_by_cpg.py --chrom {wildcards.chrom} --out_fn {output}"
+    "python {snake_source_dir}/group_meqtls_by_cpg.py --chrom {wildcards.chrom} --out_fn {output} --matrix_qtl_dir {out_dir}"

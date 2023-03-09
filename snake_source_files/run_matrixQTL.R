@@ -3,6 +3,7 @@ library("MatrixEQTL")
 # Parse the filenames from the commandline arguments
 SNP_file_name = commandArgs(trailingOnly=TRUE)[1]
 expression_file_name = commandArgs(trailingOnly=TRUE)[2]
+covariates_file_name = commandArgs(trailingOnly=TRUE)[3]
 # make the output file name from the output directory and named SNP_file_name but with a .meqtl extension
 output_file_name = paste(SNP_file_name, ".meqtl", sep = "")
 
@@ -13,8 +14,8 @@ snps$LoadFile(SNP_file_name, skipRows = 1, skipColumns = 1, sliceSize = 1000, om
 methyl = SlicedData$new()
 methyl$LoadFile(expression_file_name, skipRows = 1, skipColumns = 1, sliceSize = 2000, omitCharacters = "NA", delimiter = ",")
 # Load the covariates data
-covariates_file_name = character()
 covariates = SlicedData$new()
+covariates$LoadFile(covariates_file_name, skipRows = 1, skipColumns = 1, omitCharacters = "NA", delimiter = ",")
 
 # Run the Matrix_eQTL_engine
 me = Matrix_eQTL_engine(

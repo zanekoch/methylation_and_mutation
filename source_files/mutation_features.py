@@ -93,20 +93,6 @@ class mutationFeatures:
         # subset meqtl_db to only cpgs in all_methyl_age_df_t 
         self.meqtl_db = self.meqtl_db.loc[
             self.meqtl_db['cpg'].isin(self.all_methyl_age_df_t.columns), :]
-
-    def cross_val_samples_old(self):
-        """
-        Choose train and test samples based on cross validation number and dataset
-        @ return: train_samples, test_samples
-        """
-        # implicitly subsets to only this dataset's samples bc of preproc_mut_and_methyl
-        all_samples = self.all_methyl_age_df_t.index.to_list()
-        num_samples = len(all_samples)
-        split_size = int(num_samples/5)
-        split_samples = [all_samples[i:i + split_size] for i in range(0, num_samples, split_size)]
-        test_samples = split_samples[self.cross_val_num]
-        train_samples = list(set(all_samples).difference(set(test_samples)))
-        return train_samples, test_samples
     
     def cross_val_samples(self):
         """
