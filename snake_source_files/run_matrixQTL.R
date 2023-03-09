@@ -27,7 +27,9 @@ som_muts$LoadFile(som_mut_file_name, skipRows = 1, skipColumns = 1, sliceSize = 
 # get number of rows in the mut data
 num_rows = length(som_muts$GetAllRowNames())
 num_rows_per_partition = num_rows / number_of_partitions
-# get this partition's start and end rows 
+# round down to the nearest integer
+num_rows_per_partition = floor(num_rows_per_partition)
+# get this partition's start and end rows
 start_row = ((partition_num) * num_rows_per_partition) + 1
 end_row = (partition_num + 1) * num_rows_per_partition
 # subset the som_muts data to only include this partition's rows

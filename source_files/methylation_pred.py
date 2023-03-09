@@ -5,6 +5,8 @@ import sklearn
 from sklearn.linear_model import LinearRegression, ElasticNetCV
 import xgboost as xgb
 import sys
+import statsmodels.api as sm
+from scipy.stats import spearmanr
 
 class methylationPrediction:
     """
@@ -107,9 +109,25 @@ class methylationPrediction:
         y_test = y.loc[self.test_samples]
         # measure performance on test samples
         with np.errstate(divide='ignore'):
-            r = np.corrcoef(y_test, y_pred_test)[0,1]
+            pearsonr = np.corrcoef(y_test, y_pred_test)[0,1]
         mae = np.mean(np.abs(y_test - y_pred_test))
-        self.prediction_performance[cpg_id] = {'testing_methyl_r': r, 'testing_methyl_mae': mae}
+        # get spearman corr coef also
+        spearman = spearmanr(y_test, y_pred_test)[0]
+        # if spearman is nan, set it to 0
+        if np.isnan(spearman):
+            spearman = 0
+        # robust linear regression and F-test
+        """model = sm.robust.robust_linear_model.RLM(y_test, y_pred_test).fit()
+        f_test = model.f_test(np.array([0, 1]))
+        robust_f_test_pval = f_test.pvalue
+        robust_f_test_fstat = f_test.F"""
+        self.prediction_performance[cpg_id] = {
+            'testing_methyl_pearsonr': pearsonr, 
+            'testing_methyl_mae': mae,
+            'testing_methyl_spearmanr': spearman}
+        """,
+            'testing_methyl_robust_f_test_pval': robust_f_test_pval,
+            'testing_methyl_robust_f_test_fstat': robust_f_test_fstat}"""
 
     def apply_all_models(
         self
