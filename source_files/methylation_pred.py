@@ -39,11 +39,11 @@ class methylationPrediction:
             self.mut_feat_store = self.combine_feat_stores()
         elif len(mut_feat_store) > 0:
             self.mut_feat_store = mut_feat_store
-          
         self.scramble = scramble
         # set the train and test samples to be same as those used to generate the mutation feature store
         self.train_samples = self.mut_feat_store['train_samples']
         self.test_samples = self.mut_feat_store['test_samples']
+        self.cross_val_num = self.mut_feat_store['cross_val_num']
         self.model_type = model_type
         # if trained models are provided, read them in
         if len(trained_models_fns) == 0:
@@ -68,7 +68,7 @@ class methylationPrediction:
                 next_mut_feat_store = pickle.load(f)
                 for key in next_mut_feat_store.keys():
                     # if key stores a piece of meta data, add it to the combined store just once
-                    if key in ['dataset', 'train_samples', 'test_samples', 'aggregate', 'num_correl_sites', 'num_correl_ext_sites', 'max_meqtl_sites', 'nearby_window_size']:
+                    if key in ['dataset', 'train_samples', 'test_samples', 'aggregate', 'num_correl_sites', 'num_correl_ext_sites', 'max_meqtl_sites', 'nearby_window_size', 'cross_val_num']:
                         if key not in mut_feat_store.keys():
                             mut_feat_store[key] = next_mut_feat_store[key]
                     # otherwise if key stores a list of data values, each time add the values to the combined store
@@ -108,14 +108,21 @@ class methylationPrediction:
         y_pred_test = y_pred[y_test_index]
         y_test = y.loc[self.test_samples]
         # measure performance on test samples
-        with np.errstate(divide='ignore'):
-            pearsonr = np.corrcoef(y_test, y_pred_test)[0,1]
+        
         mae = np.mean(np.abs(y_test - y_pred_test))
-        # get spearman corr coef also
-        spearman = spearmanr(y_test, y_pred_test)[0]
+        # check if y_pred_test is constant
+        if np.var(y_pred_test) == 0:
+            pearsonr = 0
+            spearman = 0
+        else:
+            pearsonr = np.corrcoef(y_test, y_pred_test)[0,1]
+            # get spearman corr coef also
+            spearman = spearmanr(y_test, y_pred_test)[0]
         # if spearman is nan, set it to 0
         if np.isnan(spearman):
             spearman = 0
+        if np.isnan(pearsonr):
+            pearsonr = 0
         # robust linear regression and F-test
         """model = sm.robust.robust_linear_model.RLM(y_test, y_pred_test).fit()
         f_test = model.f_test(np.array([0, 1]))
@@ -125,12 +132,11 @@ class methylationPrediction:
             'testing_methyl_pearsonr': pearsonr, 
             'testing_methyl_mae': mae,
             'testing_methyl_spearmanr': spearman}
-        """,
-            'testing_methyl_robust_f_test_pval': robust_f_test_pval,
-            'testing_methyl_robust_f_test_fstat': robust_f_test_fstat}"""
+        
 
     def apply_all_models(
-        self
+        self,
+        only_agg: bool = False
         ) -> None:
         """
         Predict methylation for all CpG in mutation feature store for test_samples
@@ -146,14 +152,17 @@ class methylationPrediction:
                 X = X.sample(frac=1, random_state = 0)
                 X.index = save_index
             else:
-                X = self.mut_feat_store['feat_mats'][cpg_id]
+                if only_agg:
+                    X = self.mut_feat_store['feat_mats'][cpg_id].loc[:, ~self.mut_feat_store['feat_mats'][cpg_id].columns.str.contains(':')]
+                else:
+                    X = self.mut_feat_store['feat_mats'][cpg_id]
             # do prediction
             self.apply_one_model(
                 cpg_id = cpg_id,
                 X = X,
                 y = self.mut_feat_store['target_values'][cpg_id],
                 )
-            if i % 100 == 0:
+            if i % 10 == 0:
                 print(f'Predicted methylation for {i} CpGs of {len(self.mut_feat_store["cpg_ids"])}', flush=True)
         self.pred_df = pd.DataFrame(self.predictions, index = self.train_samples + self.test_samples)
         self.perf_df = pd.DataFrame(self.prediction_performance).T
@@ -175,7 +184,7 @@ class methylationPrediction:
         """
         if self.model_type == 'elasticNet':
             model = ElasticNetCV(
-                cv=5, random_state=0, max_iter=25000,
+                cv=5, random_state=0, max_iter=5000,
                 selection = 'random', n_jobs=-1
                 )
         elif self.model_type == 'linreg':
@@ -195,6 +204,7 @@ class methylationPrediction:
     
     def train_all_models(
         self, 
+        only_agg: bool = False
         ) -> None:
         """
         Given a mutation features store, train a model for each
@@ -211,14 +221,17 @@ class methylationPrediction:
                 X = X.sample(frac=1, random_state = 0)
                 X.index = save_index
             else:
-                X = self.mut_feat_store['feat_mats'][cpg_id]
+                if only_agg:
+                    X = self.mut_feat_store['feat_mats'][cpg_id].loc[:, ~self.mut_feat_store['feat_mats'][cpg_id].columns.str.contains(':')]
+                else:
+                    X = self.mut_feat_store['feat_mats'][cpg_id]
             # for each feature set in the store train a model
             self.train_one_model(
                 cpg_id = cpg_id,
                 X = X,
                 y = self.mut_feat_store['target_values'][cpg_id]
                 )
-            if i % 100 == 0:
+            if i % 10 == 0:
                 print(f"done {i} CpGs of {len(self.mut_feat_store['cpg_ids'])}", flush=True)
         return
     
@@ -235,11 +248,6 @@ class methylationPrediction:
         # write out files to there, including the model type in name
         with open(f"{out_dir}/trained_models_{self.model_type}_{self.scramble}scramble.pkl", 'wb') as f:
             pickle.dump(self.trained_models, f)
-        # create dataframes from predictions and performances, set keys of predictions as index
-        # get index from the first mutation feature store index (they are all the same)
-        """all_samples = self.mut_feat_store['feat_mats'][self.mut_feat_store['cpg_ids'][0]].index
-        self.pred_df = pd.DataFrame(self.predictions, index = all_samples)
-        self.perf_df = pd.DataFrame(self.prediction_performance).T"""
         # write to parquet files
         self.pred_df.to_parquet(f"{out_dir}/methyl_predictions_{self.model_type}_{self.scramble}scramble.parquet")
         self.perf_df.to_parquet(f"{out_dir}/prediction_performance_{self.model_type}_{self.scramble}scramble.parquet")
