@@ -24,13 +24,14 @@ class mutationClock:
         self,
         predicted_methyl_fns: list,
         predicted_perf_fns: list,
-        scrambled_predicted_methyl_fns: list,
         all_methyl_age_df_t: pd.DataFrame,
         illumina_cpg_locs_df: pd.DataFrame, 
         output_dir: str,
         train_samples: list,
         test_samples: list,
-        tissue_type: str = ""
+        tissue_type: str = "",
+        scrambled_predicted_methyl_fns: list =[],
+        trained_models_fns: list = []
         ) -> None:
         """
         @ predicted_methyl_fns: a list of paths to the predicted methylation files
@@ -45,7 +46,8 @@ class mutationClock:
         """
         self.predicted_methyl_df = self._combine_fns(predicted_methyl_fns, axis = 1)
         self.performance_df = self._combine_fns(predicted_perf_fns, axis=0)
-        self.scrambled_predicted_methyl_df = self._combine_fns(scrambled_predicted_methyl_fns, axis = 1)
+        if len(scrambled_predicted_methyl_fns) > 0:
+            self.scrambled_predicted_methyl_df = self._combine_fns(scrambled_predicted_methyl_fns, axis = 1)
         self.all_methyl_age_df_t = all_methyl_age_df_t
         self.illumina_cpg_locs_df = illumina_cpg_locs_df
         self.output_dir = output_dir
@@ -55,24 +57,39 @@ class mutationClock:
             self.all_methyl_age_df_t = self.all_methyl_age_df_t.loc[self.all_methyl_age_df_t['dataset'] == tissue_type, :]
         self.test_samples = test_samples
         self.train_samples = train_samples
-        
+        self.trained_models = {}
+        if len(trained_models_fns) > 0:
+            for fn in trained_models_fns:
+                # read in dictionary from pickle file
+                with open(fn, 'rb') as f:
+                    these_models = pickle.load(f)
+                    # add to dictionary
+                    self.trained_models.update(these_models)
         
     def _populate_performance(self):
         """
         Add interesting column to self.performance_df
         """
         # add training CpG real age correlation
-        self.performance_df['training_real_mf_age_r'] = self.all_methyl_age_df_t.loc[self.train_samples, self.performance_df.index ].corrwith(self.all_methyl_age_df_t.loc[self.train_samples, 'age_at_index'])
+        self.performance_df['training_real_mf_age_pearsonr'] = self.all_methyl_age_df_t.loc[self.train_samples, self.performance_df.index ].corrwith(self.all_methyl_age_df_t.loc[self.train_samples, 'age_at_index'])
         # add training CpG predicted age correlation
-        self.performance_df['training_pred_mf_age_r'] = self.predicted_methyl_df.loc[self.train_samples, :].corrwith(self.all_methyl_age_df_t.loc[self.train_samples, 'age_at_index'])
+        self.performance_df['training_pred_mf_age_pearsonr'] = self.predicted_methyl_df.loc[self.train_samples, :].corrwith(self.all_methyl_age_df_t.loc[self.train_samples, 'age_at_index'])
+        self.performance_df['training_real_mf_age_spearmanr'] = self.all_methyl_age_df_t.loc[self.train_samples, self.performance_df.index ].corrwith(self.all_methyl_age_df_t.loc[self.train_samples, 'age_at_index'], method='spearman')
+        # add training CpG predicted age correlation
+        self.performance_df['training_pred_mf_age_spearmanr'] = self.predicted_methyl_df.loc[self.train_samples, :].corrwith(self.all_methyl_age_df_t.loc[self.train_samples, 'age_at_index'], method='spearman')
         # add correlation between training predicted methylation and training actual methylation
         self.performance_df['training_pred_real_mf_r'] = self.predicted_methyl_df.loc[self.train_samples, :].corrwith(self.all_methyl_age_df_t.loc[self.train_samples, self.performance_df.index])
+        # same but spearman
+        self.performance_df['training_pred_real_mf_spearmanr'] = self.predicted_methyl_df.loc[self.train_samples, :].corrwith(self.all_methyl_age_df_t.loc[self.train_samples, self.performance_df.index], method='spearman')
         # get correlation between testing scrambled predicted methylation and testing actual methylation
-        self.performance_df['testing_scrambled_real_mf_r'] = self.scrambled_predicted_methyl_df.loc[self.test_samples, :].corrwith(self.all_methyl_age_df_t.loc[self.test_samples, self.performance_df.index])
+        #self.performance_df['testing_scrambled_real_mf_r'] = self.scrambled_predicted_methyl_df.loc[self.test_samples, :].corrwith(self.all_methyl_age_df_t.loc[self.test_samples, self.performance_df.index])
         # add correlation of predicted testing samples with age
-        self.performance_df['testing_pred_mf_age_r'] = self.predicted_methyl_df.loc[self.test_samples, :].corrwith(self.all_methyl_age_df_t.loc[self.test_samples, 'age_at_index'])
+        self.performance_df['testing_pred_mf_age_pearsonr'] = self.predicted_methyl_df.loc[self.test_samples, :].corrwith(self.all_methyl_age_df_t.loc[self.test_samples, 'age_at_index'])
         # and actual testing samples with age
-        self.performance_df['testing_real_mf_age_r'] = self.all_methyl_age_df_t.loc[self.test_samples, self.performance_df.index].corrwith(self.all_methyl_age_df_t.loc[self.test_samples, 'age_at_index'])
+        self.performance_df['testing_real_mf_age_pearsonr'] = self.all_methyl_age_df_t.loc[self.test_samples, self.performance_df.index].corrwith(self.all_methyl_age_df_t.loc[self.test_samples, 'age_at_index'])
+        self.performance_df['testing_pred_mf_age_spearmanr'] = self.predicted_methyl_df.loc[self.test_samples, :].corrwith(self.all_methyl_age_df_t.loc[self.test_samples, 'age_at_index'], method='spearman')
+        # and actual testing samples with age
+        self.performance_df['testing_real_mf_age_spearmanr'] = self.all_methyl_age_df_t.loc[self.test_samples, self.performance_df.index].corrwith(self.all_methyl_age_df_t.loc[self.test_samples, 'age_at_index'], method='spearman')
     
     
     def _combine_fns(
@@ -90,6 +107,12 @@ class mutationClock:
             df = pd.read_parquet(fn)
             all_dfs.append(df)    
         combined_df = pd.concat(all_dfs, axis=axis)
+        # drop duplicate columns if they exist, may happen when running many jobs
+        if axis == 1:
+            combined_df = combined_df.loc[:,~combined_df.columns.duplicated()].copy()
+        else: # if axis = 0 
+            combined_df = combined_df.loc[~combined_df.index.duplicated(), :].copy()
+
         return combined_df
  
     def feature_selection(self):
@@ -116,7 +139,7 @@ class mutationClock:
         # X = self.all_methyl_age_df_t.loc[samples, cpgs]
         #y = self.all_methyl_age_df_t.loc[samples, 'age_at_index']
         #X = self.predicted_methyl_df.loc[samples, cpgs]
-        # model = xgb.XGBRegressor()
+        #model = xgb.XGBRegressor()
         # model = RandomForestRegressor(n_estimators=1000, max_depth=100, n_jobs=-1, verbose=1)
         
         # Create an ElasticNetCV object
