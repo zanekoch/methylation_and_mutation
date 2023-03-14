@@ -48,7 +48,7 @@ class mutationScan:
         self.num_background_events = num_background_events
         self.matched_sample_num = matched_sample_num
         # Preprocessing: subset to only mutations that are C>T, non X and Y chromosomes, and that occured in samples with measured methylation
-        self.all_mut_w_age_df['mut_cpg'] = self.all_mut_w_age_df['chr'] + ':' + self.all_mut_w_age_df['start'].astype(str)
+        self.all_mut_w_age_df['mut_loc'] = self.all_mut_w_age_df['chr'] + ':' + self.all_mut_w_age_df['start'].astype(str)
         self.all_mut_w_age_df = self.all_mut_w_age_df.loc[
             # (self.all_mut_w_age_df['mutation'] == 'C>T') &
             (self.all_mut_w_age_df['chr'] != 'X')  
@@ -365,8 +365,8 @@ class mutationScan:
         Join the dataframe with the illumina_cpg_locs_df
         """
         df = in_df.copy(deep=True)
-        # split 'mut_cpg' into 'chr' and 'start'
-        df[['chr', 'start']] = df['mut_cpg'].str.split(':', expand=True)
+        # split 'mut_loc' into 'chr' and 'start'
+        df[['chr', 'start']] = df['mut_loc'].str.split(':', expand=True)
         # convert start column to int with to_numeric
         df['start'] = pd.to_numeric(df['start'])
         if different_illum is None:
@@ -438,7 +438,7 @@ class mutationScan:
             relevant_mutations.apply(lambda row: any(np.abs(row['start'] - sites_to_test_locs['start']) <= self.max_dist), axis=1)
             ]
         # detect samples that have a mutation in the mutated site or within max_dist of it
-        have_illegal_muts = pd.concat([have_illegal_muts, relevant_mutations.loc[(relevant_mutations['mut_cpg'] == mut_row['mut_cpg']) | (np.abs(relevant_mutations['start'] - mut_row['start']) <= self.max_dist)]])
+        have_illegal_muts = pd.concat([have_illegal_muts, relevant_mutations.loc[(relevant_mutations['mut_loc'] == mut_row['mut_loc']) | (np.abs(relevant_mutations['start'] - mut_row['start']) <= self.max_dist)]])
         return have_illegal_muts['case_submitter_id'].to_list()
 
     def _compare_sites(
@@ -523,7 +523,7 @@ class mutationScan:
             comparison_site_mfs = self.all_methyl_age_df_t.loc[all_samples, mut_row['comparison_sites']]
             # measure the change in methylation between sites in the mutated samples and in other non-mutated samples of the same age
             metrics = self._compare_sites(comparison_site_mfs, mut_sample_name = mut_row['case_submitter_id'])
-            metrics['mut_cpg'], metrics['mut_event'], metrics['is_background'], metrics['index_event'] = mut_row['mut_cpg'], mut_row['mut_event'], mut_row['is_background'], mut_row['index_event']
+            metrics['mut_loc'], metrics['mut_event'], metrics['is_background'], metrics['index_event'] = mut_row['mut_loc'], mut_row['mut_event'], mut_row['is_background'], mut_row['index_event']
             cpg_to_dist_dict = dict(zip(mut_row['comparison_sites'], mut_row['comparison_dists']))
             metrics['measured_site_dist'] = metrics['measured_site'].map(cpg_to_dist_dict)
             # add to output
@@ -661,7 +661,7 @@ class mutationScan:
         tqdm.pandas(desc="Getting background events near cpgs", miniters=len(background_events)/10)
         background_events['start'] = background_events.progress_apply(self._random_site_near_cpg, axis=1)
         background_events['end'] = background_events['start']
-        background_events['mut_cpg'] = background_events['chr'] + ':' + background_events['start'].astype(str)
+        background_events['mut_loc'] = background_events['chr'] + ':' + background_events['start'].astype(str)
         
         # concat the comparison sites df to itself self.num_background_events to populate background_events columns
         repeated_comp_sites_df = pd.concat([comparison_sites_df] * self.num_background_events, ignore_index=True)
@@ -674,7 +674,7 @@ class mutationScan:
         # index event is the real mutation event that the background site is for
         background_events['index_event'] = repeated_comp_sites_df['mut_event']
         # mut event is the background site
-        background_events['mut_event'] = background_events['case_submitter_id'] + '_' + background_events['mut_cpg']
+        background_events['mut_event'] = background_events['case_submitter_id'] + '_' + background_events['mut_loc']
         
         if linkage_method == 'dist':
             # now get the comparison sites and dists for these background sites
@@ -727,8 +727,8 @@ class mutationScan:
                 chosen_background_events_l.append(rand_mut_events_and_comp_sites)
         # combine these randomly chosen background events with the actual mutation events, populating columns
         chosen_background_events = pd.concat(chosen_background_events_l)
-        chosen_background_events['mut_cpg'] = chosen_background_events['chr'] + ':' + chosen_background_events['start'].astype(str)
-        chosen_background_events['mut_event'] = chosen_background_events['case_submitter_id'] + '_' + chosen_background_events['mut_cpg']
+        chosen_background_events['mut_loc'] = chosen_background_events['chr'] + ':' + chosen_background_events['start'].astype(str)
+        chosen_background_events['mut_event'] = chosen_background_events['case_submitter_id'] + '_' + chosen_background_events['mut_loc']
         chosen_background_events['is_background'] = True # redundant with index_event but keeping for now
         chosen_background_events['mut_delta_mf'] = np.nan
         # drop rows with no comparison sites
@@ -857,8 +857,8 @@ class mutationScan:
             [i for i in range(self.num_correl_sites)] 
             for _ in range(len(valid_muts_w_illum))
             ]
-        valid_muts_w_illum['mut_cpg'] = valid_muts_w_illum['chr'] + ':' + valid_muts_w_illum['start'].astype(str)
-        valid_muts_w_illum['mut_event'] = valid_muts_w_illum['case_submitter_id'] + '_' + valid_muts_w_illum['mut_cpg']
+        valid_muts_w_illum['mut_loc'] = valid_muts_w_illum['chr'] + ':' + valid_muts_w_illum['start'].astype(str)
+        valid_muts_w_illum['mut_event'] = valid_muts_w_illum['case_submitter_id'] + '_' + valid_muts_w_illum['mut_loc']
         valid_muts_w_illum['is_background'] = False
         valid_muts_w_illum['index_event'] = 'self'
         valid_muts_w_illum.reset_index(drop = True, inplace = True)
@@ -943,13 +943,70 @@ class mutationScan:
         valid_muts_w_illum = valid_muts_w_illum.iloc[start_num_mut_to_process:end_num_mut_to_process, :]
         print(f"Number of mutation events being processed based on start_num_mut_to_process and end_num_mut_to_process: {len(valid_muts_w_illum)}")
         # set other column values
-        valid_muts_w_illum.loc[:, 'mut_cpg'] = valid_muts_w_illum['chr'] + ':' + valid_muts_w_illum['start'].astype(str)
-        valid_muts_w_illum['mut_event'] = valid_muts_w_illum['case_submitter_id'] + '_' + valid_muts_w_illum['mut_cpg']
+        valid_muts_w_illum.loc[:, 'mut_loc'] = valid_muts_w_illum['chr'] + ':' + valid_muts_w_illum['start'].astype(str)
+        valid_muts_w_illum['mut_event'] = valid_muts_w_illum['case_submitter_id'] + '_' + valid_muts_w_illum['mut_loc']
         valid_muts_w_illum['is_background'] = False
         valid_muts_w_illum['index_event'] = 'self'
         valid_muts_w_illum.reset_index(drop = True, inplace = True)
         pd.options.mode.chained_assignment = 'warn'
         return valid_muts_w_illum 
+    
+    
+    def _get_meqtlDB_based_comp_sites(
+        self,
+        meqtl_df_df: pd.DataFrame, 
+        start_num_mut_to_process: int, 
+        end_num_mut_to_process: int
+        ) -> pd.DataFrame:
+        """
+        Choose mutation events that are in meQTLs and choose comparison sites as the CpGs related to that meQTL
+        """
+        # merge mutations with meQTL database, keeping only mutations that are in meQTLs
+        mut_in_meqtl = meqtl_df_df.merge(self.all_mut_w_age_illum_df, how='left', right_on='mut_loc', left_on = 'snp')
+        mut_in_meqtl.dropna(inplace=True, subset=['mut_loc'])
+        # if there are no mutations in meQTL database, exit
+        if len (mut_in_meqtl) == 0:
+            sys.exit("No somatic mutations in meQTL database, exiting")
+        
+        # groupby mut_event, aggregating cpg values into a list
+        mut_in_meqtl['mut_event'] = mut_in_meqtl['case_submitter_id'] + '_' + mut_in_meqtl['mut_loc']
+        mut_in_meqtl = mut_in_meqtl.groupby('mut_event')['cpg'].apply(list).to_frame().reset_index()
+        mut_in_meqtl.rename(columns={'cpg': 'comparison_sites'}, inplace=True) 
+        # for each mutation event, add the distances to the comparison sites
+        mut_in_meqtl['comparison_dists'] = [[] for _ in range(len(mut_in_meqtl))]
+        mut_in_meqtl['comparison_dists'] = mut_in_meqtl.apply(
+            lambda mut_event: [x for x in range(len(mut_event['comparison_sites']))], axis=1
+        )
+        # get columns back
+        mut_in_meqtl['case_submitter_id'] = mut_in_meqtl['mut_event'].apply(lambda x: x.split('_')[0])
+        mut_in_meqtl['mut_loc'] = mut_in_meqtl['mut_event'].apply(lambda x: x.split('_')[1])
+        mut_in_meqtl['chr'] = mut_in_meqtl['mut_loc'].apply(lambda x: x.split(':')[0])
+        mut_in_meqtl['start'] = mut_in_meqtl['mut_loc'].apply(lambda x: int(x.split(':')[1]))
+        print(
+            f"Number of mutation events with that are meQTL : {len(mut_in_meqtl)}", flush=True
+            )
+        # get matched samples
+        tqdm.pandas(desc="Getting matched samples", miniters=len(mut_in_meqtl)/10)
+        mut_in_meqtl['matched_samples'] = mut_in_meqtl.progress_apply(
+            lambda mut_event: self._same_age_and_tissue_samples(mut_event['case_submitter_id']), axis = 1
+            )
+        # print distribution of number of matched samples across mutation events
+        mut_in_meqtl['num_matched_samples'] = mut_in_meqtl['matched_samples'].apply(len)
+        mut_in_meqtl = mut_in_meqtl.loc[
+            mut_in_meqtl['matched_samples'].apply(len) >= self.matched_sample_num
+            ]
+        print(
+            f"Number mutation events being processed after filtering for matched sample number of {self.matched_sample_num}: {len(mut_in_meqtl)}", flush=True
+            )
+        mut_in_meqtl['is_background'] = False
+        mut_in_meqtl['index_event'] = 'self'
+        mut_in_meqtl = mut_in_meqtl.iloc[start_num_mut_to_process:end_num_mut_to_process, :]
+        print(
+            f"Number of mutation events being processed based on start_num_mut_to_process and end_num_mut_to_process: {len(mut_in_meqtl)}"
+            )
+        mut_in_meqtl.reset_index(drop = True, inplace = True)
+        return mut_in_meqtl
+        
     
     def look_for_disturbances(
         self, 
@@ -958,16 +1015,18 @@ class mutationScan:
         linkage_method: str,
         out_dir: str,
         corr_direction: str,
-        comparison_sites_df: pd.DataFrame = None
+        comparison_sites_df: pd.DataFrame = None,
+        meqtl_db_df: pd.DataFrame = None
         ) -> tuple:
         """
         Driver for the analysis. Finds mutations with VAF >= min_VAF_percentile that have a measured CpG within max_dist of the mutation and then looks for disturbances in the methylation of these CpGs.
-        @ min_VAF_percentile: minimum VAF percentile of mutation to be considered
-        @ max_delta_mf_percentile: maximum delta methylation percentile of mutation to be considered
-        @ linkage_method: 'dist' or 'correl'
+        @ start_num_mut_to_process: 
+        @ end_num_mut_to_process: 
+        @ linkage_method: 'dist' or 'correl' or 'db'
         @ out_dir: directory to write output files to
-        @ comparison_sites_df: optional input of already computed comparison sites
-        @ corr_direction: 'pos' or 'neg' for positive or negative correlation
+        @ corr_direction: 'pos' or 'neg' or 'both'
+        @ comparison_sites_df: optional dataframe with columns 'mut_event', 'comparison_sites', 'comparison_dists', 'case_submitter_id', 'mut_loc', 'chr', 'start', 'matched_samples', 'is_background', 'index_event'
+        @ meqtl_db_df: optional dataframe with columns 'cpg': cpg id's, 'snp': mutation location chr:start, 'beta': beta values for meQTL
         """
         # PHASE 1: choose mutation events and comparison sites
         ######################################################
@@ -982,8 +1041,13 @@ class mutationScan:
                 comparison_sites_df = self._get_correl_based_comp_sites(
                     start_num_mut_to_process, end_num_mut_to_process, corr_direction
                     )
+            elif linkage_method == 'db':
+                comparison_sites_df = self._get_meqtlDB_based_comp_sites(
+                    meqtl_db_df, start_num_mut_to_process, end_num_mut_to_process
+                )
+                return comparison_sites_df, pd.DataFrame()
             else:
-                raise ValueError('linkage_method must be "dist" or "correl"')
+                raise ValueError('linkage_method must be "dist", "correl", or "db"')
             # choose background sites
             if self.num_background_events > 0:
                 print("Getting background sites...")
