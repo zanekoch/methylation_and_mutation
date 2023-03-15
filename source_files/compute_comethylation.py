@@ -406,7 +406,7 @@ class mutationScan:
         # get the mf all other samples of within age_bin_size/2 years of age on either side
         matched_samples = self.all_methyl_age_df_t.loc[
             (self.all_methyl_age_df_t['dataset'] == this_dset)
-            & (np.abs(self.all_methyl_age_df_t['age_at_index'] - this_age) <= self.age_bin_size/2) 
+            #& (np.abs(self.all_methyl_age_df_t['age_at_index'] - this_age) <= self.age_bin_size/2) 
             ].index
         # drop the mutated sample itself
         matched_samples_no_mut = matched_samples.drop(sample_name)
@@ -426,17 +426,24 @@ class mutationScan:
         """
         # so it works when called from heatmap and comethylation scan 
         mut_row = mut_row.copy(deep=True).squeeze()
-        # select rows of self.all_mut_w_age_df that have the same chr and dataset as mut_row
+        # select rows of self.all_mut_w_age_df that have the same chr and dataset and as mut_row
         relevant_mutations = self.all_mut_w_age_df.loc[
             (self.all_mut_w_age_df['chr'] == mut_row['chr']) 
             & (self.all_mut_w_age_df['case_submitter_id'].isin(mut_row['matched_samples']))
             ]
+        if len(relevant_mutations) == 0:
+            return []
         # detect samples that have a mutation in the max_dist window of any of the sites in sites_to_test
         sites_to_test_locs = self.illumina_cpg_locs_df.loc[self.illumina_cpg_locs_df['#id'].isin(sites_to_test)] 
         # select rows of relevant_mutations that are within max_dist of any of the sites_to_test
-        have_illegal_muts = relevant_mutations.loc[
-            relevant_mutations.apply(lambda row: any(np.abs(row['start'] - sites_to_test_locs['start']) <= self.max_dist), axis=1)
-            ]
+        try:
+            have_illegal_muts = relevant_mutations.loc[
+                relevant_mutations.apply(lambda row: any(np.abs(row['start'] - sites_to_test_locs['start']) <= self.max_dist), axis=1)
+                ]
+        except:
+            print(relevant_mutations)
+            print(relevant_mutations.apply(lambda row: any(np.abs(row['start'] - sites_to_test_locs['start']) <= self.max_dist), axis=1))
+            sys.exit(1)
         # detect samples that have a mutation in the mutated site or within max_dist of it
         have_illegal_muts = pd.concat([have_illegal_muts, relevant_mutations.loc[(relevant_mutations['mut_loc'] == mut_row['mut_loc']) | (np.abs(relevant_mutations['start'] - mut_row['start']) <= self.max_dist)]])
         return have_illegal_muts['case_submitter_id'].to_list()
@@ -456,10 +463,26 @@ class mutationScan:
             )
         abs_median_diffs = np.abs(median_diffs)
 
+        # zscore of the difference from the median
+        zscore_abs_median_diffs = abs_median_diffs.apply(
+            lambda row: (row - np.nanmean(abs_median_diffs, axis=0)) / np.nanstd(abs_median_diffs, axis=0),
+            axis=1
+            )
+
         metrics = median_diffs.stack().reset_index()
         metrics.columns = ['sample', 'measured_site', 'delta_mf_median']
         # create column called 'mutated' that is True if the sample is the mutated sample
         metrics['mutated_sample'] = metrics['sample'] == mut_sample_name
+        # add the zscore of the difference from the median
+        stacked_zscore_abs_median_diffs = zscore_abs_median_diffs.stack().reset_index()
+        stacked_zscore_abs_median_diffs.columns = ['sample', 'measured_site', 'zscore_delta_mf_median']
+        metrics = metrics.merge(
+            stacked_zscore_abs_median_diffs,
+            on = ['sample', 'measured_site'],
+            how = 'left'
+            )
+        metrics.columns = ['sample', 'measured_site', 'delta_mf_median', 'mutated_sample', 'zscore_delta_mf_median']
+        """
         # test for a difference in methylation fraction
         metrics['mf_pval2'] = stats.mannwhitneyu(
             x = comparison_site_mfs.loc[mut_sample_name].to_numpy().ravel(),
@@ -471,22 +494,28 @@ class mutationScan:
             y = comparison_site_mfs.drop(mut_sample_name).to_numpy().ravel(),
             alternative = 'less'
             ).pvalue
+        metrics['delta_mf_pval'] = stats.mannwhitneyu(
+            x = median_diffs.loc[mut_sample_name].to_numpy().ravel(),
+            y = median_diffs.drop(mut_sample_name).to_numpy().ravel(),
+            alternative = 'less'
+            ).pvalue
+            """
         # test for a difference in delta_mf
         metrics['delta_mf_pval2'] = stats.mannwhitneyu(
             x = median_diffs.loc[mut_sample_name].to_numpy().ravel(),
             y = median_diffs.drop(mut_sample_name).to_numpy().ravel(),
             alternative = 'two-sided'
             ).pvalue
-        metrics['delta_mf_pval'] = stats.mannwhitneyu(
-            x = median_diffs.loc[mut_sample_name].to_numpy().ravel(),
-            y = median_diffs.drop(mut_sample_name).to_numpy().ravel(),
-            alternative = 'less'
-            ).pvalue
         # test for a difference in abs_delta_mf
         metrics['abs_delta_mf_pval'] = stats.mannwhitneyu(
             x = abs_median_diffs.loc[mut_sample_name].to_numpy().ravel(),
             y = abs_median_diffs.drop(mut_sample_name).to_numpy().ravel(),
             alternative = 'greater'
+            ).pvalue
+        metrics['zscore_pval2'] = stats.mannwhitneyu(
+            x = zscore_abs_median_diffs.loc[mut_sample_name].to_numpy().ravel(),
+            y = zscore_abs_median_diffs.drop(mut_sample_name).to_numpy().ravel(),
+            alternative = 'two-sided'
             ).pvalue
         return metrics
 
@@ -641,6 +670,57 @@ class mutationScan:
         # randomly choose a location near this cpg (+/- self.max_dist)
         chosen_loc = random.randrange(rand_cpg_loc - self.max_dist, rand_cpg_loc + self.max_dist)
         return chosen_loc
+    
+    def _choose_background_sites_meqtlDB(
+        self, 
+        comparison_sites_df: pd.DataFrame,
+        meqtl_DB_df: pd.DataFrame,
+        ) -> pd.DataFrame:
+        """
+        Choose num_background_events for each mutation event in comparison_sites_df from meQTL db
+        meQTL's that do not actually have a mutation (in any sample)
+        """
+        # merge mutations with meQTL database, meQTLs without a mutaition
+        mut_in_meqtl = meqtl_DB_df.merge(self.all_mut_w_age_illum_df, how='left', right_on='mut_loc', left_on = 'snp')
+        # drop rows that no not have nan in mut_loc, keeping unmutated meQTLs
+        mut_in_meqtl = mut_in_meqtl[mut_in_meqtl['mut_loc'].isna()]
+        
+        all_background_sites = []
+        unique_meqtl_snps = pd.Series(mut_in_meqtl['snp'].unique()) # so no bias towards snps with more cpgs
+        print("got unique meqtl snps", flush=True)
+        for i, row in comparison_sites_df.iterrows():
+            # choose num_background_events fake mutations in meQTLs from the sample of this row
+            # randomly sample num_background_events snps from mut_in_meqtl
+            chosen_snps = unique_meqtl_snps.sample(
+                n=self.num_background_events, random_state=1, replace = False
+                )
+            # get corresponding cpgs
+            background_comp_sites = mut_in_meqtl.loc[mut_in_meqtl['snp'].isin(chosen_snps)]
+            # turn this into a df with the same columns as comparison_sites_df, with same values
+            background_comp_sites['mut_event'] = row['case_submitter_id'] + '_' + background_comp_sites['snp']
+            background_comp_sites = background_comp_sites.groupby('mut_event')['cpg'].apply(list).to_frame().reset_index()
+            background_comp_sites.rename(columns={'cpg': 'comparison_sites'}, inplace=True) 
+            background_comp_sites['comparison_dists'] = [[] for _ in range(len(background_comp_sites))]
+            background_comp_sites['comparison_dists'] = background_comp_sites.apply(
+                lambda mut_event: [x for x in range(len(mut_event['comparison_sites']))], axis=1
+            )
+            background_comp_sites['case_submitter_id'] = row['case_submitter_id']
+            background_comp_sites['mut_loc'] = background_comp_sites['mut_event'].apply(lambda x: x.split('_')[1])
+            background_comp_sites['chr'] = background_comp_sites['mut_loc'].apply(lambda x: x.split(':')[0])
+            background_comp_sites['start'] = background_comp_sites['mut_loc'].apply(lambda x: int(x.split(':')[1]))
+            background_comp_sites['matched_samples'] = [row['matched_samples'] for _ in range(len(background_comp_sites))] # every background event has the same matched samples
+            # make it a background event
+            background_comp_sites['is_background'] = True
+            background_comp_sites['index_event'] = row['mut_event']
+            # add to list of dataframes of each real comparison sites comp sites
+            all_background_sites.append(background_comp_sites)
+            print(f"finished {100*i/len(comparison_sites_df)}% of background events", flush=True)
+        all_background_comp_sites = pd.concat(all_background_sites)
+        # concat with comparison_sites_df to be processed together
+        comparison_sites_df = pd.concat([comparison_sites_df, all_background_comp_sites])
+        comparison_sites_df.reset_index(inplace=True, drop=True)
+        # return the comparison sites df with the background events added
+        return comparison_sites_df
     
     def _all_at_once_background(
         self,
@@ -954,15 +1034,16 @@ class mutationScan:
     
     def _get_meqtlDB_based_comp_sites(
         self,
-        meqtl_df_df: pd.DataFrame, 
+        meqtl_DB_df: pd.DataFrame, 
         start_num_mut_to_process: int, 
         end_num_mut_to_process: int
         ) -> pd.DataFrame:
         """
         Choose mutation events that are in meQTLs and choose comparison sites as the CpGs related to that meQTL
         """
+        print("Getting comparison sites from meQTL database...")
         # merge mutations with meQTL database, keeping only mutations that are in meQTLs
-        mut_in_meqtl = meqtl_df_df.merge(self.all_mut_w_age_illum_df, how='left', right_on='mut_loc', left_on = 'snp')
+        mut_in_meqtl = meqtl_DB_df.merge(self.all_mut_w_age_illum_df, how='left', right_on='mut_loc', left_on = 'snp')
         mut_in_meqtl.dropna(inplace=True, subset=['mut_loc'])
         # if there are no mutations in meQTL database, exit
         if len (mut_in_meqtl) == 0:
@@ -1045,17 +1126,22 @@ class mutationScan:
                 comparison_sites_df = self._get_meqtlDB_based_comp_sites(
                     meqtl_db_df, start_num_mut_to_process, end_num_mut_to_process
                 )
-                return comparison_sites_df, pd.DataFrame()
             else:
                 raise ValueError('linkage_method must be "dist", "correl", or "db"')
             # choose background sites
             if self.num_background_events > 0:
-                print("Getting background sites...")
-                comparison_sites_df = self._all_at_once_background(
-                    comparison_sites_df, linkage_method = linkage_method, 
-                    corr_direction = corr_direction
-                    )
-                print(f"comparison sites df shape {comparison_sites_df.shape}")
+                print("Getting background sites...", flush=True)
+                # update comparison_sites_df with background sites
+                if linkage_method == 'db':
+                    comparison_sites_df = self._choose_background_sites_meqtlDB(
+                        comparison_sites_df, meqtl_db_df
+                        )
+                else:
+                    comparison_sites_df = self._all_at_once_background(
+                        comparison_sites_df, linkage_method = linkage_method, 
+                        corr_direction = corr_direction
+                        )
+                print(f"{comparison_sites_df.shape[0]} mutation events total (background and foreground) to be processed", flush=True)
             # convert comparison_sites_df to dask and write to multiple parquet files
             comparison_sites_dd = dask.dataframe.from_pandas(comparison_sites_df, npartitions = 100)
             comparison_sites_fn = os.path.join(
