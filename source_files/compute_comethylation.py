@@ -406,7 +406,7 @@ class mutationScan:
         # get the mf all other samples of within age_bin_size/2 years of age on either side
         matched_samples = self.all_methyl_age_df_t.loc[
             (self.all_methyl_age_df_t['dataset'] == this_dset)
-            #& (np.abs(self.all_methyl_age_df_t['age_at_index'] - this_age) <= self.age_bin_size/2) 
+            & (np.abs(self.all_methyl_age_df_t['age_at_index'] - this_age) <= self.age_bin_size/2) 
             ].index
         # drop the mutated sample itself
         matched_samples_no_mut = matched_samples.drop(sample_name)
@@ -468,20 +468,20 @@ class mutationScan:
             lambda row: (row - np.nanmean(abs_median_diffs, axis=0)) / np.nanstd(abs_median_diffs, axis=0),
             axis=1
             )
-
+        
         metrics = median_diffs.stack().reset_index()
         metrics.columns = ['sample', 'measured_site', 'delta_mf_median']
         # create column called 'mutated' that is True if the sample is the mutated sample
         metrics['mutated_sample'] = metrics['sample'] == mut_sample_name
         # add the zscore of the difference from the median
         stacked_zscore_abs_median_diffs = zscore_abs_median_diffs.stack().reset_index()
-        stacked_zscore_abs_median_diffs.columns = ['sample', 'measured_site', 'zscore_delta_mf_median']
+        stacked_zscore_abs_median_diffs.columns = ['sample', 'measured_site', 'zscore_abs_delta_mf_median']
         metrics = metrics.merge(
             stacked_zscore_abs_median_diffs,
             on = ['sample', 'measured_site'],
             how = 'left'
             )
-        metrics.columns = ['sample', 'measured_site', 'delta_mf_median', 'mutated_sample', 'zscore_delta_mf_median']
+        metrics.columns = ['sample', 'measured_site', 'delta_mf_median', 'mutated_sample', 'zscore_abs_delta_mf_median']
         """
         # test for a difference in methylation fraction
         metrics['mf_pval2'] = stats.mannwhitneyu(
@@ -684,7 +684,9 @@ class mutationScan:
         mut_in_meqtl = meqtl_DB_df.merge(self.all_mut_w_age_illum_df, how='left', right_on='mut_loc', left_on = 'snp')
         # drop rows that no not have nan in mut_loc, keeping unmutated meQTLs
         mut_in_meqtl = mut_in_meqtl[mut_in_meqtl['mut_loc'].isna()]
-        
+        # drop rows with cpg not in methyl df
+        mut_in_meqtl = mut_in_meqtl.loc[mut_in_meqtl['cpg'].isin(self.all_methyl_age_df_t.columns)]
+
         all_background_sites = []
         unique_meqtl_snps = pd.Series(mut_in_meqtl['snp'].unique()) # so no bias towards snps with more cpgs
         print("got unique meqtl snps", flush=True)
@@ -1045,6 +1047,10 @@ class mutationScan:
         # merge mutations with meQTL database, keeping only mutations that are in meQTLs
         mut_in_meqtl = meqtl_DB_df.merge(self.all_mut_w_age_illum_df, how='left', right_on='mut_loc', left_on = 'snp')
         mut_in_meqtl.dropna(inplace=True, subset=['mut_loc'])
+        print("number of meQTLs with mutations in them: ", len(mut_in_meqtl))
+        # drop rows where CpG is not in self.all_methyl_age_df_t
+        mut_in_meqtl = mut_in_meqtl.loc[mut_in_meqtl['cpg'].isin(self.all_methyl_age_df_t.columns)]
+        print("number of meQTLs with mutations in them and CpGs in methyl data: ", len(mut_in_meqtl))
         # if there are no mutations in meQTL database, exit
         if len (mut_in_meqtl) == 0:
             sys.exit("No somatic mutations in meQTL database, exiting")
