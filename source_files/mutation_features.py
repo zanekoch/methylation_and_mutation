@@ -93,20 +93,6 @@ class mutationFeatures:
         # subset meqtl_db to only cpgs in all_methyl_age_df_t 
         self.meqtl_db = self.meqtl_db.loc[
             self.meqtl_db['cpg'].isin(self.all_methyl_age_df_t.columns), :]
-
-    def cross_val_samples_old(self):
-        """
-        Choose train and test samples based on cross validation number and dataset
-        @ return: train_samples, test_samples
-        """
-        # implicitly subsets to only this dataset's samples bc of preproc_mut_and_methyl
-        all_samples = self.all_methyl_age_df_t.index.to_list()
-        num_samples = len(all_samples)
-        split_size = int(num_samples/5)
-        split_samples = [all_samples[i:i + split_size] for i in range(0, num_samples, split_size)]
-        test_samples = split_samples[self.cross_val_num]
-        train_samples = list(set(all_samples).difference(set(test_samples)))
-        return train_samples, test_samples
     
     def cross_val_samples(self):
         """
@@ -180,21 +166,32 @@ class mutationFeatures:
         if chrom not in self.matrixQTL_store:
             # read in the matrixQTL results for this chromosome        
             meqtl_df = pd.read_parquet(
-                os.path.join(self.matrix_qtl_dir, f"chr{chrom}_meqtl.parquet"),
-                columns=['#id', 'SNP', 'p-value', 'beta'])            
+                os.path.join(self.matrix_qtl_dir, f"chr{chrom}_meqtl_fold_{self.cross_val_num}.parquet"),
+                columns=['#id', 'SNP', 'p-value', 'beta', 'distance', 'snp_chr'])       
             self.matrixQTL_store[chrom] = meqtl_df
         else:
             meqtl_df = self.matrixQTL_store[chrom]
-        # get the meQTLs for this CpG
-        neg_meqtls = meqtl_df.loc[
-            (meqtl_df['#id'] == cpg_id) 
-            & (meqtl_df['beta'] < 0),
+        # same chromosome only
+        cis_meqtl_df = meqtl_df.loc[(meqtl_df['snp_chr'] == chrom)
+                                    & (meqtl_df['#id'] == cpg_id) 
+                                    , :]
+        # split by beta and distance
+        pos_meqtls = cis_meqtl_df.loc[
+            (cis_meqtl_df['beta'] > 0),
+            :]
+        close_pos_meqtls_l = pos_meqtls.loc[
+            pos_meqtls['distance'] < 5e6, 
             :].nsmallest(max_meqtl_sites, 'p-value')['SNP'].to_list()
-        pos_meqtls = meqtl_df.loc[
-            (meqtl_df['#id'] == cpg_id) 
-            & (meqtl_df['beta'] > 0),
+        pos_meqtls_l = pos_meqtls.nsmallest(max_meqtl_sites, 'p-value')['SNP'].to_list()
+        # negative
+        neg_meqtls = cis_meqtl_df.loc[
+            (cis_meqtl_df['beta'] < 0),
+            :]
+        close_neg_meqtls_l = neg_meqtls.loc[
+            neg_meqtls['distance'] < 5e6, 
             :].nsmallest(max_meqtl_sites, 'p-value')['SNP'].to_list()
-        return neg_meqtls, pos_meqtls
+        neg_meqtls_l = neg_meqtls.nsmallest(max_meqtl_sites, 'p-value')['SNP'].to_list()
+        return neg_meqtls_l, close_neg_meqtls_l, pos_meqtls_l, close_pos_meqtls_l
     
     def _select_db_sites(self, cpg_id, num_db_sites):
         this_cpg_meqtls = self.meqtl_db[self.meqtl_db['cpg'] == cpg_id]
@@ -205,10 +202,10 @@ class mutationFeatures:
     def _get_predictor_site_groups(
         self, 
         cpg_id: str,
-        num_correl_sites: int = 5000,
-        max_meqtl_sites: int = 100,
-        nearby_window_size: int = 25000,
-        num_db_sites: int = 500,
+        num_correl_sites: int = 500, # get extended
+        max_meqtl_sites: int = 100000, # get extended
+        nearby_window_size: int = 50000, 
+        num_db_sites: int = 26000, #get extended
         extend_amount: int = 250
         ) -> list:
         """
@@ -226,6 +223,12 @@ class mutationFeatures:
             return [loc.split(':')[0] + ':' + str(int(loc.split(':')[1]) + i) 
                     for loc in loc_list 
                     for i in range(-extend_amount, extend_amount + 1)]
+            
+        def extend_clump_matrixQTL_sites(loc_list, extend_amount = 1000):
+            """For these extend 1000bp out to right, because this is the clumping window"""
+            return [loc.split(':')[0] + ':' + str(int(loc.split(':')[1]) + i) 
+                    for loc in loc_list
+                    for i in range(extend_amount + 1)]
         
         predictor_site_groups = {}
         try: # get cpg_id's chromosome and start position
@@ -249,14 +252,24 @@ class mutationFeatures:
             chrom + ':' + str(start + i)
             for i in range(-int(nearby_window_size/2), int(nearby_window_size/2) + 1)
             ]
+        predictor_site_groups['very_nearby'] = [
+            chrom + ':' + str(start + i)
+            for i in range(-int(nearby_window_size/20), int(nearby_window_size/20) + 1)
+            ]
         # get sites from matrixQTL 
-        predictor_site_groups['matrixqtl_neg_beta'], predictor_site_groups['matrixqtl_pos_beta'] = self._get_matrixQTL_sites(cpg_id, chrom, max_meqtl_sites=max_meqtl_sites)
+        predictor_site_groups['matrixqtl_neg_beta'], predictor_site_groups['matrixqtl_neg_beta_close'],  predictor_site_groups['matrixqtl_pos_beta'],  predictor_site_groups['matrixqtl_pos_beta_close'] = self._get_matrixQTL_sites(cpg_id, chrom, max_meqtl_sites=max_meqtl_sites)
         # extend matrixQTL sites
-        predictor_site_groups['matrixqtl_neg_beta_ext'] = extend(
-            predictor_site_groups['matrixqtl_neg_beta'], extend_amount=extend_amount
+        predictor_site_groups['matrixqtl_neg_beta_ext'] = extend_clump_matrixQTL_sites(
+            predictor_site_groups['matrixqtl_neg_beta'], extend_amount=1000
             )
-        predictor_site_groups['matrixqtl_pos_beta_ext'] = extend(
-            predictor_site_groups['matrixqtl_pos_beta'], extend_amount=extend_amount
+        predictor_site_groups['matrixqtl_neg_beta_close_ext'] = extend_clump_matrixQTL_sites(
+            predictor_site_groups['matrixqtl_neg_beta_close'], extend_amount=1000
+            )
+        predictor_site_groups['matrixqtl_pos_beta_ext'] = extend_clump_matrixQTL_sites(
+            predictor_site_groups['matrixqtl_pos_beta'], extend_amount=1000
+        )
+        predictor_site_groups['matrixqtl_pos_beta_close_ext'] = extend_clump_matrixQTL_sites(
+            predictor_site_groups['matrixqtl_pos_beta_close'], extend_amount=1000
         )
         # get database meQtls
         predictor_site_groups['db_neg_beta'], predictor_site_groups['db_pos_beta'] = self._select_db_sites(cpg_id, num_db_sites)
@@ -285,7 +298,6 @@ class mutationFeatures:
         """
         # make list of all samples to fill in samples that do not have mutations in predictor sites
         all_samples = self.train_samples + self.test_samples
-        
         def noAgg() -> pd.DataFrame:
             """
             Create a feature matrix where each column is a predictor site from predictor_groups
@@ -357,7 +369,7 @@ class mutationFeatures:
                                             + '-' \
                                             + group_sites[(i+1)*extend_amount].split(':')[1]
                         col_names.append(name)
-                    extended_feats = pd.concat(sums, axis=1)
+                        extended_feats = pd.concat(sums, axis=1)
                     # rename features 
                     extended_feats.columns = col_names
                     # add extended features to extended_feat_agg_muts
@@ -400,7 +412,7 @@ class mutationFeatures:
     def choose_cpgs_to_train(
         self,
         metric_df: pd.DataFrame,
-        bin_size: int = 20000,
+        bin_size: int = 50000,
         sort_by: list = ['count', 'mutual_info'],
         mean: bool = True
         ) -> pd.DataFrame:
@@ -414,7 +426,7 @@ class mutationFeatures:
             all_mut_w_age_df: pd.DataFrame
             ) -> pd.DataFrame:
             """
-            Count the number of mutations in each 20kb bin across all training samples
+            Count the number of mutations in each 50kb bin across all training samples
             """
             mut_bin_counts_dfs = []
             for chrom in all_mut_w_age_df['chr'].unique():
@@ -482,9 +494,9 @@ class mutationFeatures:
         self, 
         cpg_ids: list, 
         aggregate: str,
-        num_correl_sites: int = 5000,
+        num_correl_sites: int = 50,
         max_meqtl_sites: int = 100,
-        nearby_window_size: int = 25000,
+        nearby_window_size: int = 50000,
         num_db_sites: int = 500,
         extend_amount: int = 250
         ):
@@ -510,32 +522,39 @@ class mutationFeatures:
                 )
             if i % 10 == 0:
                 print(f"Finished {i} of {len(cpg_ids)}", flush=True)
+        if len(self.mutation_features_store) == 0:
         # create a dictionary to allow for easy data persistence
-        self.mutation_features_store = {
-            'dataset': self.dataset,
-            'train_samples': self.train_samples,
-            'test_samples': self.test_samples,
-            'cpg_ids': cpg_ids,
-            'aggregate': aggregate,
-            'num_correl_sites': num_correl_sites,
-            'max_meqtl_sites': max_meqtl_sites,
-            'nearby_window_size': nearby_window_size,
-            'extend_amount': extend_amount,
-            'num_db_sites': num_db_sites,
-            'feat_mats': feat_mats,
-            'target_values': target_values
-            }
+            self.mutation_features_store = {
+                'dataset': self.dataset,
+                'train_samples': self.train_samples,
+                'test_samples': self.test_samples,
+                'cpg_ids': cpg_ids,
+                'aggregate': aggregate,
+                'num_correl_sites': num_correl_sites,
+                'max_meqtl_sites': max_meqtl_sites,
+                'nearby_window_size': nearby_window_size,
+                'extend_amount': extend_amount,
+                'num_db_sites': num_db_sites,
+                'feat_mats': feat_mats,
+                'target_values': target_values,
+                'cross_val_num': self.cross_val_num,
+                }
+        # if mutation_features_store is not empty, add to it
+        else: 
+            self.mutation_features_store['feat_mats'].update(feat_mats)
+            self.mutation_features_store['target_values'].update(target_values)
+            # append to cpg_ids numpy.ndarray
+            self.mutation_features_store['cpg_ids'] = np.append(self.mutation_features_store['cpg_ids'], cpg_ids)
             
     def save_mutation_features(
         self,
-        start_top_cpgs: str = "",
-        cross_val_num: str = ""
+        start_top_cpgs: str = ""
         ) -> None:
         """
         Write out the essential data as a dictionary to a file in a directory
         """
         # create file name based on mutation_features_store meta values
-        meta_str = self.consortium + '_' + self.mutation_features_store['dataset'] + '_' + str(self.mutation_features_store['num_correl_sites']) + 'correl_' + str(self.mutation_features_store['max_meqtl_sites']) + 'meqtl_'+ str(self.mutation_features_store['nearby_window_size']) + 'nearby_' + str(self.mutation_features_store['aggregate']) + 'agg_' + str(len(self.mutation_features_store['cpg_ids'])) + 'numCpGs_' + str(start_top_cpgs) + 'startTopCpGs_' + str(self.mutation_features_store['num_db_sites']) + 'maxDBsites_' + str(self.mutation_features_store['extend_amount']) + 'extendAmount_' + str(cross_val_num) + 'crossValNum'
+        meta_str = self.consortium + '_' + self.mutation_features_store['dataset'] + '_' + str(self.mutation_features_store['num_correl_sites']) + 'correl_' + str(self.mutation_features_store['max_meqtl_sites']) + 'meqtl_'+ str(self.mutation_features_store['nearby_window_size']) + 'nearby_' + str(self.mutation_features_store['aggregate']) + 'agg_' + str(len(self.mutation_features_store['cpg_ids'])) + 'numCpGs_' + str(start_top_cpgs) + 'startTopCpGs_' + str(self.mutation_features_store['num_db_sites']) + 'maxDBsites_' + str(self.mutation_features_store['extend_amount']) + 'extendAmount_' + str(self.mutation_features_store['cross_val_num']) + 'crossValNum'
         
         # create directory if it doesn't exist
         directory = os.path.join(self.out_dir, meta_str)
@@ -545,7 +564,7 @@ class mutationFeatures:
         fn = os.path.join(self.out_dir, meta_str, meta_str + '.features.pkl')
         with open(fn, 'wb') as f:
             pickle.dump(self.mutation_features_store, f, protocol=pickle.HIGHEST_PROTOCOL)
-        print('Saved mutation features to\n' + fn)
+        print('Saved mutation features to\n' + fn, flush=True)
         return fn
         
     def load_mutation_features(

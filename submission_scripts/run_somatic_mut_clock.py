@@ -104,7 +104,7 @@ def run(
         matrix_qtl_dir = "/cellar/users/zkoch/methylation_and_mutation/output_dirs/icgc_muts_011423"
     elif consortium == "TCGA":
         all_mut_w_age_df, illumina_cpg_locs_df, all_methyl_age_df_t, mi_df = read_tcga_data(dataset)
-        matrix_qtl_dir = "/cellar/users/zkoch/methylation_and_mutation/data/matrixQtl_data/muts"
+        matrix_qtl_dir = "/cellar/users/zkoch/methylation_and_mutation/data/matrixQtl_data/clumped_muts_CV"
     if do == "Feat_gen":
         generate_features = True
     elif do == "Train_models":
@@ -126,29 +126,46 @@ def run(
             consortium = consortium, dataset = dataset, cross_val_num = cross_val_num, 
             matrix_qtl_dir = matrix_qtl_dir
             )
+        
+        ######## choose CpGs ############
         # get age correlation of CpGs
-        corrs = mut_feat.all_methyl_age_df_t.loc[mut_feat.train_samples].corrwith(
+        age_corr = mut_feat.all_methyl_age_df_t.loc[mut_feat.train_samples].corrwith(
             mut_feat.all_methyl_age_df_t.loc[mut_feat.train_samples, 'age_at_index']
             )
-        corrs.drop(['age_at_index', 'gender_MALE', 'gender_FEMALE'], inplace=True)
-        corrs = corrs.to_frame()
-        corrs.columns = ['corr']
-        corrs['corr'] = corrs['corr'].abs()
+        age_corr.drop(['age_at_index', 'gender_MALE', 'gender_FEMALE'], inplace=True)
+        age_corr = age_corr.to_frame()
+        age_corr.columns = ['age_corr']
+        age_corr['abs_age_corr'] = age_corr['age_corr'].abs()
+        # get stdev of CpGs
+        methyl_stdev = mut_feat.all_methyl_age_df_t.loc[mut_feat.train_samples, :].std()
+        methyl_stdev.drop(['age_at_index', 'gender_MALE', 'gender_FEMALE'], inplace=True)
+        methyl_stdev = methyl_stdev.to_frame()
+        methyl_stdev.columns = ['methyl_stdev']
+        
         # choose the top cpgs sorted by cpg_pred_priority
         cpg_pred_priority = mut_feat.choose_cpgs_to_train(
-            metric_df = corrs, bin_size=50000, 
-            sort_by = ['count', 'corr'], mean = True
+            metric_df = age_corr, bin_size=50000, 
+            sort_by = ['abs_age_corr', 'count'], mean = True
             )
+        cpg_pred_priority = cpg_pred_priority.merge(methyl_stdev, left_on = '#id', right_index=True, how='left')
+        
+        # subset to sites with a nonzero mean count to ensure nearby WXS
+        cpg_pred_priority = cpg_pred_priority.loc[cpg_pred_priority['count'] > 0]
+        # resort just incase
+        cpg_pred_priority.sort_values(by=['abs_age_corr', 'count'], ascending=False, inplace=True)
+        # choose the top cpgs
         chosen_cpgs = cpg_pred_priority.iloc[start_top_cpgs: end_top_cpgs]['#id'].to_list()
+        ##################################
+        
         # run the feature generation
         mut_feat.create_all_feat_mats(
-            cpg_ids = chosen_cpgs, aggregate=aggregate,
-            num_correl_sites=500, max_meqtl_sites=1000,
-            nearby_window_size = 50000, num_db_sites = 25000,
+            cpg_ids = chosen_cpgs, aggregate = aggregate,
+            num_correl_sites = 500, max_meqtl_sites=100000, # all of 'em
+            nearby_window_size = 50000, num_db_sites = 26000,
             extend_amount = 250 
             )
         mut_feat_store_fn = mut_feat.save_mutation_features(
-            start_top_cpgs = start_top_cpgs, cross_val_num = cross_val_num
+            start_top_cpgs = start_top_cpgs
             )
         mut_feat_store_fns = [mut_feat_store_fn]
     if train_models:
