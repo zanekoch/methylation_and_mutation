@@ -42,8 +42,8 @@ meqtls = pd.read_parquet(meqtl_fn)
 mut_scan = compute_comethylation.mutationScan(
     all_mut_w_age_df, illumina_cpg_locs_df, 
     all_methyl_age_df_t, corr_dir = corr_dir,
-    age_bin_size = 10, max_dist = 500,
-    num_correl_sites = 10, num_background_events = 100,
+    age_bin_size = 10, max_dist = 100000,
+    num_correl_sites = 500, num_background_events = 100,
     matched_sample_num = 20
     )
 
