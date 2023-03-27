@@ -24,6 +24,134 @@ CHROM_LENGTHS = {
     '21': 46709983,'22': 50818468,
 }
 
+
+class analyzeComethylation:
+    """
+    For analysis of a completed mutationScan run
+    """
+    def __init__(self):
+        pass
+    
+    def get_mean_metrics_by_dist(
+        self, 
+        all_metrics_df, 
+        absolute_distances = [100, 500, 1000, 5000, 10000, 50000, 100000]
+        ):
+        """
+        @ all_metrics_df: pd.DataFrame of the metrics for each mutation event (Actual mutation events and  background events) from a mutationScan run
+        @ absolute_distances: list of distances to get the mean metrics within
+        @ return: pd.DataFrame of the mean metrics for each mutation event within each distance
+        """
+        all_metrics_df['abs_delta_mf_median'] = all_metrics_df['delta_mf_median'].abs()
+        # subset to only metrics we need
+        all_metrics_df = all_metrics_df[['mut_event', 'sample', 'delta_mf_median', 'abs_delta_mf_median', 'measured_site_dist', 'is_background', 'index_event', 'mutated_sample']] 
+        # for each distance, get the mean and median of the delta_mf_median and abs_delta_mf_median of sites within that distance
+        mean_metric_by_dist_dfs = []
+        for dist in absolute_distances:
+            # subset to only sites within the distance
+            subset_df = all_metrics_df[all_metrics_df['measured_site_dist'].abs() <= dist]
+            # group by mutation event and sample
+            grouped_subset_df = subset_df.groupby(['mut_event', 'sample'])
+            # get the mean and median of the delta_mf_median and abs_delta_mf_median
+            mean_by_sample = grouped_subset_df[['delta_mf_median', 'abs_delta_mf_median']].mean()
+            mean_by_sample.columns = ['mean_dmf', 'mean_abs_dmf']
+            median_by_sample = grouped_subset_df[['delta_mf_median','abs_delta_mf_median']].median()
+            median_by_sample.columns = ['median_dmf', 'median_abs_dmf']
+            # merge mean and median dfs
+            mean_metrics_df = mean_by_sample.merge(median_by_sample, left_index=True, right_index=True)
+            mean_metrics_df['distance'] = dist
+            mean_metric_by_dist_dfs.append(mean_metrics_df)
+        # merge all the mean metrics dfs
+        mean_metrics_by_dist_df = pd.concat(mean_metric_by_dist_dfs, axis=0)
+
+        mut_event_to_background_map = all_metrics_df.drop_duplicates(subset=['mut_event', 'sample'])
+        mut_event_to_background_map.set_index(['mut_event', 'sample'], inplace=True)
+        mean_metrics_by_dist_df = mean_metrics_by_dist_df.merge(
+            mut_event_to_background_map[['is_background', 'index_event', 'mutated_sample']], 
+            left_index=True, right_index=True
+            )
+        return mean_metrics_by_dist_df.reset_index()
+    
+    def plot_delta_mf_kdeplot(
+        self, 
+        mean_metrics_df, 
+        metric = 'mean_dmf'
+        ):
+        fig, axes = plt.subplots(figsize=(8, 3.5))
+        mut = mean_metrics_df.loc[mean_metrics_df.mutated_sample == True]
+        mut = mut.rename(columns={'is_background': 'Mutation event'})#.replace({'Mutation event': {True: 'BG mutated samples', False: 'FG mutated samples'}})
+        sns.kdeplot(
+            data=mut, x=metric, hue='Mutation event',
+            common_norm=False, palette=[ 'maroon', 'steelblue'],
+            fill=True, ax = axes
+            )
+        # set xlim
+        axes.set_xlim(-.4, .4)
+        # write delta in geek sybol
+        axes.set_xlabel(r'Mean $\Delta$MF')
+        # change legend labels
+        axes.legend(['Randomized control', 'Actual mutation'], loc='upper right', title='Mutation event')
+        
+    def plot_delta_mf_boxplots(
+        self,
+        mean_metrics_df, 
+        metric = 'mean_dmf'
+        ):
+        fig, axes = plt.subplots(figsize=(8, 4))
+        # plot boxplots of mean_zdmf for each of the 4 groups: FG mutated, BG mutated, FG matched, BG matched
+        to_plot = mean_metrics_df[[metric, 'is_background', 'mutated_sample' ]
+                                ].replace(
+                                    {'is_background': {True: 'Randomized control',
+                                                        False: 'Actual mutation'}}
+                                    )
+        to_plot = to_plot.replace({'mutated_sample': {True: 'FG', False: 'BG'}})
+        to_plot['combined'] = to_plot['is_background'] + ' ' + to_plot['mutated_sample']
+        
+        pallette = [ 'maroon', 'steelblue', 'white', 'white']
+        sns.boxplot(
+            data=to_plot, x=metric, y='combined',
+            orient='h', ax = axes, showfliers=False, 
+            palette=pallette, 
+            order = ['Actual mutation FG', 'Randomized control FG', 'Actual mutation BG', 'Randomized control BG']
+            )
+        # remove ylabel 
+        axes.tick_params(axis='y', labelrotation=0)
+        axes.set_ylabel('')
+        # delta in geek symbol
+        axes.set_xlabel(r'$\Delta$MF')
+        
+    def plot_distance_of_effect(
+        self, 
+        mut_events,
+        num_bins,
+        min_dist,
+        max_dist
+        ):
+        # rename 
+        mut_events = mut_events.replace(
+                                    {'is_background': {True: 'Randomized control',
+                                                        False: 'Actual mutation'}}
+                                    )
+        # do binning
+        mut_events['dist_bin'] = pd.cut(
+            mut_events['measured_site_dist'],
+            bins = num_bins,
+            labels = [ '[' + str(x) + ',' + str(x + int((max_dist - min_dist) / num_bins)) + ')' for x in range(min_dist, max_dist, int((max_dist - min_dist) / num_bins))])
+        
+        sns.boxplot(
+            data= mut_events.loc[mut_events['mutated_sample'] == True],
+            x = 'dist_bin', y = 'delta_mf_median', 
+            hue = 'is_background', showfliers = False, 
+            palette=['steelblue', 'maroon']
+        )
+        plt.legend(['Randomized control', 'Actual mutation'], loc='upper right', title='Mutation event')
+        # angle x labels
+        plt.xticks(rotation=30)
+        plt.xlabel('Correlation distance')
+        plt.ylabel(r'$\Delta$MF')
+    
+
+
 class mutationScan:
     def __init__(
         self,
