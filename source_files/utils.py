@@ -10,6 +10,8 @@ from collections import defaultdict
 import seaborn as sns
 from statsmodels.stats.multitest import fdrcorrection
 import math
+import dask.dataframe as dd
+
 
 
 # CONSTANTS
@@ -73,26 +75,6 @@ def mutual_info(
     MI = pd.Series(MI, index=X.index)
     return MI
 
-
-def quantileNormalize(methyl_df):
-    """ 
-    From https://github.com/ShawnLYU/Quantile_Normalizeor
-    Replace each CpG site in each sample with the mean value of that rank CpG across all samples
-    @ methyl_df: pandas dataframe with samples as columns and CpGs as rows
-    """
-    df = methyl_df.copy(deep = True)
-    # sort each column of df in increasing order
-    dic = {}
-    for sample in df:
-        dic.update({sample : sorted(df[sample])})
-    sorted_df = pd.DataFrame(dic)
-    # get the mean methylation fraction at each rank 
-    rank_vals = sorted_df.mean(axis = 1).tolist()
-    # update each value with rank t to that rank's mean value
-    for sample in df:
-        t = np.searchsorted(np.sort(df[sample]), df[sample])
-        df[sample] = [rank_vals[i] for i in t]
-    return df
 
 # returns mut_df joined s.t. only mutations that are in measured CpG sites with methylation data remain
 # be aware that drop_duplicates first 
@@ -480,6 +462,9 @@ def convert_csv_to_parquet(in_fn):
     parquet.write_table(table, out_fn)
     
 def convert_csv_to_dask_parquet(in_fn, out_dir):
+    """
+    For icgc methylation data
+    """
     from pyarrow import csv, parquet
     import dask.dataframe as dd
     print(f" Converting {in_fn} to {out_dir}", flush=True)
@@ -495,7 +480,120 @@ def convert_csv_to_dask_parquet(in_fn, out_dir):
     print("wrote out as dask", flush=True)
     methyl_df_reshap_t.to_parquet(os.path.join(out_dir, 'methyl_df_reshap_t.parquet'))
     print("wrote out as pandas", flush=True)
+
+def quantileNormalize(methyl_df):
+    """ 
+    From https://github.com/ShawnLYU/Quantile_Normalizeor
+    Replace each CpG site in each sample with the mean value of that rank CpG across all samples
+    @ methyl_df: pandas dataframe with samples as columns and CpGs as rows
+    """
+    df = methyl_df.copy(deep = True)
+    # sort each column (sample) of df in increasing order
+    dic = {}
+    for sample in df:
+        dic.update({sample : sorted(df[sample])})
+    sorted_df = pd.DataFrame(dic)
+    # get the mean methylation fraction at each rank across samples
+    rank_vals = sorted_df.mean(axis = 1, skipna=True).tolist()
+    # update each value with rank t to that rank's mean value
+    for sample in df:
+        sorted_sample = np.sort(df[sample])
+        t = np.searchsorted(sorted_sample, df[sample])
+        # check if the value is nan, if so, replace with nan
+        df[sample] = [rank_vals[i] if ~np.isnan(sorted_sample[i]) else np.nan for i in t]
+    return df
+
+def each_tissue_drop_divergent_and_qnorm(
+    methyl_df, 
+    all_meta_df,
+    ):
+    """
+    Within each tissue, drop samples with mean methylation > +- 3SD from mean.
+    Then quantile normalize within each tissue.
+    @ methyl_df: pandas dataframe with samples as columns and CpGs as rows
+    @ all_meta_df: pandas dataframe with samples as index and columns 'dataset' and 'sample_type'
+    """
+    # transpose
+    methyl_df_t = methyl_df.T
+    # merge to get tissue
+    methyl_df_t = methyl_df_t.merge(all_meta_df['dataset'], left_index=True, right_index=True)
+    # calculate mean methylation of each sample
+    methyl_df_t['mean_methyl'] = methyl_df_t.mean(axis=1)
+    # for each tissue
+    qnormed_dfs = []
+    for tissue in methyl_df_t['dataset'].unique():
+        # drop samples with mean methylation > +- 3SD from mean
+        tissue_df = methyl_df_t.loc[methyl_df_t['dataset'] == tissue]
+        tissue_mean = tissue_df['mean_methyl'].mean()
+        tissue_std = tissue_df['mean_methyl'].std()
+        to_drop = tissue_df[
+            (tissue_df['mean_methyl'] > tissue_mean + 3 * tissue_std) 
+            | (tissue_df['mean_methyl'] < tissue_mean - 3 * tissue_std)
+            ].index
+        # drop these samples
+        tissue_df = tissue_df.drop(to_drop, axis=0)
+        # quantile normalize
+        tissue_df_qnorm = quantileNormalize(
+            methyl_df = tissue_df.drop(['dataset', 'mean_methyl'], axis=1).T
+            )
+        qnormed_dfs.append(tissue_df_qnorm)
+    # qnormed_dfs are sites x samples, so concat next to eachother
+    qnormed_df = pd.concat(qnormed_dfs, axis=1)
     
+    return qnormed_df
+        
+        
+
+def preprocess_methylation(
+    methyl_fn, 
+    all_meta_df, 
+    illumina_cpg_locs_df,
+    out_dir
+    ):
+    """
+    Takes in a .csv methylation file to pre-process and outputs a directory of .parquet processed methylation files with only samples with ages in all_meta_df and CpG sites in illumina_cpg_locs_df
+    @ methyl_fn: filename of methylation file
+    @ all_meta_df: pandas dataframe of metadata for all samples 
+    @ illumina_cpg_locs_df: pandas dataframe of CpG sites in illumina
+    @ out_dir: directory to output processed methylation files to
+    """
+    from pyarrow import csv
+    print("Reading in methylation data", flush=True)
+    table = csv.read_csv(methyl_fn, parse_options=csv.ParseOptions(delimiter="\t"))
+    print("Converting to pandas df", flush=True)
+    # save column names 
+    col_names = table.column_names
+    # rename to ints
+    new_names = [str(i) for i in range(len(col_names))]
+    table = table.rename_columns(new_names)
+    # convert to pandas
+    methyl_df = table.to_pandas()
+    # add column names back
+    methyl_df.columns = col_names
+    # change sample names to not have '-01' at end
+    new_column_names = [col[:-3] for col in methyl_df.columns]
+    new_column_names[0] = "sample"
+    methyl_df.columns = new_column_names
+    # drop duplicate columns
+    methyl_df = methyl_df.loc[:,~methyl_df.columns.duplicated()]
+    # rename sample to cpg and then make it the index
+    methyl_df = methyl_df.rename(columns={"sample":"cpg_name"})
+    methyl_df = methyl_df.set_index(['cpg_name'])
+    # subset to only samples with ages in all_meta_df
+    methyl_df = methyl_df[methyl_df.columns[methyl_df.columns.isin(all_meta_df.index)]]
+    # subset to only CpG sites in illumina_cpg_locs_df
+    methyl_df = methyl_df[methyl_df.index.isin(illumina_cpg_locs_df['#id'])]
+
+    # drop divergent samples and quantile normalize within each tissue
+    print("Dropping divergent samples and quantile normalizing within each tissue", flush=True)
+    qnorm_methyl_df = each_tissue_drop_divergent_and_qnorm(methyl_df, all_meta_df)
+    
+    # convert to dask to output as 75 parquets
+    print("Converting to Dask df", flush=True)
+    proc_methyl_dd = dd.from_pandas(qnorm_methyl_df, npartitions=35)
+    print(f"Outputting as parquet to {out_dir}", flush=True)
+    # output as parquet
+    proc_methyl_dd.to_parquet(out_dir)
     
 def plot_corr_dist_boxplots(corr_dist_df):
     """

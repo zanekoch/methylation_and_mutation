@@ -59,18 +59,26 @@ def compare_mf_mutated_sample_vs_avg(mutation_in_measured_cpg_df, out_dir, all_m
     non_mutated_methyl_df_t = all_methyl_df_t[all_methyl_df_t.columns[~all_methyl_df_t.columns.isin(mutation_in_measured_cpg_df['#id'])]]
     
     # limit to only big DNA_VAF mutations
-    mutation_in_measured_cpg_df = mutation_in_measured_cpg_df[mutation_in_measured_cpg_df['DNA_VAF'] >.5]
+    mutation_in_measured_cpg_df = mutation_in_measured_cpg_df[mutation_in_measured_cpg_df['DNA_VAF'] >.4]
     to_plot_df = pd.DataFrame(pd.concat([mutation_in_measured_cpg_df['avg_methyl_frac'], mutation_in_measured_cpg_df['methyl_fraction'], non_mutated_methyl_df_t.mean(axis=0)], axis=0)).reset_index(drop=True)
     to_plot_df.columns = ['Methylation Fraction']
     to_plot_df['Type'] = ['Non mutated CpGs'] * len(mutation_in_measured_cpg_df['avg_methyl_frac']) +  ['Mutated CpGs'] * len(mutation_in_measured_cpg_df['methyl_fraction']) + ['Site of no CpG mutation'] * len(non_mutated_methyl_df_t.mean(axis=0))
     # seaborn kde plot
-    p = sns.kdeplot(data=to_plot_df, x='Methylation Fraction', hue='Type', fill=True, common_norm=False, clip=[0,1], palette = ['steelblue', 'maroon', 'grey'], ax=axes, legend=False)
+    p = sns.kdeplot(
+        data=to_plot_df, x='Methylation Fraction', hue='Type', fill=True,
+        common_norm=False, clip=[0,1], palette = ['steelblue', 'maroon', 'grey'], 
+        ax=axes, legend=False
+        )
 
     fig.savefig(os.path.join(out_dir, '{}_methylation_fraction_comparison.png'.format(dataset)))
     # seperately save kde of just mutated, just non mutated, and just site of no CpG mutation
     # set transparent background
     fig2, axes2 = plt.subplots(dpi=200)
-    p2 = sns.kdeplot(data=to_plot_df[to_plot_df['Type'] == 'Non mutated CpGs'], x='Methylation Fraction', fill=True, common_norm=False, clip=[0,1], palette = ['grey'], ax=axes2, legend=False)
+    p2 = sns.kdeplot(
+        data=to_plot_df[to_plot_df['Type'] == 'Non mutated CpGs'], 
+        x='Methylation Fraction', fill=True, common_norm=False, 
+        clip=[0,1], palette = ['grey'], ax=axes2, legend=False
+        )
     
     # hexbin plot of mutation_in_measured_cpg_df['methyl_fraction'] vs mutation_in_measured_cpg_df['avg_methyl_frac']
     fig, axes = plt.subplots(dpi=200)
@@ -145,7 +153,10 @@ def get_same_age_tissue_means(mut_in_measured_cpg_w_methyl_age_df, all_methyl_ag
     mut_in_measured_cpg_w_methyl_age_df['avg_methyl_frac'] = mut_in_measured_cpg_w_methyl_age_df.apply(lambda mut_row: all_methyl_age_df_t[(np.abs(all_methyl_age_df_t['age_at_index'] - mut_row['age_at_index']) <= age_bin_size/2) & (all_methyl_age_df_t['dataset'] == mut_row['dataset'])][mut_row['#id']].mean(), axis=1)
     return mut_in_measured_cpg_w_methyl_age_df
 
-def methylation_fraction_comparison(all_mut_df, illumina_cpg_locs_df, all_methyl_df_t, out_dir, all_meta_df, age_bin_size = 10):
+def methylation_fraction_comparison(
+    all_mut_df, illumina_cpg_locs_df, all_methyl_df_t,
+    out_dir, all_meta_df, age_bin_size = 10
+    ):
     """
     Measure the effect a mutation has on MF at that site
     @ returns: pandas dataframe of all mutations in illumina measured CpG sites, their methylation fraction in mutated sample, and average methylation at that site across other samples (within 5 years of age)
@@ -169,7 +180,9 @@ def methylation_fraction_comparison(all_mut_df, illumina_cpg_locs_df, all_methyl
     mut_in_measured_cpg_w_methyl_age_df = mut_in_measured_cpg_w_methyl_age_df.dropna(subset=['age_at_index'])
     
     # get means 
-    mut_in_measured_cpg_w_methyl_age_df = get_same_age_tissue_means(mut_in_measured_cpg_w_methyl_age_df, all_methyl_age_df_t, age_bin_size = 10)
+    mut_in_measured_cpg_w_methyl_age_df = get_same_age_tissue_means(
+        mut_in_measured_cpg_w_methyl_age_df, all_methyl_age_df_t, age_bin_size = age_bin_size
+        )
     """# old way
     mutation_in_measured_cpg_df['avg_methyl_frac'] = all_methyl_df_t[mutation_in_measured_cpg_df['#id']].mean().values"""
 

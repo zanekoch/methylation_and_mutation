@@ -56,40 +56,6 @@ def get_mutations(mut_fn):
     
     return mut_df
 
-def preprocess_methylation(methyl_fn, all_meta_df, illumina_cpg_locs_df, out_dir):
-    """
-    Takes in a .csv methylation file to pre-process and outputs a directory of .parquet processed methylation files with only samples with ages in all_meta_df and CpG sites in illumina_cpg_locs_df
-    @ methyl_fn: filename of methylation file
-    @ all_meta_df: pandas dataframe of metadata for all samples 
-    @ illumina_cpg_locs_df: pandas dataframe of CpG sites in illumina
-    @ out_dir: directory to output processed methylation files to
-    """
-    from pyarrow import csv
-    table = csv.read_csv(methyl_fn, parse_options=csv.ParseOptions(delimiter="\t"))
-    # drop duplicate columns
-    methyl_df = table.to_pandas()
-    #methyl_df = pd.read_parquet(methyl_fn)
-    # change sample names to not have '-01' at end
-    new_column_names = [col[:-3] for col in methyl_df.columns]
-    new_column_names[0] = "sample"
-    methyl_df.columns = new_column_names
-    # drop duplicate columns
-    methyl_df = methyl_df.loc[:,~methyl_df.columns.duplicated()]
-    # rename sample to cpg and then make it the index
-    methyl_df = methyl_df.rename(columns={"sample":"cpg_name"})
-    methyl_df = methyl_df.set_index(['cpg_name'])
-    # dropna
-    #methyl_df = methyl_df.dropna(how='any')
-    # subset to only samples with ages in all_meta_df
-    methyl_df = methyl_df[methyl_df.columns[methyl_df.columns.isin(all_meta_df.index)]]
-    # subset to only CpG sites in illumina_cpg_locs_df
-    methyl_df = methyl_df[methyl_df.index.isin(illumina_cpg_locs_df['#id'])]
-    # convert to dask to output as 200 parquets
-    proc_methyl_dd = dd.from_pandas(methyl_df, npartitions=200)
-    # output as parquet
-    proc_methyl_dd.to_parquet(out_dir)
-    return
-
 def get_methylation(methylation_dir):
     """
     Read in the already preprocessed methylation data

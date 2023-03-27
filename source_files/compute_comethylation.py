@@ -854,7 +854,10 @@ class mutationScan:
             lambda mut_event: self._mut_site_delta_mf(mut_event), axis=1
             )
         # sort mutations low to high by mut_delta_mf and and high to low by DNA_VAF
-        valid_muts_w_illum = valid_muts_w_illum.sort_values(by=['mut_delta_mf', 'DNA_VAF'], ascending=[True, False])
+        valid_muts_w_illum = valid_muts_w_illum.sort_values(
+            by=['mut_delta_mf', 'DNA_VAF'],
+            ascending=[True, False]
+            )
         # select top mutations for further processing
         valid_muts_w_illum = valid_muts_w_illum.iloc[start_num_mut_to_process:end_num_mut_to_process, :]
         print(
