@@ -4,11 +4,11 @@ import matplotlib.pyplot as plt
 plt.style.use("seaborn-deep")
 import os 
 from scipy import stats
-import statsmodels.api as sm
+#import statsmodels.api as sm
 import sys
 from collections import defaultdict
 import seaborn as sns
-from statsmodels.stats.multitest import fdrcorrection
+#from statsmodels.stats.multitest import fdrcorrection
 import math
 import dask.dataframe as dd
 
@@ -733,7 +733,10 @@ def stack_and_merge(diffs_df, pvals_df, names_df = None):
         merged_df = pd.merge(merged_df, names_df, on=['comparison_site', 'mut_site'])
     return merged_df
 
-def half(l, which_half):
+def half(
+        l: list, 
+        which_half: str = 'first'
+    ):
     if which_half == 'first':
         return l[:int(len(l)/2)]
     else:

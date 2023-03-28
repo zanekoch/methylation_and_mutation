@@ -3,7 +3,6 @@ import numpy as np
 import sys
 import os
 import pickle
-import ray
 from sklearn.model_selection import StratifiedKFold
 
 class mutationFeatures:

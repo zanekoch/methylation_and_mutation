@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 import os
 import sys
-from tqdm import tqdm
+#from tqdm import tqdm
 import pickle
 import matplotlib.pyplot as plt
 import time
@@ -31,7 +31,8 @@ class mutationClock:
         test_samples: list,
         tissue_type: str = "",
         scrambled_predicted_methyl_fns: list =[],
-        trained_models_fns: list = []
+        trained_models_fns: list = [],
+        feature_mat_fns: list = []
         ) -> None:
         """
         @ predicted_methyl_fns: a list of paths to the predicted methylation files
@@ -65,6 +66,21 @@ class mutationClock:
                     these_models = pickle.load(f)
                     # add to dictionary
                     self.trained_models.update(these_models)
+        self.feature_mats = {}
+        if len(feature_mat_fns) > 0:
+            first = True
+            for fn in feature_mat_fns:
+                # read in dictionary from pickle file
+                with open(fn, 'rb') as f:
+                    this_feat_dict = pickle.load(f)
+                    if first:
+                        self.feature_mats.update(this_feat_dict)
+                        first = False
+                    else:
+                        minor_dicts_to_update = ['feat_mats', 'target_values']
+                        for minor_dict in minor_dicts_to_update:
+                            self.feature_mats[minor_dict].update(this_feat_dict[minor_dict])
+                            
         
     def _populate_performance(self):
         """

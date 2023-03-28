@@ -5,7 +5,7 @@ import sklearn
 from sklearn.linear_model import LinearRegression, ElasticNetCV
 import xgboost as xgb
 import sys
-import statsmodels.api as sm
+#import statsmodels.api as sm
 from scipy.stats import spearmanr
 
 class methylationPrediction:

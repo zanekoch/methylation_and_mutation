@@ -8,7 +8,7 @@ import sys
 
 dependency_f_dir = "/cellar/users/zkoch/methylation_and_mutation/dependency_files"
 data_dir = "/cellar/users/zkoch/methylation_and_mutation/data"
-methylation_dir = '/cellar/users/zkoch/methylation_and_mutation/data/dropped3SD_qnormed_methylation'
+methylation_dir = '/cellar/users/zkoch/methylation_and_mutation/data/dropped3SD_qnormed_methylation_new'
 #methylation_dir = '/cellar/users/zkoch/methylation_and_mutation/data/processed_methylation'
 corr_dir = '/cellar/users/zkoch/methylation_and_mutation/dependency_files/chr_dset_corrs'
 
