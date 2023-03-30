@@ -50,10 +50,21 @@ class mutationFeatures:
         """
         # if a dataset is specified, subset the data to only this tissue type
         if self.dataset != "":
-            self.all_methyl_age_df_t = self.all_methyl_age_df_t.loc[
-                self.all_methyl_age_df_t['dataset'] == self.dataset, :]
-            self.all_mut_w_age_df = self.all_mut_w_age_df.loc[
-                self.all_mut_w_age_df['dataset'] == self.dataset, :].copy(deep=True)
+            if self.dataset == 'RCC':
+                RCC_datasets = ['KIRC', 'KIRP' , 'KICH']
+                
+                self.all_methyl_age_df_t = self.all_methyl_age_df_t.loc[
+                    self.all_methyl_age_df_t['dataset'].isin(RCC_datasets), :]
+                self.all_methyl_age_df_t['dataset'] = 'RCC'
+                self.all_mut_w_age_df = self.all_mut_w_age_df.loc[
+                    self.all_mut_w_age_df['dataset'].isin(RCC_datasets), :].copy(deep=True)
+                self.all_mut_w_age_df['dataset'] = 'RCC'
+            else:
+                self.all_methyl_age_df_t = self.all_methyl_age_df_t.loc[
+                    self.all_methyl_age_df_t['dataset'] == self.dataset, :]
+                self.all_mut_w_age_df = self.all_mut_w_age_df.loc[
+                    self.all_mut_w_age_df['dataset'] == self.dataset, :].copy(deep=True)
+            
         # if a mut_loc column does not exit, add it
         if 'mut_loc' not in self.all_mut_w_age_df.columns:
             self.all_mut_w_age_df['mut_loc'] = self.all_mut_w_age_df['chr'] + ':' \
