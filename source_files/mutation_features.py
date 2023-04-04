@@ -215,7 +215,6 @@ class mutationFeatures:
         num_correl_sites: int = 500, # get extended
         max_meqtl_sites: int = 100000, # get extended
         nearby_window_size: int = 50000, 
-        num_db_sites: int = 26000, #get extended
         extend_amount: int = 250
         ) -> list:
         """
@@ -511,7 +510,7 @@ class mutationFeatures:
         num_correl_sites: int = 50,
         max_meqtl_sites: int = 100,
         nearby_window_size: int = 50000,
-        num_db_sites: int = 500,
+        #num_db_sites: int = 500,
         extend_amount: int = 250
         ):
         """
@@ -528,7 +527,7 @@ class mutationFeatures:
             # first get the predictor groups
             predictor_groups = self._get_predictor_site_groups(
                 cpg_id, num_correl_sites, max_meqtl_sites,
-                nearby_window_size, num_db_sites, extend_amount
+                nearby_window_size, extend_amount
                 )
             # then create the feature matrix from these
             feat_mats[cpg_id], target_values[cpg_id] = self._create_feature_mat(
@@ -548,7 +547,6 @@ class mutationFeatures:
                 'max_meqtl_sites': max_meqtl_sites,
                 'nearby_window_size': nearby_window_size,
                 'extend_amount': extend_amount,
-                'num_db_sites': num_db_sites,
                 'feat_mats': feat_mats,
                 'target_values': target_values,
                 'cross_val_num': self.cross_val_num,
@@ -568,7 +566,7 @@ class mutationFeatures:
         Write out the essential data as a dictionary to a file in a directory
         """
         # create file name based on mutation_features_store meta values
-        meta_str = self.consortium + '_' + self.mutation_features_store['dataset'] + '_' + str(self.mutation_features_store['num_correl_sites']) + 'correl_' + str(self.mutation_features_store['max_meqtl_sites']) + 'meqtl_'+ str(self.mutation_features_store['nearby_window_size']) + 'nearby_' + str(self.mutation_features_store['aggregate']) + 'agg_' + str(len(self.mutation_features_store['cpg_ids'])) + 'numCpGs_' + str(start_top_cpgs) + 'startTopCpGs_' + str(self.mutation_features_store['num_db_sites']) + 'maxDBsites_' + str(self.mutation_features_store['extend_amount']) + 'extendAmount_' + str(self.mutation_features_store['cross_val_num']) + 'crossValNum'
+        meta_str = self.consortium + '_' + self.mutation_features_store['dataset'] + '_' + str(self.mutation_features_store['num_correl_sites']) + 'correl_' + str(self.mutation_features_store['max_meqtl_sites']) + 'meqtl_'+ str(self.mutation_features_store['nearby_window_size']) + 'nearby_' + str(self.mutation_features_store['aggregate']) + 'agg_' + str(len(self.mutation_features_store['cpg_ids'])) + 'numCpGs_' + str(start_top_cpgs) + 'startTopCpGs_'  + str(self.mutation_features_store['extend_amount']) + 'extendAmount_' + str(self.mutation_features_store['cross_val_num']) + 'crossValNum'
         
         # create directory if it doesn't exist
         directory = os.path.join(self.out_dir, meta_str)

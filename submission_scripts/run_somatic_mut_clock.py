@@ -143,8 +143,8 @@ def run(
         
         # choose the top cpgs sorted by cpg_pred_priority
         cpg_pred_priority = mut_feat.choose_cpgs_to_train(
-            metric_df = age_corr, bin_size=50000, 
-            sort_by = ['count', 'abs_age_corr',]
+            metric_df = age_corr, bin_size = 50000, 
+            sort_by = ['count', 'abs_age_corr']
             )
         cpg_pred_priority = cpg_pred_priority.merge(methyl_stdev, left_on = '#id', right_index=True, how='left')
         
@@ -156,8 +156,7 @@ def run(
         mut_feat.create_all_feat_mats(
             cpg_ids = chosen_cpgs, aggregate = aggregate,
             num_correl_sites = 500, max_meqtl_sites=100000, # all of 'em
-            nearby_window_size = 50000, num_db_sites = 26000,
-            extend_amount = 250 
+            nearby_window_size = 50000, extend_amount = 250 
             )
         mut_feat_store_fn = mut_feat.save_mutation_features(
             start_top_cpgs = start_top_cpgs
