@@ -19,7 +19,7 @@ class mutationFeatures:
         consortium: str,
         dataset: str,
         cross_val_num: int,
-        matrix_qtl_dir: str,
+        matrix_qtl_dir: str
         #meqtl_db: pd.DataFrame = None
         ):
         self.all_mut_w_age_df = all_mut_w_age_df
@@ -68,7 +68,7 @@ class mutationFeatures:
         if 'mut_loc' not in self.all_mut_w_age_df.columns:
             self.all_mut_w_age_df['mut_loc'] = self.all_mut_w_age_df['chr'] + ':' \
                                                 + self.all_mut_w_age_df['start'].astype(str)
-        # only non X and Y chromosomes and that occured in samples with measured methylation
+        # mutations: non X and Y chromosomes and occured in samples with measured methylation
         self.all_mut_w_age_df = self.all_mut_w_age_df.loc[
             (self.all_mut_w_age_df['chr'] != 'X') 
             & (self.all_mut_w_age_df['chr'] != 'Y')
@@ -89,7 +89,9 @@ class mutationFeatures:
             ]
         # drop CpGs that are not in the illumina_cpg_locs_df (i.e. on XY)
         self.all_methyl_age_df_t = self.all_methyl_age_df_t.loc[:, 
-            set(self.all_methyl_age_df_t.columns).intersection(set(self.illumina_cpg_locs_df['#id'].to_list() + ['dataset', 'gender', 'age_at_index']))
+            set(self.all_methyl_age_df_t.columns).intersection(
+                set(self.illumina_cpg_locs_df['#id'].to_list() + ['dataset', 'gender', 'age_at_index'])
+                )
             ]
         # one hot encode covariates
         if self.dataset == "":
@@ -421,8 +423,7 @@ class mutationFeatures:
         self,
         metric_df: pd.DataFrame,
         bin_size: int = 50000,
-        sort_by: list = ['count', 'mutual_info'],
-        mean: bool = True
+        sort_by: list = ['count', 'mutual_info']
         ) -> pd.DataFrame:
         """
         Based on count of mutations nearby and mutual information, choose cpgs to train models for
@@ -437,34 +438,20 @@ class mutationFeatures:
             Count the number of mutations in each 50kb bin across all training samples
             """
             mut_bin_counts_dfs = []
+            # for each chromosome
             for chrom in all_mut_w_age_df['chr'].unique():
+                # get the mutations in the chromosome
                 chr_df = all_mut_w_age_df.loc[
                     (all_mut_w_age_df['chr'] == chrom) 
                     & (all_mut_w_age_df['case_submitter_id'].isin(self.train_samples))
                     ]
+                # count the number of mutations in each bin
                 counts, edges = np.histogram(
                     chr_df['start'], bins = np.arange(0, chr_df['start'].max(), bin_size)
                     )
                 one_mut_bin_counts_df = pd.DataFrame({'count': counts, 'bin_edge_l': edges[:-1]})
                 one_mut_bin_counts_df['chr'] = chrom
                 mut_bin_counts_dfs.append(one_mut_bin_counts_df)
-            mut_bin_counts_df = pd.concat(mut_bin_counts_dfs, axis = 0)
-            mut_bin_counts_df.reset_index(inplace=True, drop=True)
-            return mut_bin_counts_df
-        
-        def mean_mutation_bin_count(
-            all_mut_w_age_df: pd.DataFrame
-            ) -> pd.DataFrame:
-            mut_bin_counts_dfs = []
-            for chrom in all_mut_w_age_df['chr'].unique():
-                chr_df = all_mut_w_age_df.loc[
-                    (all_mut_w_age_df['chr'] == chrom) 
-                    & (all_mut_w_age_df['case_submitter_id'].isin(self.train_samples))
-                    ]
-                count_per_sample = chr_df.groupby('case_submitter_id').apply(mutation_bin_count)
-                mean_counts = count_per_sample.groupby('bin_edge_l')['count'].mean()
-                one_chr_mean_counts_df = pd.DataFrame({'count': mean_counts, 'bin_edge_l': mean_counts.index, 'chr': chrom})
-                mut_bin_counts_dfs.append(one_chr_mean_counts_df)
             mut_bin_counts_df = pd.concat(mut_bin_counts_dfs, axis = 0)
             mut_bin_counts_df.reset_index(inplace=True, drop=True)
             return mut_bin_counts_df
@@ -475,23 +462,35 @@ class mutationFeatures:
             """
             return num - (num % bin_size)
         
-        # count mutations in each bin
-        if mean:
-            mutation_bin_counts_df = mean_mutation_bin_count(self.all_mut_w_age_df)
-        else:
-            mutation_bin_counts_df = mutation_bin_count(self.all_mut_w_age_df)
-        # get count for each cpg
+        mutation_bin_counts_df = mutation_bin_count(self.all_mut_w_age_df)
+        # select the cpgs with methylation data
         illumina_cpg_locs_w_methyl_df = self.illumina_cpg_locs_df.loc[
             self.illumina_cpg_locs_df['#id'].isin(self.all_methyl_age_df_t.columns)
             ]
-        illumina_cpg_locs_w_methyl_df.loc[:,'rounded_start'] = illumina_cpg_locs_w_methyl_df.loc[:, 'start'].apply(round_down)
-        cpg_pred_priority = illumina_cpg_locs_w_methyl_df.merge(
-            mutation_bin_counts_df, left_on=['chr', 'rounded_start'],
+        # round down the start position to the nearest bin_size
+        illumina_cpg_locs_w_methyl_df.loc[:,'rounded_down_start'] = illumina_cpg_locs_w_methyl_df.loc[:, 'start'].apply(round_down)
+        # merge the cpgs with the mutation counts
+        cpg_pred_priority_down = illumina_cpg_locs_w_methyl_df[['#id', 'chr', 'rounded_down_start']].merge(
+            mutation_bin_counts_df, left_on=['chr', 'rounded_down_start'],
             right_on=['chr', 'bin_edge_l'], how='left'
             )
+        # also round up the start position to the nearest bin_size
+        # this is to let CpGs get a high nearby mut count upstream or downstream
+        illumina_cpg_locs_w_methyl_df['rounded_up_start'] = illumina_cpg_locs_w_methyl_df['rounded_down_start'] + bin_size
+        # and merge this too
+        cpg_pred_priority_up = illumina_cpg_locs_w_methyl_df[['#id', 'chr', 'rounded_up_start']].merge(
+            mutation_bin_counts_df, left_on=['chr', 'rounded_up_start'],
+            right_on=['chr', 'bin_edge_l'], how='left'
+            )
+        # merge the two on cpg id
+        cpg_pred_priority = cpg_pred_priority_down.merge(
+            cpg_pred_priority_up, on='#id', how='outer', suffixes=('_down', '_up')
+            )
+        # sum the counts
+        cpg_pred_priority['count'] = cpg_pred_priority['count_down'] + cpg_pred_priority['count_up']  
         # add the input metric
         cpg_pred_priority = cpg_pred_priority.merge(metric_df, left_on='#id', right_index=True, how='left')
-        # sort by count and metric
+        # sort by count and the metric
         cpg_pred_priority.sort_values(by=sort_by, ascending=[False, False], inplace=True)
         # drop na and reset index
         cpg_pred_priority.dropna(inplace=True, how='any', axis=0)

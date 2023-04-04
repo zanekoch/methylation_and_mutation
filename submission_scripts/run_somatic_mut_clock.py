@@ -116,17 +116,16 @@ def run(
     if generate_features:
         print("generating features", flush=True)
         # read in meQtl db
-        godmc_meqtls = pd.read_parquet(
+        """godmc_meqtls = pd.read_parquet(
             '/cellar/users/zkoch/methylation_and_mutation/data/meQTL/goDMC_meQTL/goDMC_meQTLs_for_mutClock.parquet'
-            )
+            )"""
         # create mutation feature generating object
         mut_feat = mutation_features.mutationFeatures(
             all_mut_w_age_df = all_mut_w_age_df, illumina_cpg_locs_df = illumina_cpg_locs_df, 
-            all_methyl_age_df_t = all_methyl_age_df_t, meqtl_db = godmc_meqtls, out_dir = out_dir, 
+            all_methyl_age_df_t = all_methyl_age_df_t, out_dir = out_dir, 
             consortium = consortium, dataset = dataset, cross_val_num = cross_val_num, 
             matrix_qtl_dir = matrix_qtl_dir
             )
-        
         ######## choose CpGs ############
         # get age correlation of CpGs
         age_corr = mut_feat.all_methyl_age_df_t.loc[mut_feat.train_samples].corrwith(
@@ -145,13 +144,13 @@ def run(
         # choose the top cpgs sorted by cpg_pred_priority
         cpg_pred_priority = mut_feat.choose_cpgs_to_train(
             metric_df = age_corr, bin_size=50000, 
-            sort_by = ['abs_age_corr', 'count'], mean = True
+            sort_by = ['abs_age_corr', 'count']
             )
         cpg_pred_priority = cpg_pred_priority.merge(methyl_stdev, left_on = '#id', right_index=True, how='left')
         
         # subset to sites with a nonzero mean count to ensure nearby WXS
         cpg_pred_priority = cpg_pred_priority.loc[cpg_pred_priority['count'] > 0]
-        # resort just incase
+        # re-sort just incase
         cpg_pred_priority.sort_values(by=['abs_age_corr', 'count'], ascending=False, inplace=True)
         # choose the top cpgs
         chosen_cpgs = cpg_pred_priority.iloc[start_top_cpgs: end_top_cpgs]['#id'].to_list()
