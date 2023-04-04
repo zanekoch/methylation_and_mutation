@@ -79,7 +79,6 @@ def run(
     start_top_cpgs: int, 
     end_top_cpgs: int,
     mut_feat_params: dict,
-    aggregate: str,
     scramble: bool,
     model: str,
     mut_feat_store_fns: list,
@@ -117,11 +116,6 @@ def run(
     mut_feat_store_fn = ""
     if generate_features:
         print("generating features", flush=True)
-        # read in meQtl db
-        """godmc_meqtls = pd.read_parquet(
-            '/cellar/users/zkoch/methylation_and_mutation/data/meQTL/goDMC_meQTL/goDMC_meQTLs_for_mutClock.parquet'
-            )"""
-        
         # create mutation feature generating object
         mut_feat = mutation_features.mutationFeatures(
             all_mut_w_age_df = all_mut_w_age_df, illumina_cpg_locs_df = illumina_cpg_locs_df, 
@@ -129,6 +123,7 @@ def run(
             consortium = consortium, dataset = dataset, cross_val_num = cross_val_num, 
             matrix_qtl_dir = matrix_qtl_dir
             )
+        
         ######## choose CpGs ############
         # get age correlation of CpGs
         age_corr = mut_feat.all_methyl_age_df_t.loc[mut_feat.train_samples].corrwith(
@@ -143,23 +138,24 @@ def run(
         methyl_stdev.drop(['age_at_index', 'gender_MALE', 'gender_FEMALE'], inplace=True)
         methyl_stdev = methyl_stdev.to_frame()
         methyl_stdev.columns = ['methyl_stdev']
-        
         # choose the top cpgs sorted by cpg_pred_priority
         cpg_pred_priority = mut_feat.choose_cpgs_to_train(
             metric_df = age_corr, bin_size = mut_feat_params['bin_size'], 
             sort_by = ['count', 'abs_age_corr']
             )
         cpg_pred_priority = cpg_pred_priority.merge(methyl_stdev, left_on = '#id', right_index=True, how='left')
-        
         # choose the top cpgs
         chosen_cpgs = cpg_pred_priority.iloc[start_top_cpgs: end_top_cpgs]['#id'].to_list()
-        ##################################
         
+        ##################################
         # run the feature generation
         mut_feat.create_all_feat_mats(
-            cpg_ids = chosen_cpgs, aggregate = mut_feat_params['aggregate'],
-            num_correl_sites = mut_feat_params['num_correl_sites'], max_meqtl_sites=mut_feat_params['max_meqtl_sites'],
-            nearby_window_size = mut_feat_params['nearby_window_size'], extend_amount = mut_feat_params['extend_amount'] 
+            cpg_ids = chosen_cpgs, 
+            aggregate = mut_feat_params['aggregate'],
+            num_correl_sites = mut_feat_params['num_correl_sites'], 
+            max_meqtl_sites=mut_feat_params['max_meqtl_sites'],
+            nearby_window_size = mut_feat_params['nearby_window_size'], 
+            extend_amount = mut_feat_params['extend_amount'] 
             )
         mut_feat_store_fn = mut_feat.save_mutation_features(
             start_top_cpgs = start_top_cpgs
@@ -202,11 +198,11 @@ def main():
     parser.add_argument('--aggregate', type=str, help='False, True, or Both', default="Both")
     parser.add_argument('--scramble' , type=bool, help='whether to scramble the mutation data', default=False)
     parser.add_argument('--model', type=str, help='xgboost or elasticNet', default="xgboost")
-    parser.add_argument('--burden_bin_size', type=int, help='bin size for burden test', default=50000)
-    parser.add_argument('--num_correl_sites', type=float, help='num_correl_sites', default=50)
-    parser.add_argument('--max_meqtl_sites', type=float, help='max_meqtl_sites', default=100000)
-    parser.add_argument('--nearby_window_size', type=float, help='nearby_window_size', default=50000)
-    parser.add_argument('--extend_amount', type=float, help='extend_amount', default=100)
+    parser.add_argument('--burden_bin_size', type=int, help='bin size for burden test', default=25000)
+    parser.add_argument('--num_correl_sites', type=int, help='num_correl_sites', default=50)
+    parser.add_argument('--max_meqtl_sites', type=int, help='max_meqtl_sites', default=100000)
+    parser.add_argument('--nearby_window_size', type=int, help='nearby_window_size', default=50000)
+    parser.add_argument('--extend_amount', type=int, help='extend_amount', default=100)
     
     args = parser.parse_args()
     do = args.do

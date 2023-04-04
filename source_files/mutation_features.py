@@ -4,6 +4,7 @@ import sys
 import os
 import pickle
 from sklearn.model_selection import StratifiedKFold
+from scipy.sparse import csr_matrix
 
 class mutationFeatures:
     """
@@ -212,10 +213,10 @@ class mutationFeatures:
     def _get_predictor_site_groups(
         self, 
         cpg_id: str,
-        num_correl_sites: int = 500, # get extended
-        max_meqtl_sites: int = 100000, # get extended
-        nearby_window_size: int = 50000, 
-        extend_amount: int = 250
+        num_correl_sites: int, # get extended
+        max_meqtl_sites: int, # get extended
+        nearby_window_size: int, 
+        extend_amount: int
         ) -> list:
         """
         Get the sites to be used as predictors of cpg_id's methylation
@@ -237,7 +238,8 @@ class mutationFeatures:
             """For these extend 1000bp out to right, because this is the clumping window"""
             return [loc.split(':')[0] + ':' + str(int(loc.split(':')[1]) + i) 
                     for loc in loc_list
-                    for i in range(extend_amount + 1)]
+                    for i in range(extend_amount + 1)
+                    ]
         
         predictor_site_groups = {}
         try: # get cpg_id's chromosome and start position
@@ -250,7 +252,7 @@ class mutationFeatures:
             cpg_id, chrom, num_correl_sites=num_correl_sites
             )
         # get extended versions of the num_correl_ext_sites most positively and negatively correlated CpGs
-        predictor_site_groups['pos_corr_ext']= extend(
+        predictor_site_groups['pos_corr_ext'] = extend(
             predictor_site_groups['pos_corr'], extend_amount=extend_amount
             )
         predictor_site_groups['neg_corr_ext'] = extend(
@@ -303,7 +305,10 @@ class mutationFeatures:
         @ predictor_groups: dict of lists of sites to be used as predictors of cpg_id's methylation
         @ aggregate: whether to aggregate the mutation status by predictor group
         @ extend_amount: the amount the predictor sites were extended by
-        @ returns: X, y where X is the feature matrix and y is the methylation values of cpg_id across samples
+        @ returns:
+            - feature_mat: a feature matrix where each column is a predictor site from predictor_groups, sparse matrix
+            - predictor_sites: the list of predictor sites in the feature matrix (columns)
+            - target_values: the target values for the feature matrix (methylation values)
         """
         # make list of all samples to fill in samples that do not have mutations in predictor sites
         all_samples = self.train_samples + self.test_samples
@@ -325,7 +330,10 @@ class mutationFeatures:
                 ]
             # create a new dataframe with columns = predictor sites, rows = y.index,
             # and values = variant allele frequencies
-            feat_mat = pd.pivot_table(mut_status, index='case_submitter_id', columns='mut_loc', values='DNA_VAF', fill_value = 0)
+            feat_mat = pd.pivot_table(
+                mut_status, index='case_submitter_id', columns='mut_loc',
+                values='DNA_VAF', fill_value = 0
+                )
             # add rows of all 0s for samples that don't have any mutations in predictor sites
             feat_mat = feat_mat.reindex(all_samples, fill_value=0)
             return feat_mat
@@ -353,26 +361,26 @@ class mutationFeatures:
                 
                 ### Full aggregation across all sites in the group for each sample ### 
                 # and turn these into a samples x loci matrix
-                mut_status = pd.pivot_table(
+                feat_mat = pd.pivot_table(
                     mut_status, index='case_submitter_id', columns='mut_loc',
                     values='DNA_VAF', fill_value = 0
                     )
-                mut_status = mut_status.reindex(all_samples, fill_value=0)
+                feat_mat = feat_mat.reindex(all_samples, fill_value=0)
                 # sum across loci within each sample to get samples x aggregate feature matrix
-                agg_mut_status = mut_status.sum(axis=1)
-                aggregated_muts.append(agg_mut_status)
+                agg_feat_mat = feat_mat.sum(axis=1)
+                aggregated_muts.append(agg_feat_mat)
                 
                 ### Aggregation across each extended site for each sample ###
                 # if we want to add, the group name ends with '_ext', 
                 # and there are more than 0 mutated sites in the group 
-                if extended_feat_agg and group_name.endswith('_ext') and mut_status.shape[1] > 0:
-                    # sum every extend_amount columns of mut_status
+                if extended_feat_agg and group_name.endswith('_ext') and feat_mat.shape[1] > 0:
+                    # sum every extend_amount columns of feat_mat
                     number_ext_features = (len(group_sites) // extend_amount)
                     sums, col_names = [], []
                     for i in range(number_ext_features - 1):
-                        # sum the features in the ith extended feature that are in mut_status
-                        to_sum = set(group_sites[i*extend_amount:(i+1)*extend_amount]).intersection(mut_status.columns)
-                        sums.append(mut_status.loc[:, to_sum].sum(axis=1))
+                        # sum the features in the ith extended feature that are in feat_mat
+                        to_sum = list(set(group_sites[i*extend_amount:(i+1)*extend_amount]).intersection(feat_mat.columns))
+                        sums.append(feat_mat.loc[:, to_sum].sum(axis=1))
                         # create the name of the ith extended feature
                         name = group_sites[i*extend_amount] \
                                             + '-' \
@@ -393,10 +401,76 @@ class mutationFeatures:
             agg_feat_mat = pd.concat([agg_feat_mat, extended_feat_agg_muts], axis=1)
             return agg_feat_mat
         
+        def get_nested_nearby_feats(
+            nest_sizes = [5, 15, 50, 200]
+            ) -> pd.DataFrame:
+            """
+            For the 'nearby' predictor group, create a feature matrix with these features aggregated into
+            5bp, 10bp, 25bp, 50bp
+            """
+            def find_contiguous_sets(input_list, N):
+                
+                def subtract_special(x, y):
+                    x = int(x.split(':')[1])
+                    y = int(y.split(':')[1])
+                    return x - y
+                
+                sets = []
+                curr_set = []
+                i = 0
+                for i in range(len(input_list)):
+                    if not curr_set:
+                        curr_set.append(input_list[i])
+                    elif subtract_special(input_list[i], curr_set[0]) < N:
+                        curr_set.append(input_list[i])
+                    else:
+                        sets.append(curr_set)
+                        curr_set = [input_list[i]]
+                if curr_set:
+                    sets.append(curr_set)
+                # remove lists that are 1 element long
+                sets = [s for s in sets if len(s) > 1]
+                return sets
+            
+            def sum_columns(df, N):
+                """
+                Given a df, sum every N columns together
+                """
+                old_cols = df.columns.to_list()
+                sets_to_sum = find_contiguous_sets(old_cols, N)
+                new_df_dict = {}
+                # for each list of sites
+                for cols in sets_to_sum:
+                    # select these sites
+                    to_sum = df[cols]
+                    # sum them, naming the new column
+                    new_df_dict['{}-{}'.format(to_sum.columns[0], to_sum.columns[-1])] = to_sum.sum(axis=1)
+                return pd.DataFrame(new_df_dict)
+            
+            nearby_sites = predictor_groups['nearby']
+            mut_status = self.all_mut_w_age_df.loc[
+                self.all_mut_w_age_df['mut_loc'].isin(nearby_sites),
+                ['DNA_VAF', 'case_submitter_id', 'mut_loc']
+                ]
+            feat_mat = pd.pivot_table(
+                mut_status, index='case_submitter_id', columns='mut_loc',
+                values='DNA_VAF', fill_value = 0
+                )
+            feat_mat = feat_mat.reindex(all_samples, fill_value=0)
+
+            all_nested_feat_mats = []
+            for nest_size in nest_sizes:
+                this_nest_size_feat_mat = sum_columns(feat_mat, nest_size) 
+                all_nested_feat_mats.append(this_nest_size_feat_mat)               
+            nested_feat_mats = pd.concat(all_nested_feat_mats, axis=1)
+            return nested_feat_mats
+                
         if aggregate == "Both":
             feat_mat = noAgg()
             agg_feat_mat = agg()
+            nested_nearby_feats = get_nested_nearby_feats()
             feat_mat = pd.merge(feat_mat, agg_feat_mat, left_index=True, right_index=True)
+            feat_mat = pd.merge(feat_mat, nested_nearby_feats, left_index=True, right_index=True)
         elif aggregate == "False":
             feat_mat = noAgg()
         elif aggregate == "True":
@@ -415,9 +489,75 @@ class mutationFeatures:
         # drop duplicate columns
         feat_mat = feat_mat.loc[:, ~feat_mat.columns.duplicated()]
         # target values
-        y = self.all_methyl_age_df_t.loc[all_samples, cpg_id]
-        return feat_mat, y
+        target_values = self.all_methyl_age_df_t.loc[all_samples, cpg_id]
+        # convert feat_mat to sparse matrix
+        feature_names = feat_mat.columns.to_list()
+        feat_mat = csr_matrix(feat_mat)
+        return feat_mat, feature_names, target_values
     
+    def create_all_feat_mats(
+        self, 
+        cpg_ids: list, 
+        aggregate: str,
+        num_correl_sites: int = 50,
+        max_meqtl_sites: int = 100,
+        nearby_window_size: int = 50000,
+        #num_db_sites: int = 500,
+        extend_amount: int = 250
+        ):
+        """
+        Create the training matrix for the given cpg_id and predictor_sites
+        @ cpg_ids: the ids of the CpGs
+        @ predictor_groups: dict of lists of sites to be used as predictors of cpg_id's methylation
+        @ samples: the samples to be included in the training matrix
+        @ aggregate: whether to aggregate the mutation status by predictor group
+        @ returns: X, y where X is the training matrix and y is the methylation values of cpg_id across samples
+        """
+        feat_mats, feat_names, target_values = {}, {}, {}
+        for i, cpg_id in enumerate(cpg_ids):
+            # first get the predictor groups
+            predictor_groups = self._get_predictor_site_groups(
+                cpg_id, num_correl_sites, max_meqtl_sites,
+                nearby_window_size, extend_amount
+                )
+            # then create the feature matrix from these
+            # returns a sparse numpy matrix of feature values, a list of feature names,
+            # and a pandas series of target values
+            feat_mats[cpg_id], feat_names[cpg_id], target_values[cpg_id] = self._create_feature_mat(
+                cpg_id, predictor_groups, aggregate, extend_amount
+                )
+            if i % 10 == 0:
+                print(f"Finished {i} of {len(cpg_ids)}", flush=True)
+        if len(self.mutation_features_store) == 0:
+            # create a dictionary to allow for easy data persistence
+            # to get the feature matrix for a given cpg_id, use feat_mats[cpg_id]
+            # the feature names are in feat_names[cpg_id]
+            # and the sample order is in target_values[cpg_id].index
+            self.mutation_features_store = {
+                'dataset': self.dataset, # string
+                'train_samples': self.train_samples, # list
+                'test_samples': self.test_samples, # list
+                'aggregate': aggregate, # string
+                'num_correl_sites': num_correl_sites, # int
+                'max_meqtl_sites': max_meqtl_sites, # int
+                'nearby_window_size': nearby_window_size, # int
+                'extend_amount': extend_amount, # int
+                'cross_val_num': self.cross_val_num, # int
+                # these need to be updated each time:
+                'cpg_ids': cpg_ids, # numpy array
+                'feat_mats': feat_mats, # dict of sparse numpy arrays
+                'feat_names': feat_names, # dict of lists
+                'target_values': target_values # dict of pandas series
+                }
+        # if mutation_features_store is not empty, add to it
+        else: 
+            self.mutation_features_store['feat_mats'].update(feat_mats)
+            self.mutation_features_store['feat_names'].update(feat_names)
+            self.mutation_features_store['target_values'].update(target_values)
+            # append to cpg_ids numpy.ndarray
+            self.mutation_features_store['cpg_ids'] = np.append(self.mutation_features_store['cpg_ids'], cpg_ids)
+      
+      
     def choose_cpgs_to_train(
         self,
         metric_df: pd.DataFrame,
@@ -502,62 +642,7 @@ class mutationFeatures:
         cpg_pred_priority.dropna(inplace=True, how='any', axis=0)
         cpg_pred_priority.reset_index(inplace=True, drop=True)
         return cpg_pred_priority
-    
-    def create_all_feat_mats(
-        self, 
-        cpg_ids: list, 
-        aggregate: str,
-        num_correl_sites: int = 50,
-        max_meqtl_sites: int = 100,
-        nearby_window_size: int = 50000,
-        #num_db_sites: int = 500,
-        extend_amount: int = 250
-        ):
-        """
-        Create the training matrix for the given cpg_id and predictor_sites
-        @ cpg_ids: the ids of the CpGs
-        @ predictor_groups: dict of lists of sites to be used as predictors of cpg_id's methylation
-        @ samples: the samples to be included in the training matrix
-        @ aggregate: whether to aggregate the mutation status by predictor group
-        @ returns: X, y where X is the training matrix and y is the methylation values of cpg_id across samples
-        """
-        feat_mats = {}
-        target_values = {}
-        for i, cpg_id in enumerate(cpg_ids):
-            # first get the predictor groups
-            predictor_groups = self._get_predictor_site_groups(
-                cpg_id, num_correl_sites, max_meqtl_sites,
-                nearby_window_size, extend_amount
-                )
-            # then create the feature matrix from these
-            feat_mats[cpg_id], target_values[cpg_id] = self._create_feature_mat(
-                cpg_id, predictor_groups, aggregate, extend_amount
-                )
-            if i % 10 == 0:
-                print(f"Finished {i} of {len(cpg_ids)}", flush=True)
-        if len(self.mutation_features_store) == 0:
-        # create a dictionary to allow for easy data persistence
-            self.mutation_features_store = {
-                'dataset': self.dataset,
-                'train_samples': self.train_samples,
-                'test_samples': self.test_samples,
-                'cpg_ids': cpg_ids,
-                'aggregate': aggregate,
-                'num_correl_sites': num_correl_sites,
-                'max_meqtl_sites': max_meqtl_sites,
-                'nearby_window_size': nearby_window_size,
-                'extend_amount': extend_amount,
-                'feat_mats': feat_mats,
-                'target_values': target_values,
-                'cross_val_num': self.cross_val_num,
-                }
-        # if mutation_features_store is not empty, add to it
-        else: 
-            self.mutation_features_store['feat_mats'].update(feat_mats)
-            self.mutation_features_store['target_values'].update(target_values)
-            # append to cpg_ids numpy.ndarray
-            self.mutation_features_store['cpg_ids'] = np.append(self.mutation_features_store['cpg_ids'], cpg_ids)
-            
+          
     def save_mutation_features(
         self,
         start_top_cpgs: str = ""

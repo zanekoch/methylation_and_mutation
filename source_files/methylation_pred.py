@@ -7,6 +7,8 @@ import xgboost as xgb
 import sys
 #import statsmodels.api as sm
 from scipy.stats import spearmanr
+from scipy.sparse import csr_matrix
+
 
 class methylationPrediction:
     """
@@ -89,7 +91,7 @@ class methylationPrediction:
     def apply_one_model(
         self,
         cpg_id: str,
-        X: pd.DataFrame,
+        X: csr_matrix,
         y: pd.Series
         ):
         """
@@ -98,7 +100,7 @@ class methylationPrediction:
         @ X: the mutation feature matrix for the CpG site
         @ y: the target methylation values for the CpG site
         """
-        # predict methylation for test samples
+        # predict methylation for all samples
         model = self.trained_models[cpg_id]
         y_pred = model.predict(X)
         self.predictions[cpg_id] = y_pred
@@ -108,12 +110,12 @@ class methylationPrediction:
         y_pred_test = y_pred[y_test_index]
         y_test = y.loc[self.test_samples]
         # measure performance on test samples
-        
         mae = np.mean(np.abs(y_test - y_pred_test))
         # check if y_pred_test is constant
         if np.var(y_pred_test) == 0:
             pearsonr = 0
             spearman = 0
+        # if not, calc pearson and spearman corr coef
         else:
             pearsonr = np.corrcoef(y_test, y_pred_test)[0,1]
             # get spearman corr coef also
@@ -131,8 +133,8 @@ class methylationPrediction:
         self.prediction_performance[cpg_id] = {
             'testing_methyl_pearsonr': pearsonr, 
             'testing_methyl_mae': mae,
-            'testing_methyl_spearmanr': spearman}
-        
+            'testing_methyl_spearmanr': spearman
+            }
 
     def apply_all_models(
         self,
@@ -171,7 +173,7 @@ class methylationPrediction:
     def train_one_model(
         self,
         cpg_id: str,
-        X: pd.DataFrame,
+        X: csr_matrix,
         y: pd.Series
         ) -> None:
         """
@@ -195,9 +197,10 @@ class methylationPrediction:
             model = sklearn.linear_model.LassoCV()
         elif self.model_type == 'xgboost':
             model = xgb.XGBRegressor()
-        
+        # get indices number of training samples from y to be able to index X
+        idx_num = [y.index.get_loc(train_sample) for train_sample in self.train_samples]
         # fit model to training samples
-        model.fit(X.loc[self.train_samples], y.loc[self.train_samples]) 
+        model.fit(X[idx_num, :], y.loc[self.train_samples]) 
         # add to trained models dictionary
         self.trained_models[cpg_id] = model
         return
@@ -224,11 +227,11 @@ class methylationPrediction:
                 if only_agg:
                     X = self.mut_feat_store['feat_mats'][cpg_id].loc[:, ~self.mut_feat_store['feat_mats'][cpg_id].columns.str.contains(':')]
                 else:
-                    X = self.mut_feat_store['feat_mats'][cpg_id]
+                    X = self.mut_feat_store['feat_mats'][cpg_id] 
             # for each feature set in the store train a model
             self.train_one_model(
                 cpg_id = cpg_id,
-                X = X,
+                X = X, # sparse matrix
                 y = self.mut_feat_store['target_values'][cpg_id]
                 )
             if i % 10 == 0:
