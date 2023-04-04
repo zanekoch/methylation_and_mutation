@@ -78,10 +78,11 @@ def run(
     out_dir: str, 
     start_top_cpgs: int, 
     end_top_cpgs: int,
+    mut_feat_params: dict,
     aggregate: str,
     scramble: bool,
     model: str,
-    mut_feat_store_fns: list
+    mut_feat_store_fns: list,
     ) -> None:
     """
     Driver function for generating features or training models
@@ -92,6 +93,7 @@ def run(
     @ out_dir: directory to save output to
     @ start_top_cpgs: start of range of top cpgs to use
     @ end_top_cpgs: end of range of top cpgs to use
+    @ mut_feat_params: dictionary of mutation feature parameters
     @ aggregate: feature aggregation strategy True, False, or Both
     @ scramble: whether to scramble the methylation data
     @ model: model to use
@@ -119,6 +121,7 @@ def run(
         """godmc_meqtls = pd.read_parquet(
             '/cellar/users/zkoch/methylation_and_mutation/data/meQTL/goDMC_meQTL/goDMC_meQTLs_for_mutClock.parquet'
             )"""
+        
         # create mutation feature generating object
         mut_feat = mutation_features.mutationFeatures(
             all_mut_w_age_df = all_mut_w_age_df, illumina_cpg_locs_df = illumina_cpg_locs_df, 
@@ -143,7 +146,7 @@ def run(
         
         # choose the top cpgs sorted by cpg_pred_priority
         cpg_pred_priority = mut_feat.choose_cpgs_to_train(
-            metric_df = age_corr, bin_size = 50000, 
+            metric_df = age_corr, bin_size = mut_feat_params['bin_size'], 
             sort_by = ['count', 'abs_age_corr']
             )
         cpg_pred_priority = cpg_pred_priority.merge(methyl_stdev, left_on = '#id', right_index=True, how='left')
@@ -154,9 +157,9 @@ def run(
         
         # run the feature generation
         mut_feat.create_all_feat_mats(
-            cpg_ids = chosen_cpgs, aggregate = aggregate,
-            num_correl_sites = 500, max_meqtl_sites=100000, # all of 'em
-            nearby_window_size = 50000, extend_amount = 250 
+            cpg_ids = chosen_cpgs, aggregate = mut_feat_params['aggregate'],
+            num_correl_sites = mut_feat_params['num_correl_sites'], max_meqtl_sites=mut_feat_params['max_meqtl_sites'],
+            nearby_window_size = mut_feat_params['nearby_window_size'], extend_amount = mut_feat_params['extend_amount'] 
             )
         mut_feat_store_fn = mut_feat.save_mutation_features(
             start_top_cpgs = start_top_cpgs
@@ -199,6 +202,12 @@ def main():
     parser.add_argument('--aggregate', type=str, help='False, True, or Both', default="Both")
     parser.add_argument('--scramble' , type=bool, help='whether to scramble the mutation data', default=False)
     parser.add_argument('--model', type=str, help='xgboost or elasticNet', default="xgboost")
+    parser.add_argument('--burden_bin_size', type=int, help='bin size for burden test', default=50000)
+    parser.add_argument('--num_correl_sites', type=float, help='num_correl_sites', default=50)
+    parser.add_argument('--max_meqtl_sites', type=float, help='max_meqtl_sites', default=100000)
+    parser.add_argument('--nearby_window_size', type=float, help='nearby_window_size', default=50000)
+    parser.add_argument('--extend_amount', type=float, help='extend_amount', default=100)
+    
     args = parser.parse_args()
     do = args.do
     # assert do has a valid value
@@ -215,18 +224,23 @@ def main():
     out_dir = args.out_dir
     start_top_cpgs = args.start_top_cpgs
     end_top_cpgs = args.end_top_cpgs
-    aggregate = args.aggregate
     scramble = args.scramble
     model = args.model
     if model not in ['xgboost', 'elasticNet']:
         raise ValueError("model must be xgboost or elasticNet")
     print(f"cross val {cross_val_num}\n doing {do}\n for {consortium} and {dataset}\n and outputting to {out_dir}")
-    # run 
+    
+    mut_feat_params = {
+        'bin_size': args.burden_bin_size, 'aggregate': args.aggregate, 
+        'num_correl_sites' : args.num_correl_sites, 'max_meqtl_sites' : args.max_meqtl_sites,
+        'nearby_window_size' : args.nearby_window_size, 'extend_amount' : args.extend_amount
+    }
+    
     run(
         do = do,
         consortium = consortium, dataset = dataset, cross_val_num = cross_val_num,
         out_dir = out_dir, start_top_cpgs = start_top_cpgs,
-        end_top_cpgs = end_top_cpgs, aggregate = aggregate,
+        end_top_cpgs = end_top_cpgs, mut_feat_params = mut_feat_params,
         scramble = scramble, model = model, mut_feat_store_fns = mut_feat_store_fns
         )
         
