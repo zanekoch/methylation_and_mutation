@@ -15,17 +15,17 @@ class mutationFeatures:
         all_mut_w_age_df: pd.DataFrame,
         illumina_cpg_locs_df: pd.DataFrame, 
         all_methyl_age_df_t: pd.DataFrame,
-        meqtl_db: pd.DataFrame,
         out_dir: str,
         consortium: str,
         dataset: str,
         cross_val_num: int,
         matrix_qtl_dir: str,
+        #meqtl_db: pd.DataFrame = None
         ):
         self.all_mut_w_age_df = all_mut_w_age_df
         self.illumina_cpg_locs_df = illumina_cpg_locs_df
         self.all_methyl_age_df_t = all_methyl_age_df_t
-        self.meqtl_db = meqtl_db
+        #self.meqtl_db = meqtl_db
         self.out_dir = out_dir
         self.dataset = dataset
         self.consortium = consortium
@@ -100,8 +100,7 @@ class mutationFeatures:
         else: # only do gender if one dataset is specified
             self.all_methyl_age_df_t = pd.get_dummies(self.all_methyl_age_df_t, columns=["gender"])
         # subset meqtl_db to only cpgs in all_methyl_age_df_t 
-        self.meqtl_db = self.meqtl_db.loc[
-            self.meqtl_db['cpg'].isin(self.all_methyl_age_df_t.columns), :]
+        #self.meqtl_db = self.meqtl_db.loc[self.meqtl_db['cpg'].isin(self.all_methyl_age_df_t.columns), :]
     
     def cross_val_samples(self):
         """
@@ -281,13 +280,13 @@ class mutationFeatures:
             predictor_site_groups['matrixqtl_pos_beta_close'], extend_amount=1000
         )
         # get database meQtls
-        predictor_site_groups['db_neg_beta'], predictor_site_groups['db_pos_beta'] = self._select_db_sites(cpg_id, num_db_sites)
+        """predictor_site_groups['db_neg_beta'], predictor_site_groups['db_pos_beta'] = self._select_db_sites(cpg_id, num_db_sites)
         predictor_site_groups['db_neg_beta_ext'] = extend(
             predictor_site_groups['db_neg_beta'], extend_amount=extend_amount
             )
         predictor_site_groups['db_pos_beta_ext'] = extend(
             predictor_site_groups['db_pos_beta'], extend_amount=extend_amount
-            )
+            )"""
         return predictor_site_groups
     
     def _create_feature_mat(
