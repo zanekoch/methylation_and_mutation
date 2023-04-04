@@ -437,6 +437,11 @@ class mutationFeatures:
             """
             Count the number of mutations in each 50kb bin across all training samples
             """
+            # bin the ages
+            all_mut_w_age_df['age_bin'] = pd.cut(
+                all_mut_w_age_df['age_at_index'], 
+                bins = np.arange(all_mut_w_age_df['age_at_index'].min(), all_mut_w_age_df['age_at_index'].max(), 10)
+                )
             mut_bin_counts_dfs = []
             # for each chromosome
             for chrom in all_mut_w_age_df['chr'].unique():
@@ -446,12 +451,14 @@ class mutationFeatures:
                     & (all_mut_w_age_df['case_submitter_id'].isin(self.train_samples))
                     ]
                 # count the number of mutations in each bin
+                max_start = chr_df['start'].max()
                 counts, edges = np.histogram(
-                    chr_df['start'], bins = np.arange(0, chr_df['start'].max(), bin_size)
+                    chr_df['start'], bins = np.arange(0, max_start, bin_size)
                     )
                 one_mut_bin_counts_df = pd.DataFrame({'count': counts, 'bin_edge_l': edges[:-1]})
-                one_mut_bin_counts_df['chr'] = chrom
+                one_mut_bin_counts_df['chr'] = chrom  
                 mut_bin_counts_dfs.append(one_mut_bin_counts_df)
+                
             mut_bin_counts_df = pd.concat(mut_bin_counts_dfs, axis = 0)
             mut_bin_counts_df.reset_index(inplace=True, drop=True)
             return mut_bin_counts_df

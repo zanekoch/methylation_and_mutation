@@ -144,14 +144,10 @@ def run(
         # choose the top cpgs sorted by cpg_pred_priority
         cpg_pred_priority = mut_feat.choose_cpgs_to_train(
             metric_df = age_corr, bin_size=50000, 
-            sort_by = ['abs_age_corr', 'count']
+            sort_by = ['count', 'abs_age_corr',]
             )
         cpg_pred_priority = cpg_pred_priority.merge(methyl_stdev, left_on = '#id', right_index=True, how='left')
         
-        # subset to sites with a nonzero mean count to ensure nearby WXS
-        cpg_pred_priority = cpg_pred_priority.loc[cpg_pred_priority['count'] > 0]
-        # re-sort just incase
-        cpg_pred_priority.sort_values(by=['abs_age_corr', 'count'], ascending=False, inplace=True)
         # choose the top cpgs
         chosen_cpgs = cpg_pred_priority.iloc[start_top_cpgs: end_top_cpgs]['#id'].to_list()
         ##################################
