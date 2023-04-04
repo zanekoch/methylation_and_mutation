@@ -55,7 +55,13 @@ class mutationClock:
         self.tissue_type = tissue_type
         # if tissue type is specified, subset the data to only this tissue type
         if self.tissue_type != "":
-            self.all_methyl_age_df_t = self.all_methyl_age_df_t.loc[self.all_methyl_age_df_t['dataset'] == tissue_type, :]
+            if self.tissue_type == 'RCC':
+                RCC_datasets = ['KIRC', 'KIRP' , 'KICH']
+                self.all_methyl_age_df_t = self.all_methyl_age_df_t.loc[
+                    self.all_methyl_age_df_t['dataset'].isin(RCC_datasets), :]
+                self.all_methyl_age_df_t['dataset'] = 'RCC'
+            else:
+                self.all_methyl_age_df_t = self.all_methyl_age_df_t.loc[self.all_methyl_age_df_t['dataset'] == tissue_type, :]
         self.test_samples = test_samples
         self.train_samples = train_samples
         self.trained_models = {}
@@ -163,7 +169,6 @@ class mutationClock:
             cv=5, random_state=0, max_iter=10000,
             selection = 'random', n_jobs=-1, verbose=0
             )
-        
         model.fit(X, y)
         return model
         # write the model to a .pkl file in output_dir

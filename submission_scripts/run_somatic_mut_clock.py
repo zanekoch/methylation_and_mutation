@@ -38,7 +38,7 @@ def read_icgc_data() -> tuple:
     icgc_methyl_age_df_t = icgc_methyl_df_t.merge(icgc_meta_df_to_merge, left_index=True, right_index=True, how='left')
     icgc_mi_df = pd.read_parquet('/cellar/users/zkoch/methylation_and_mutation/output_dirs/011723_output/icgc_mi.parquet')
     icgc_mi_df.sort_values(by='mutual_info', ascending=False, inplace=True)
-    return icgc_mut_w_age_df, illumina_cpg_locs_df, icgc_methyl_age_df_t, icgc_mi_df
+    return icgc_mut_w_age_df, illumina_cpg_locs_df, icgc_methyl_age_df_t
 
 def read_tcga_data(
     dataset: str
@@ -61,14 +61,14 @@ def read_tcga_data(
         all_mut_df, all_meta_df, all_methyl_df_t
         )
     # mi dfs
-    mi_df = pd.read_parquet('/cellar/users/zkoch/methylation_and_mutation/dependency_files/mutual_informations/tcga_combinedMI_top10MI.parquet')
+    """mi_df = pd.read_parquet('/cellar/users/zkoch/methylation_and_mutation/dependency_files/mutual_informations/tcga_combinedMI_top10MI.parquet')
     if dataset != "":
         mi_df = mi_df[dataset]
     else:
         mi_df = mi_df['combined']
     mi_df = mi_df.to_frame()
-    mi_df.columns = ['mutual_info']
-    return all_mut_w_age_df, illumina_cpg_locs_df, all_methyl_age_df_t, mi_df
+    mi_df.columns = ['mutual_info']"""
+    return all_mut_w_age_df, illumina_cpg_locs_df, all_methyl_age_df_t
 
 def run(
     do: str,
@@ -100,10 +100,10 @@ def run(
     """
     if consortium == "ICGC":
         # TODO: make ICGC single dataset work
-        all_mut_w_age_df, illumina_cpg_locs_df, all_methyl_age_df_t, mi_df = read_icgc_data()
+        all_mut_w_age_df, illumina_cpg_locs_df, all_methyl_age_df_t = read_icgc_data()
         matrix_qtl_dir = "/cellar/users/zkoch/methylation_and_mutation/output_dirs/icgc_muts_011423"
     elif consortium == "TCGA":
-        all_mut_w_age_df, illumina_cpg_locs_df, all_methyl_age_df_t, mi_df = read_tcga_data(dataset)
+        all_mut_w_age_df, illumina_cpg_locs_df, all_methyl_age_df_t = read_tcga_data(dataset)
         matrix_qtl_dir = "/cellar/users/zkoch/methylation_and_mutation/data/matrixQtl_data/clumped_muts_CV"
     if do == "Feat_gen":
         generate_features = True

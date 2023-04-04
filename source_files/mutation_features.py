@@ -52,7 +52,6 @@ class mutationFeatures:
         if self.dataset != "":
             if self.dataset == 'RCC':
                 RCC_datasets = ['KIRC', 'KIRP' , 'KICH']
-                
                 self.all_methyl_age_df_t = self.all_methyl_age_df_t.loc[
                     self.all_methyl_age_df_t['dataset'].isin(RCC_datasets), :]
                 self.all_methyl_age_df_t['dataset'] = 'RCC'
@@ -205,8 +204,8 @@ class mutationFeatures:
     
     def _select_db_sites(self, cpg_id, num_db_sites):
         this_cpg_meqtls = self.meqtl_db[self.meqtl_db['cpg'] == cpg_id]
-        neg_cpg_meqtls = this_cpg_meqtls[this_cpg_meqtls['beta_a1'] < 0].nsmallest(num_db_sites, 'beta_a1')['snp'].to_list()
-        pos_cpg_meqtls = this_cpg_meqtls[this_cpg_meqtls['beta_a1'] > 0].nlargest(num_db_sites, 'beta_a1')['snp'].to_list()
+        neg_cpg_meqtls = this_cpg_meqtls[this_cpg_meqtls['beta'] < 0].nsmallest(num_db_sites, 'beta')['snp'].to_list()
+        pos_cpg_meqtls = this_cpg_meqtls[this_cpg_meqtls['beta'] > 0].nlargest(num_db_sites, 'beta')['snp'].to_list()
         return neg_cpg_meqtls, pos_cpg_meqtls
     
     def _get_predictor_site_groups(

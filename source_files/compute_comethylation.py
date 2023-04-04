@@ -93,7 +93,7 @@ class analyzeComethylation:
         # write delta in geek sybol
         axes.set_xlabel(r'Mean $\Delta$MF')
         # change legend labels
-        axes.legend(['Randomized control', 'Actual mutation'], loc='upper right', title='Mutation event')
+        axes.legend(['Randomized control', 'Actual mutation'], loc='upper right', title='Mutated sample')
         
     def plot_delta_mf_boxplots(
         self,
@@ -109,7 +109,7 @@ class analyzeComethylation:
                                     {'is_background': {True: 'Randomized control',
                                                         False: 'Actual mutation'}}
                                     )
-        to_plot = to_plot.replace({'mutated_sample': {True: 'FG', False: 'BG'}})
+        to_plot = to_plot.replace({'mutated_sample': {True: '', False: 'BG'}})
         to_plot['combined'] = to_plot['is_background'] + ' ' + to_plot['mutated_sample']
         
         pallette = [ 'maroon', 'steelblue', 'white', 'white']
@@ -117,13 +117,13 @@ class analyzeComethylation:
             data=to_plot, x=metric, y='combined',
             orient='h', ax = axes, showfliers=False, 
             palette=pallette, 
-            order = ['Actual mutation FG', 'Randomized control FG', 'Actual mutation BG', 'Randomized control BG']
+            order = ['Actual mutation ', 'Randomized control ', 'Actual mutation BG', 'Randomized control BG']
             )
         # remove ylabel 
         axes.tick_params(axis='y', labelrotation=0)
         axes.set_ylabel('')
         # delta in geek symbol
-        axes.set_xlabel(r'$\Delta$MF')
+        axes.set_xlabel(r'Mean $\Delta$MF')
         
     def plot_distance_of_effect(
         self, 
@@ -321,8 +321,22 @@ class analyzeComethylation:
             color='black', ax=axes
             )
         ax.set_yscale('log')
-        #ax.set_ylim(bottom=-1)
-        ax.yaxis.set_major_locator(plt.LogLocator(base=10, numticks=4))
+        ax.set_ylim(bottom=0)
+        ax.yaxis.set_major_locator(plt.LogLocator(base=10, numticks=7))
+        #ax.legend(loc='upper right')
+        # plot correlation distance on the same plot with y axis on the right
+        if method == 'corr':
+            ax2 = ax.twinx()
+            ax2 = sns.scatterplot(
+                y=[x for x in range(1, len(comparison_site_and_distances['distances'].to_list()) +1, 1)], 
+                x=np.arange(1, len(distances)+1, 1), 
+                color='grey', ax=ax2, alpha = 0.6
+                )
+            #ax2.legend(loc='upper left')
+            # added these three lines
+            ax2.set_ylabel('Correlation distance')
+            
+            
         # plot y = 0 line on axes
         #plt.axhline(y=0, color='black', linestyle='--')
         # plot a vertical line at mut_pos
