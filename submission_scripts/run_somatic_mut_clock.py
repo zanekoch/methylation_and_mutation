@@ -124,30 +124,16 @@ def run(
             matrix_qtl_dir = matrix_qtl_dir
             )
         ######## choose CpGs ############
-        # get age correlation of CpGs
-        age_corr = mut_feat.all_methyl_age_df_t.loc[mut_feat.train_samples].corrwith(
-            mut_feat.all_methyl_age_df_t.loc[mut_feat.train_samples, 'age_at_index']
-            )
-        age_corr.drop(['age_at_index', 'gender_MALE', 'gender_FEMALE'], inplace=True)
-        age_corr = age_corr.to_frame()
-        age_corr.columns = ['age_corr']
-        age_corr['abs_age_corr'] = age_corr['age_corr'].abs()
-        # get stdev of CpGs
-        methyl_stdev = mut_feat.all_methyl_age_df_t.loc[mut_feat.train_samples, :].std()
-        methyl_stdev.drop(['age_at_index', 'gender_MALE', 'gender_FEMALE'], inplace=True)
-        methyl_stdev = methyl_stdev.to_frame()
-        methyl_stdev.columns = ['methyl_stdev']
-        # choose the top cpgs sorted by cpg_pred_priority
+        # choose the top cpgs sorted by nearby mutation count and then absolute age correlation
         cpg_pred_priority = mut_feat.choose_cpgs_to_train(
-            metric_df = age_corr, bin_size = mut_feat_params['bin_size'], 
+            bin_size = mut_feat_params['bin_size'], 
             sort_by = ['count', 'abs_age_corr']
             )
-        cpg_pred_priority = cpg_pred_priority.merge(methyl_stdev, left_on = '#id', right_index=True, how='left')
-        # choose the top cpgs
+        # choose the start - end top cpgs
         chosen_cpgs = cpg_pred_priority.iloc[start_top_cpgs: end_top_cpgs]['#id'].to_list()
         
-        ##################################
-        # run the feature generation
+        ######### feature generation ###########
+        # run the 
         mut_feat.create_all_feat_mats(
             cpg_ids = chosen_cpgs, 
             aggregate = mut_feat_params['aggregate'],

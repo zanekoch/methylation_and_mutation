@@ -192,7 +192,7 @@ class mutationFeatures:
             (cis_meqtl_df['beta'] > 0),
             :]
         close_pos_meqtls_l = pos_meqtls.loc[
-            pos_meqtls['distance'] < 5e6, 
+            pos_meqtls['distance'] < 5e6, # within 5Mb
             :].nsmallest(max_meqtl_sites, 'p-value')['SNP'].to_list()
         pos_meqtls_l = pos_meqtls.nsmallest(max_meqtl_sites, 'p-value')['SNP'].to_list()
         # negative
@@ -394,7 +394,7 @@ class mutationFeatures:
                                             + '-' \
                                             + group_sites[(i+1)*extend_amount].split(':')[1]
                         col_names.append(name)
-                        extended_feats = pd.concat(sums, axis=1)
+                    extended_feats = pd.concat(sums, axis=1)
                     # rename features 
                     extended_feats.columns = col_names
                     # add extended features to extended_feat_agg_muts
@@ -417,12 +417,10 @@ class mutationFeatures:
             5bp, 10bp, 25bp, 50bp
             """
             def find_contiguous_sets(input_list, N):
-                
                 def subtract_special(x, y):
                     x = int(x.split(':')[1])
                     y = int(y.split(':')[1])
                     return x - y
-                
                 sets = []
                 curr_set = []
                 i = 0
@@ -476,14 +474,19 @@ class mutationFeatures:
             return nested_feat_mats
                 
         if aggregate == "Both":
+            # print size of predictor_groups
+            for group_name, group_sites in predictor_groups.items():
+                print(group_name, len(group_sites))
+            t = time.time()
             feat_mat = noAgg()
-            print("No aggregation done", flush=True)
+            print("feat no agg took: ", time.time() - t, flush=True)
             agg_feat_mat = agg()
-            print("Aggregation done", flush=True)
+            print("agg took ", time.time() - t, flush=True)
             nested_nearby_feats = get_nested_nearby_feats()
-            print("Nested nearby feats done", flush=True)
+            print("nested took ", time.time() - t, flush=True)
             feat_mat = pd.merge(feat_mat, agg_feat_mat, left_index=True, right_index=True)
             feat_mat = pd.merge(feat_mat, nested_nearby_feats, left_index=True, right_index=True)
+            print("merging took ", time.time() - t, flush=True)
         elif aggregate == "False":
             feat_mat = noAgg()
         elif aggregate == "True":
@@ -515,7 +518,6 @@ class mutationFeatures:
         num_correl_sites: int = 50,
         max_meqtl_sites: int = 100,
         nearby_window_size: int = 50000,
-        #num_db_sites: int = 500,
         extend_amount: int = 250,
         binarize: bool = False
         ):
@@ -527,25 +529,25 @@ class mutationFeatures:
         @ aggregate: whether to aggregate the mutation status by predictor group
         @ returns: X, y where X is the training matrix and y is the methylation values of cpg_id across samples
         """
+        predictor_groups_dict = {}
         feat_mats, feat_names, target_values = {}, {}, {}
         for i, cpg_id in enumerate(cpg_ids):
             print(cpg_id)
             start_time = time.time()
-            
             # first get the predictor groups
             predictor_groups = self._get_predictor_site_groups(
                 cpg_id, num_correl_sites, max_meqtl_sites,
                 nearby_window_size, extend_amount
                 )
-            # then create the feature matrix from these
-            # returns a sparse numpy matrix of feature values, a list of feature names,
-            # and a pandas series of target values
+            print(f"predictor site time: {time.time() - start_time}", flush=True)
+            
             feat_mats[cpg_id], feat_names[cpg_id], target_values[cpg_id] = self._create_feature_mat(
                 cpg_id, predictor_groups, aggregate, extend_amount, binarize
                 )
             if i % 1 == 0:
                 print(f"Finished {i} of {len(cpg_ids)}", flush=True)
                 print(f"Time elapsed: {time.time() - start_time}", flush=True)
+    
         if len(self.mutation_features_store) == 0:
             # create a dictionary to allow for easy data persistence
             # to get the feature matrix for a given cpg_id, use feat_mats[cpg_id]
@@ -578,9 +580,8 @@ class mutationFeatures:
       
     def choose_cpgs_to_train(
         self,
-        metric_df: pd.DataFrame,
         bin_size: int = 50000,
-        sort_by: list = ['count', 'mutual_info']
+        sort_by: list = ['count', 'abs_age_corr']
         ) -> pd.DataFrame:
         """
         Based on count of mutations nearby and mutual information, choose cpgs to train models for
@@ -651,10 +652,18 @@ class mutationFeatures:
             cpg_pred_priority_up, on='#id', how='outer', suffixes=('_down', '_up')
             )
         # sum the counts
-        cpg_pred_priority['count'] = cpg_pred_priority['count_down'] + cpg_pred_priority['count_up']  
-        # add the input metric
-        cpg_pred_priority = cpg_pred_priority.merge(metric_df, left_on='#id', right_index=True, how='left')
-        # sort by count and the metric
+        cpg_pred_priority['count'] = cpg_pred_priority['count_down'] + cpg_pred_priority['count_up'] 
+        # calculate age correlation
+        age_corr = self.all_methyl_age_df_t.loc[self.train_samples].corrwith(
+            self.all_methyl_age_df_t.loc[self.train_samples, 'age_at_index']
+            )
+        age_corr.drop(['age_at_index', 'gender_MALE', 'gender_FEMALE'], inplace=True)
+        age_corr = age_corr.to_frame()
+        age_corr.columns = ['age_corr']
+        age_corr['abs_age_corr'] = age_corr['age_corr'].abs()
+        # combine with age corr
+        cpg_pred_priority = cpg_pred_priority.merge(age_corr, left_on='#id', right_index=True, how='left')
+        # sort by count and age corr
         cpg_pred_priority.sort_values(by=sort_by, ascending=[False, False], inplace=True)
         # drop na and reset index
         cpg_pred_priority.dropna(inplace=True, how='any', axis=0)
