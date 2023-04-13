@@ -5,6 +5,7 @@ import os
 import pickle
 from sklearn.model_selection import StratifiedKFold
 from scipy.sparse import csr_matrix
+import time
 
 class mutationFeatures:
     """
@@ -90,9 +91,9 @@ class mutationFeatures:
             ]
         # drop CpGs that are not in the illumina_cpg_locs_df (i.e. on XY)
         self.all_methyl_age_df_t = self.all_methyl_age_df_t.loc[:, 
-            set(self.all_methyl_age_df_t.columns).intersection(
+            list(set(self.all_methyl_age_df_t.columns).intersection(
                 set(self.illumina_cpg_locs_df['#id'].to_list() + ['dataset', 'gender', 'age_at_index'])
-                )
+                ))
             ]
         # one hot encode covariates
         if self.dataset == "":
@@ -297,7 +298,8 @@ class mutationFeatures:
         cpg_id: str, 
         predictor_groups: dict,
         aggregate: str,
-        extend_amount: int
+        extend_amount: int,
+        binarize: bool
         ) -> tuple:
         """
         Create the training matrix for the given cpg_id and predictor_sites
@@ -336,6 +338,9 @@ class mutationFeatures:
                 )
             # add rows of all 0s for samples that don't have any mutations in predictor sites
             feat_mat = feat_mat.reindex(all_samples, fill_value=0)
+            if binarize:
+                # convert all nonzero values to 1
+                feat_mat[feat_mat > 0] = 1
             return feat_mat
         
         def agg(
@@ -366,6 +371,9 @@ class mutationFeatures:
                     values='DNA_VAF', fill_value = 0
                     )
                 feat_mat = feat_mat.reindex(all_samples, fill_value=0)
+                if binarize:
+                    # convert all nonzero values to 1
+                    feat_mat[feat_mat > 0] = 1
                 # sum across loci within each sample to get samples x aggregate feature matrix
                 agg_feat_mat = feat_mat.sum(axis=1)
                 aggregated_muts.append(agg_feat_mat)
@@ -457,7 +465,9 @@ class mutationFeatures:
                 values='DNA_VAF', fill_value = 0
                 )
             feat_mat = feat_mat.reindex(all_samples, fill_value=0)
-
+            if binarize:
+                # convert all nonzero values to 1
+                feat_mat[feat_mat > 0] = 1
             all_nested_feat_mats = []
             for nest_size in nest_sizes:
                 this_nest_size_feat_mat = sum_columns(feat_mat, nest_size) 
@@ -467,8 +477,11 @@ class mutationFeatures:
                 
         if aggregate == "Both":
             feat_mat = noAgg()
+            print("No aggregation done", flush=True)
             agg_feat_mat = agg()
+            print("Aggregation done", flush=True)
             nested_nearby_feats = get_nested_nearby_feats()
+            print("Nested nearby feats done", flush=True)
             feat_mat = pd.merge(feat_mat, agg_feat_mat, left_index=True, right_index=True)
             feat_mat = pd.merge(feat_mat, nested_nearby_feats, left_index=True, right_index=True)
         elif aggregate == "False":
@@ -503,7 +516,8 @@ class mutationFeatures:
         max_meqtl_sites: int = 100,
         nearby_window_size: int = 50000,
         #num_db_sites: int = 500,
-        extend_amount: int = 250
+        extend_amount: int = 250,
+        binarize: bool = False
         ):
         """
         Create the training matrix for the given cpg_id and predictor_sites
@@ -515,6 +529,9 @@ class mutationFeatures:
         """
         feat_mats, feat_names, target_values = {}, {}, {}
         for i, cpg_id in enumerate(cpg_ids):
+            print(cpg_id)
+            start_time = time.time()
+            
             # first get the predictor groups
             predictor_groups = self._get_predictor_site_groups(
                 cpg_id, num_correl_sites, max_meqtl_sites,
@@ -524,10 +541,11 @@ class mutationFeatures:
             # returns a sparse numpy matrix of feature values, a list of feature names,
             # and a pandas series of target values
             feat_mats[cpg_id], feat_names[cpg_id], target_values[cpg_id] = self._create_feature_mat(
-                cpg_id, predictor_groups, aggregate, extend_amount
+                cpg_id, predictor_groups, aggregate, extend_amount, binarize
                 )
-            if i % 10 == 0:
+            if i % 1 == 0:
                 print(f"Finished {i} of {len(cpg_ids)}", flush=True)
+                print(f"Time elapsed: {time.time() - start_time}", flush=True)
         if len(self.mutation_features_store) == 0:
             # create a dictionary to allow for easy data persistence
             # to get the feature matrix for a given cpg_id, use feat_mats[cpg_id]

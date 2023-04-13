@@ -123,7 +123,6 @@ def run(
             consortium = consortium, dataset = dataset, cross_val_num = cross_val_num, 
             matrix_qtl_dir = matrix_qtl_dir
             )
-        
         ######## choose CpGs ############
         # get age correlation of CpGs
         age_corr = mut_feat.all_methyl_age_df_t.loc[mut_feat.train_samples].corrwith(
@@ -231,7 +230,7 @@ def main():
         'num_correl_sites' : args.num_correl_sites, 'max_meqtl_sites' : args.max_meqtl_sites,
         'nearby_window_size' : args.nearby_window_size, 'extend_amount' : args.extend_amount
     }
-    
+    print(mut_feat_params)
     run(
         do = do,
         consortium = consortium, dataset = dataset, cross_val_num = cross_val_num,

@@ -155,7 +155,7 @@ class methylationPrediction:
                 X.index = save_index
             else:
                 if only_agg:
-                    X = self.mut_feat_store['feat_mats'][cpg_id].loc[:, ~self.mut_feat_store['feat_mats'][cpg_id].columns.str.contains(':')]
+                    X = self.mut_feat_store['feat_mats'][cpg_id].loc[:, self.mut_feat_store['feat_mats'][cpg_id].columns.str.contains('_') | self.mut_feat_store['feat_mats'][cpg_id].columns.str.contains('-')]
                 else:
                     X = self.mut_feat_store['feat_mats'][cpg_id]
             # do prediction
@@ -225,7 +225,7 @@ class methylationPrediction:
                 X.index = save_index
             else:
                 if only_agg:
-                    X = self.mut_feat_store['feat_mats'][cpg_id].loc[:, ~self.mut_feat_store['feat_mats'][cpg_id].columns.str.contains(':')]
+                    X = self.mut_feat_store['feat_mats'][cpg_id].loc[:, self.mut_feat_store['feat_mats'][cpg_id].columns.str.contains('_') | self.mut_feat_store['feat_mats'][cpg_id].columns.str.contains('-')]
                 else:
                     X = self.mut_feat_store['feat_mats'][cpg_id] 
             # for each feature set in the store train a model

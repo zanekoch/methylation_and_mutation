@@ -314,20 +314,6 @@ def get_same_age_means(ct_mutation_in_measured_cpg_df, all_meta_df, all_methyl_d
         means.append(this_cpg_mean)
     return means
 
-def calc_correlation(ct_mut_in_measured_cpg_w_methyl_df, all_methyl_df_t, num, chr=''):
-    # for each mutated site in CpG, calculate correlation matrix
-    corr_matrix_dict = {}
-    # subset to a single chromsome
-    if chr != '':
-        ct_mut_in_measured_cpg_w_methyl_df = ct_mut_in_measured_cpg_w_methyl_df[ct_mut_in_measured_cpg_w_methyl_df['chr'] == str(chr)]
-    sorted_df = ct_mut_in_measured_cpg_w_methyl_df.sort_values(by=['DNA_VAF'], ascending=False)
-    chosen_cpgs = sorted_df.iloc[num-250:]
-    for i, row in chosen_cpgs.iterrows():
-        this_cpg_corr_matrix = all_methyl_df_t.corrwith(all_methyl_df_t[row['#id']])
-        this_cpg_corr_matrix.drop(row['#id'], inplace=True)
-        corr_matrix_dict[row['#id']] = this_cpg_corr_matrix
-    return corr_matrix_dict
-
 def test_sig(results_dfs, test='p_wilcoxon'):
     """
     @ returns: dict of counts of mutations with significant effects
@@ -343,19 +329,6 @@ def test_sig(results_dfs, test='p_wilcoxon'):
         result_metrics_dict['sig_mean_linked_delta_mf'].append(this_result_df[this_result_df[test] < bonf_p_val]['mean_linked_delta_mf'].mean())
     return result_metrics_dict
 
-def calc_correlation(ct_mut_in_measured_cpg_w_methyl_df, all_methyl_df_t, chr=''):
-    # for each mutated site on chr calculate correlation matrix
-    corr_matrix_dict = {}
-    # subset to a single chromsome
-    if chr != '':
-        ct_mut_in_measured_cpg_w_methyl_df = ct_mut_in_measured_cpg_w_methyl_df[ct_mut_in_measured_cpg_w_methyl_df['chr'] == str(chr)]
-
-    for _, row in ct_mut_in_measured_cpg_w_methyl_df.iterrows():
-        this_cpg_corr_matrix = all_methyl_df_t.corrwith(all_methyl_df_t[row['#id']])
-        this_cpg_corr_matrix.drop(row['#id'], inplace=True)
-        corr_matrix_dict[row['#id']] = this_cpg_corr_matrix
-    corr_df = pd.DataFrame(corr_matrix_dict)
-    return corr_df
 
 def EWAS(X, y, out_fn):
     """
@@ -381,13 +354,15 @@ def EWAS(X, y, out_fn):
 def get_distances_one_chrom(chrom_name,
                             illumina_cpg_locs_df):
     """
-    Calculate absolute distances between all CpGs on a give chromosome
+    Calculate absolute distances between all CpGs on a given chromosome
     @ chrom_name: name of chromosome
     @ illumina_cpg_locs_df: dataframe of CpG locations
     @ returns: dataframe of absolute distances between all CpGs on a given chromosome
     """
     # subset to a single chromsome
-    illumina_cpg_locs_df_chr = illumina_cpg_locs_df[illumina_cpg_locs_df['chr'] == str(chrom_name)]
+    illumina_cpg_locs_df_chr = illumina_cpg_locs_df.loc[
+        illumina_cpg_locs_df['chr'] == str(chrom_name)
+        ]
     """# subset to CpGs in cpg_subset
     illumina_cpg_locs_df_chr = illumina_cpg_locs_df_chr[illumina_cpg_locs_df_chr['#id'].isin(cpg_subset)]"""
     # for each CpG in illumina_cpg_locs_df_chr
@@ -400,6 +375,59 @@ def get_distances_one_chrom(chrom_name,
     distances_df.index = distances_df.columns
     distances_df = np.abs(distances_df)
     return distances_df
+
+def get_distances_one_chrom_new(chrom_name, illumina_cpg_locs_df):
+    """
+    Calculate absolute distances between all CpGs on a given chromosome
+    @ chrom_name: name of chromosome
+    @ illumina_cpg_locs_df: dataframe of CpG locations
+    @ returns: dataframe of absolute distances between all CpGs on a given chromosome
+    """
+    # subset to a single chromosome
+    illumina_cpg_locs_df_chr = illumina_cpg_locs_df.loc[illumina_cpg_locs_df['chr'] == str(chrom_name)]
+    # calculate distances between all CpGs on the chromosome
+    distances_df = pd.DataFrame(
+        np.abs(np.subtract.outer(illumina_cpg_locs_df_chr['start'].values,
+                                 illumina_cpg_locs_df_chr['start'].values))
+        )
+    distances_df.index = illumina_cpg_locs_df_chr['#id']
+    distances_df.columns = illumina_cpg_locs_df_chr['#id']
+    return distances_df
+
+def plot_corr_vs_dist(corr_df, dist_df):
+    """
+    Plot boxplots of the correlation values in corr_df for log-spaced distance ranges defined by dist_df.
+    """
+    # order columsn and rows of corr_df in the same order as dist_df
+    corr_df = corr_df.reindex(dist_df.columns).reindex(dist_df.index)
+    # Set log-spaced distance ranges based on the maximum value in dist_df
+    #n = dist_df.values.max() + 1
+    #dist_ranges = np.logspace(0, np.log10(n), 10, dtype=int)
+    #dist_ranges[-1] = n
+    
+    dist_ranges = [1, 10, 10**3, 10**5, 10**7, 10**9]
+    # Create list of correlation values for each distance range
+    corr_lists = []
+    corr_vals = corr_df.values
+    for i in range(len(dist_ranges)-1):
+        dist_min, dist_max = dist_ranges[i], dist_ranges[i+1]
+        corr_list = corr_vals[(dist_df >= dist_min) & (dist_df < dist_max)]
+        corr_lists.append(corr_list)
+
+    # Create boxplots
+    sns.set_context('notebook', font_scale=1.1)
+    fig, ax = plt.subplots(figsize=(8,6))
+    # get red pallete from seaborn in reverse
+    reds_reversed = sns.color_palette('Reds', 5)[::-1]
+    #sns.violinplot(data=corr_lists, ax=ax, palette=reds_reversed, cut = 0)
+    sns.boxplot(data=corr_lists, ax=ax, palette=reds_reversed, showfliers=False)
+    # make xticklabels use 10^x notation
+    labels = ['1-10', '$10-10^3$', '$10^3-10^5$', '$10^5-10^7$', '$10^7-10^9$']
+    ax.set_xticklabels(labels)
+    
+    ax.set_xlabel('Distance between CpG sites (bp)')
+    ax.set_ylabel('CpG methylation fraction Pearson r')
+    plt.show()
     
 def read_in_result_dfs(result_base_path, PERCENTILES=PERCENTILES):
     """

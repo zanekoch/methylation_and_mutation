@@ -32,6 +32,8 @@ class analyzeComethylation:
     def __init__(self):
         pass
     
+    
+    
     def get_mean_metrics_by_dist(
         self, 
         all_metrics_df, 
@@ -62,7 +64,7 @@ class analyzeComethylation:
             mean_metrics_df['distance'] = dist
             mean_metric_by_dist_dfs.append(mean_metrics_df)
             print(f"finished distance: {dist}", flush = True)
-        # merge all the mean metrics dfs
+        # combine all the mean metrics dfs
         mean_metrics_by_dist_df = pd.concat(mean_metric_by_dist_dfs, axis=0)
 
         mut_event_to_background_map = all_metrics_df.drop_duplicates(subset=['mut_event', 'sample'])
@@ -78,52 +80,131 @@ class analyzeComethylation:
         mean_metrics_df, 
         metric = 'mean_dmf'
         ):
+        
         # increase font size
-        sns.set_theme(style='white', font_scale=1.3, rc={'xtick.bottom': True, 'ytick.left': True})
+        #sns.set_theme(style='white', font_scale=1.3, rc={'xtick.bottom': True, 'ytick.left': True})
+        sns.set_context('notebook', font_scale=1.1)
         fig, axes = plt.subplots(figsize=(8, 3.5), dpi = 100)
         mut = mean_metrics_df.loc[mean_metrics_df.mutated_sample == True]
-        mut = mut.rename(columns={'is_background': 'Mutation event'})#.replace({'Mutation event': {True: 'BG mutated samples', False: 'FG mutated samples'}})
+        mut = mut.rename(columns={'is_background': 'Locus'})#.replace({'Mutation event': {True: 'BG mutated samples', False: 'FG mutated samples'}})
         sns.kdeplot(
-            data=mut, x=metric, hue='Mutation event',
+            data=mut, x=metric, hue='Locus',
             common_norm=False, palette=[ 'maroon', 'steelblue'],
             fill=True, ax = axes, clip = (-1, 1), common_grid=True
             )
         # set xlim
         axes.set_xlim(-.4, .4)
         # write delta in geek sybol
-        axes.set_xlabel(r'Mean $\Delta$MF')
+        axes.set_xlabel(r'Mean $\Delta$MF across locus')
         # change legend labels
-        axes.legend(['Randomized control', 'Actual mutation'], loc='upper right', title='Mutated sample')
+        axes.legend(['Random', 'Mutated'], loc='upper right', title='Locus')
+        
+    def plot_delta_mf_violin(
+        self, 
+        mean_metrics_df, 
+        metric = 'mean_dmf',
+        axes = None
+        ):
+        PROPS = {
+            'boxprops':{'facecolor':'none', 'edgecolor':'black'},
+            'medianprops':{'color':'black'},
+            'whiskerprops':{'color':'black'},
+            'capprops':{'color':'black'},
+            'zorder': 2
+        }
+        # increase font size
+        #sns.set_theme(style='white', font_scale=1.3, rc={'xtick.bottom': True, 'ytick.left': True})
+        sns.set_context('notebook', font_scale=1.1)
+        if axes is None:
+            fig, axes = plt.subplots(figsize=(7, 4), dpi = 100)
+            
+        mut = mean_metrics_df.loc[mean_metrics_df.mutated_sample == True]
+        mut = mut.rename(columns={'is_background': 'Locus'}).replace({'Locus': {True: 'Random', False: 'Mutated'}})
+        mut['dummy'] = 0
+        sns.violinplot(
+            data=mut, y=metric, x = 'Locus', #split=True,
+            common_norm=False, palette=['maroon', 'steelblue'],
+            scale_hue=True, scale = 'area', 
+            ax = axes, cut = 0, gridsize=100,
+            inner = None, linewidth=0, zorder = 0,
+            order = ['Mutated', 'Random']
+            )
+        sns.boxplot(
+            data=mut, y=metric,  x = 'Locus', 
+            showfliers=False, ax = axes, boxprops={"zorder": 2, 'facecolor':'none', 'edgecolor':'black', }, medianprops = {'color':'black'},
+            capprops = {'color':'black'}, whiskerprops = {'color':'black'}, zorder = 2, linewidth=1, 
+            order = ['Mutated', 'Random']
+            
+            )
+        # set xlim
+        axes.set_ylim(-.4, .4)
+        # write delta in geek sybol
+        axes.set_ylabel(r'Median $\Delta$MF across locus')
+        axes.set_xlabel('Locus')
+        
+        # change legend labels and colors 
+        axes.legend(['Random', 'Mutated'], loc='lower center', title='Locus')
+    
+        # mannwhitneyu test between mutated and random
+        # get the data
+        """mutated = mut.loc[mut.Locus == 'Mutated', metric]
+        random = mut.loc[mut.Locus == 'Random', metric]
+        u, p = stats.mannwhitneyu(mutated, random, alternative='two-sided')
+        print(f"p-value: {p}")
+        print(f"u-statistic: {u}")
+        print(f"mutated median: {mutated.median()}")
+        print(f"random median: {random.median()}\n")
+        # mwu of abs values
+        print("absolute mwu")
+        mutated = mut.loc[mut.Locus == 'Mutated', 'mean_abs_dmf']
+        random = mut.loc[mut.Locus == 'Random', 'mean_abs_dmf']
+        u, p = stats.mannwhitneyu(mutated, random, alternative='two-sided')
+        print(f"p-value: {p}")
+        print(f"u-statistic: {u}")
+        print(f"mutated median: {mutated.median()}")
+        print(f"random median: {random.median()}\n")
+        
+        # test normality
+        print("normality tests:")
+        print(f"mutated: {stats.normaltest(mutated)}")
+        print(f"random: {stats.normaltest(random)}\n")
+        # also do ttest 
+        t, p = stats.ttest_ind(mutated, random, equal_var=False)
+        print("t-test:")
+        print(f"p-value: {p}")
+        print(f"t-statistic: {t}")
+        print(f"mutated mean: {mutated.mean()}")
+        print(f"random mean: {random.mean()}")"""
+        
         
     def plot_delta_mf_boxplots(
         self,
         mean_metrics_df, 
         metric = 'mean_dmf'
         ):
-        sns.set_theme(style='white', font_scale=1.3, rc={'xtick.bottom': True, 'ytick.left': True})
+        #sns.set_theme(style='white', font_scale=1.3, rc={'xtick.bottom': True, 'ytick.left': True})
+        sns.set_context('notebook', font_scale=1.1)
 
         fig, axes = plt.subplots(figsize=(8, 4), dpi=100)
-
-        to_plot = mean_metrics_df[[metric, 'is_background', 'mutated_sample' ]
-                                ].replace(
-                                    {'is_background': {True: 'Randomized control',
-                                                        False: 'Actual mutation'}}
-                                    )
-        to_plot = to_plot.replace({'mutated_sample': {True: '', False: 'BG'}})
-        to_plot['combined'] = to_plot['is_background'] + ' ' + to_plot['mutated_sample']
-        
+        # Randomized control or actual mutation
+        to_plot = mean_metrics_df[[metric, 'is_background', 'mutated_sample' ]].replace(
+                                    {'is_background': {True: 'RC-',
+                                                        False: ''}})
+        # BG or ''
+        to_plot = to_plot.replace({'mutated_sample': {True: 'Mutated sample', False: 'BG sample'}})
+        to_plot['combined'] = to_plot['is_background'] + to_plot['mutated_sample']
         pallette = [ 'maroon', 'steelblue', 'white', 'white']
         sns.boxplot(
-            data=to_plot, x=metric, y='combined',
-            orient='h', ax = axes, showfliers=False, 
+            data=to_plot, y=metric, x='combined',
+            ax = axes, showfliers=False, orient='v',
             palette=pallette, 
-            order = ['Actual mutation ', 'Randomized control ', 'Actual mutation BG', 'Randomized control BG']
+            order = ['Mutated sample', 'RC-Mutated sample', 'BG sample', 'RC-BG sample']
             )
         # remove ylabel 
-        axes.tick_params(axis='y', labelrotation=0)
-        axes.set_ylabel('')
+        axes.tick_params(axis='x', labelrotation=0)
+        axes.set_xlabel('')
         # delta in geek symbol
-        axes.set_xlabel(r'Mean $\Delta$MF')
+        axes.set_ylabel(r'Mean $\Delta$MF across locus')
         
     def plot_distance_of_effect(
         self, 
@@ -133,12 +214,10 @@ class analyzeComethylation:
         max_dist,
         method = 'dist'
         ):
-        # add x ticks
-        sns.set_theme(style='white', font_scale=1.3, rc={'xtick.bottom': True, 'ytick.left': True})
+        sns.set_context('notebook', font_scale=1.1)
+        #sns.set_theme(style='white', font_scale=1.3, rc={'xtick.bottom': True, 'ytick.left': True})
         # make bigger figure
         plt.figure(figsize=(6,4), dpi=100)
-        
-        # 
         # subset
         mut_events = mut_events.loc[mut_events['mutated_sample'] == True]
         # change to kb
@@ -155,19 +234,17 @@ class analyzeComethylation:
                         ]
             )
         # rename
-        mut_events = mut_events.rename(columns={'is_background': 'Mutation event'})
+        mut_events = mut_events.rename(columns={'is_background': 'Locus'})
         # map Mutaiton event column values
-        mut_events['Mutation event'] = mut_events['Mutation event'].map(
-            {True: 'Randomized control', False: 'Actual mutation'}
+        mut_events['Locus'] = mut_events['Locus'].map(
+            {True: 'Random', False: 'Mutated'}
             )
-        
         sns.boxplot(
             data= mut_events,
             x = 'dist_bin', y = 'delta_mf_median', 
-            hue = 'Mutation event', showfliers = False, 
+            hue = 'Locus', showfliers = False, 
             palette=['steelblue', 'maroon']
         )
-        
         #plt.legend(['Randomized control', 'Actual mutation'], title='Mutation event')
         # angle x labels
         plt.xticks(rotation=30)
@@ -205,7 +282,8 @@ class analyzeComethylation:
         max_abs_distance: int = 1e9, 
         max_matched_samples: int = 1e9,
         illumina_cpg_locs_df: pd.DataFrame = None,
-        method: str = 'dist'
+        method: str = 'dist',
+        rolling_window_size: int = 1,
         ) -> None:
         sns.set_theme(style='white', font_scale=1.3, rc={'xtick.bottom': True, 'ytick.left': True})
         
@@ -219,7 +297,7 @@ class analyzeComethylation:
         comparison_sites = this_mut_event['comparison_sites'].values[0]
         distances = this_mut_event['comparison_dists'].values[0]
         mut_cpg_name = this_mut_event['#id'].values[0]
-        
+        mutated_site = 'chr' + mut_event.split('_')[1]
         # check if first entry of comparison sites is a byte string
         if isinstance(comparison_sites[0], bytes):
             # convert if so
@@ -239,6 +317,9 @@ class analyzeComethylation:
                 illumina_cpg_locs_df, comparison_site_and_distances['comparison_sites'], mut_cpg_name
                 )
             comparison_site_and_distances['actual_distances'] = actual_distances
+        
+        comparison_site_and_distances.reset_index(inplace=True, drop=True)
+        #comparison_site_and_distances = comparison_site_and_distances.iloc[10:-34, :]
         distances = comparison_site_and_distances.distances.to_list()
         comparison_sites = comparison_site_and_distances.comparison_sites.to_list()
         
@@ -256,20 +337,28 @@ class analyzeComethylation:
 
         # put the mutated sample in middle
         samples_to_plot = np.concatenate(
-            (utils.half(matched_samples[:int(max_matched_samples/2)], 'first'), 
+            (utils.half(matched_samples[:int(max_matched_samples)], 'first'), 
              [mut_sample_name], 
-             utils.half(matched_samples[:int(max_matched_samples/2)], 'second'))
+             utils.half(matched_samples[:int(max_matched_samples)], 'second'))
             )
         
+        """comparison_sites = comparison_sites[10:-26]
+        print(distances[10])
+        print(distances[-27])"""
         # get mf of the comparison sites
         all_samples_comp_sites = all_methyl_age_df_t.loc[samples_to_plot, comparison_sites]
+        if rolling_window_size > 1:
+            # combine every adjacent rolling_window_size sites
+            all_samples_comp_sites = all_samples_comp_sites.rolling(
+                rolling_window_size, axis=1
+                ).mean()#.iloc[:, ::rolling_window_size]
         # plot DMF
         _, axes = plt.subplots(figsize=(9,6), dpi=100)
         all_samples_comp_sites_dmf = all_samples_comp_sites.subtract(
             all_samples_comp_sites.median(axis=0), axis=1
             )
         ax = sns.heatmap(
-            data = all_samples_comp_sites_dmf, annot=False, xticklabels=False, yticklabels=False, 
+            data = all_samples_comp_sites_dmf, annot=False, xticklabels=False, yticklabels=True, 
             cmap="icefire", vmin=-1, vmax=1, center=0,
             cbar_kws={'label': r'$\Delta$MF'}, ax=axes
             )
@@ -277,23 +366,34 @@ class analyzeComethylation:
         axes.set_xlabel('Comparison sites')
         axes.set_ylabel('Samples')
         # add a y tick for the mutated sample, make tick label red, and rotate 90 degrees
-        axes.set_yticks(np.arange(.5, len(samples_to_plot)+.5, 1))
-        axes.set_yticks([int(len(utils.half(matched_samples[:int(max_matched_samples/2)], 'first')))+.5])
-        axes.set_yticklabels(['Mutated sample'], color='red', rotation=90, ha='center', rotation_mode='anchor')
+        """axes.set_yticks(np.arange(.5, len(samples_to_plot)+.5, 1))
+        axes.set_yticks([int(len(utils.half(matched_samples[:int(max_matched_samples)], 'first')))+.5])
+        axes.set_yticklabels([mut_sample_name], color='red', rotation=90, ha='center', rotation_mode='anchor')"""
+        # make the y tick labels smaller
+        axes.tick_params(axis='y', which='major', labelsize=8)
+        # make the mutated sample label red
+        axes.yaxis.get_majorticklabels()[int(len(utils.half(matched_samples[:int(max_matched_samples)], 'first')))].set_color('red')
         axes.tick_params(axis='y', which='major', pad=5)
         # add a x tick for the mutated site, make tick label red, and rotate 90 degrees
         if method == 'corr':
             label_locations = [mut_pos - .5]
         else:
             label_locations = [mut_pos]
-        labels = ['Mutated site']
-        axes.set_xticks(label_locations)
-        axes.set_xticklabels(labels, color='red', ha='center', rotation_mode='anchor')
         
+        label_locations = [0, mut_pos, len(comparison_sites)-1]
+        mutated_site_chr = mutated_site.split(':')[0]
+        mutated_site_start = int(mutated_site.split(':')[1])
+        labels = [f'{mutated_site_chr}:'+ format(mutated_site_start + distances[0], ','), mutated_site_chr + ':' + format(mutated_site_start, ',') , f'{mutated_site_chr}:'+ format(mutated_site_start + distances[-1], ',')]
+        axes.set_xticks(label_locations)
+        axes.set_xticklabels(labels, color='black', ha='center', rotation_mode='anchor')
+        #axes.tick_params(axis='x', which='major', labelsize=)
+        # make the mutated site label red
+        axes.xaxis.get_majorticklabels()[1].set_color('red')
+
         # plot MF
         _, axes = plt.subplots(figsize=(9,6), dpi=100)
         ax = sns.heatmap(
-            data = all_samples_comp_sites, annot=False, xticklabels=False, yticklabels=False, 
+            data = all_samples_comp_sites, annot=False, xticklabels=False, yticklabels=True, 
             cmap="Blues", vmin=0, vmax=1, center=0.5,
             cbar_kws={'label': r'Methylation fraction'}, ax=axes
             )
@@ -301,15 +401,23 @@ class analyzeComethylation:
         axes.set_xlabel('Comparison sites')
         axes.set_ylabel('Samples')
         # add a y tick for the mutated sample, make tick label red, and rotate 90 degrees
-        axes.set_yticks(np.arange(.5, len(samples_to_plot)+.5, 1))
-        axes.set_yticks([int(len(utils.half(matched_samples[:int(max_matched_samples/2)], 'first')))+.5])
-        axes.set_yticklabels(['Mutated sample'], color='red', rotation=90, ha='center', rotation_mode='anchor')
+        """axes.set_yticks(np.arange(.5, len(samples_to_plot)+.5, 1))
+        axes.set_yticks([int(len(utils.half(matched_samples[:int(max_matched_samples)], 'first')))+.5])
+        axes.set_yticklabels([mut_sample_name], color='red', rotation=90, ha='center', rotation_mode='anchor')"""
+        axes.tick_params(axis='y', which='major', labelsize=8)
+        # make the mutated sample label red
+        axes.yaxis.get_majorticklabels()[int(len(utils.half(matched_samples[:int(max_matched_samples)], 'first')))].set_color('red')
         axes.tick_params(axis='y', which='major', pad=5)
         # add a x tick for the mutated site, make tick label red, and rotate 90 degrees
-        label_locations = [mut_pos]
-        labels = ['Mutated site']
+        label_locations = [0, mut_pos, len(comparison_sites)-1]
+        mutated_site_chr = mutated_site.split(':')[0]
+        mutated_site_start = int(mutated_site.split(':')[1])
+        labels = [f'{mutated_site_chr}:'+ format(mutated_site_start + distances[0], ','), mutated_site_chr + ':' + format(mutated_site_start, ',') , f'{mutated_site_chr}:'+ format(mutated_site_start + distances[-1], ',')]
         axes.set_xticks(label_locations)
-        axes.set_xticklabels(labels, color='red', ha='center', rotation_mode='anchor')
+        axes.set_xticklabels(labels, color='black', ha='center', rotation_mode='anchor')
+        #axes.tick_params(axis='x', which='major', labelsize=)
+        # make the mutated site label red
+        axes.xaxis.get_majorticklabels()[1].set_color('red')
         
         # plot distances as a lineplot
         if method == 'corr':
@@ -346,8 +454,8 @@ class analyzeComethylation:
         # do not plot y ticks or labels
         axes.set_xticks([])
         axes.set_xticklabels([])
-        
-        return all_samples_comp_sites_dmf, comparison_site_and_distances
+        axes.set_xlabel('Comparison sites')
+        return all_samples_comp_sites, all_samples_comp_sites_dmf, comparison_site_and_distances
         
     def plot_heatmap(
         self, 
@@ -523,7 +631,8 @@ class mutationScan:
         max_dist: int,
         num_correl_sites: float,
         num_background_events: int,
-        matched_sample_num: int
+        matched_sample_num: int,
+        mut_collision_dist: int
         ) -> None:
 
         self.all_mut_w_age_df = all_mut_w_age_df
@@ -535,6 +644,7 @@ class mutationScan:
         self.num_correl_sites = num_correl_sites
         self.num_background_events = num_background_events
         self.matched_sample_num = matched_sample_num
+        self.mut_collision_dist = mut_collision_dist
         # Preprocessing: subset to only mutations that are C>T, non X and Y chromosomes, and that occured in samples with measured methylation
         self.all_mut_w_age_df['mut_loc'] = self.all_mut_w_age_df['chr'] + ':' + self.all_mut_w_age_df['start'].astype(str)
         self.all_mut_w_age_df = self.all_mut_w_age_df.loc[
@@ -753,8 +863,7 @@ class mutationScan:
         return matched_samples_no_mut.to_list()
 
     def _detect_effect_in_other_samples(
-        self, 
-        sites_to_test: list, 
+        self,
         mut_row: pd.Series
         ) -> list:
         """
@@ -765,6 +874,7 @@ class mutationScan:
         """
         # so it works when called from heatmap and comethylation scan 
         mut_row = mut_row.copy(deep=True).squeeze()
+        
         # select rows of self.all_mut_w_age_df that have the same chr and dataset and as mut_row
         relevant_mutations = self.all_mut_w_age_df.loc[
             (self.all_mut_w_age_df['chr'] == mut_row['chr']) 
@@ -772,19 +882,36 @@ class mutationScan:
             ]
         if len(relevant_mutations) == 0:
             return []
-        # detect samples that have a mutation in the max_dist window of any of the sites in sites_to_test
-        sites_to_test_locs = self.illumina_cpg_locs_df.loc[self.illumina_cpg_locs_df['#id'].isin(sites_to_test)] 
+        """# detect samples that have a mutation in the max_dist window of any of the sites in sites_to_test
+        sites_to_test = mut_row['comparison_sites'].to_list()
+        sites_to_test_locs = self.illumina_cpg_locs_df.loc[
+            self.illumina_cpg_locs_df['#id'].isin(sites_to_test)
+            ] 
         # select rows of relevant_mutations that are within max_dist of any of the sites_to_test
         try:
             have_illegal_muts = relevant_mutations.loc[
-                relevant_mutations.apply(lambda row: any(np.abs(row['start'] - sites_to_test_locs['start']) <= self.max_dist), axis=1)
+                relevant_mutations.apply(lambda row:
+                    any(np.abs(row['start'] - sites_to_test_locs['start']) <= self.max_dist),
+                    axis=1)
                 ]
         except:
             print(relevant_mutations)
-            print(relevant_mutations.apply(lambda row: any(np.abs(row['start'] - sites_to_test_locs['start']) <= self.max_dist), axis=1))
-            sys.exit(1)
+            print(relevant_mutations.apply(
+                lambda row: any(np.abs(row['start'] - sites_to_test_locs['start']) <= self.max_dist), 
+                axis=1))
+            sys.exit(1)"""
         # detect samples that have a mutation in the mutated site or within max_dist of it
-        have_illegal_muts = pd.concat([have_illegal_muts, relevant_mutations.loc[(relevant_mutations['mut_loc'] == mut_row['mut_loc']) | (np.abs(relevant_mutations['start'] - mut_row['start']) <= self.max_dist)]])
+        have_illegal_muts = relevant_mutations.loc[
+                 (relevant_mutations['mut_loc'] == mut_row['mut_loc']) 
+                 | (np.abs(relevant_mutations['start'] - mut_row['start']) <= self.mut_collision_dist)
+                 ]
+        """pd.concat(
+            [have_illegal_muts, 
+             relevant_mutations.loc[
+                 (relevant_mutations['mut_loc'] == mut_row['mut_loc']) 
+                 | (np.abs(relevant_mutations['start'] - mut_row['start']) <= self.mut_collision_dist)
+                 ]
+             ])"""
         return have_illegal_muts['case_submitter_id'].to_list()
 
     def _compare_sites(
@@ -830,7 +957,7 @@ class mutationScan:
             on = ['sample', 'measured_site'],
             how = 'left'
             )
-        # add mean difference
+        """# add mean difference
         stacked_mean_diffs = mean_diffs.stack().reset_index()
         stacked_mean_diffs.columns = ['sample', 'measured_site', 'delta_mf_mean']
         metrics = metrics.merge(
@@ -845,31 +972,8 @@ class mutationScan:
             stacked_zscore_abs_mean_diffs,
             on = ['sample', 'measured_site'],
             how = 'left'
-            )
-        metrics.columns = ['sample', 'measured_site', 'delta_mf_median', 'mutated_sample', 'zscore_abs_delta_mf_median', 'delta_mf_mean', 'zscore_abs_delta_mf_mean']
-
-        # test if the delta_mf_median is significantly different from 0
-        metrics['delta_mf_median_pval2'] = stats.mannwhitneyu(
-            x = median_diffs.loc[mut_sample_name].to_numpy().ravel(),
-            y = median_diffs.drop(mut_sample_name).to_numpy().ravel(),
-            alternative = 'two-sided'
-            ).pvalue
-        # test for a difference in abs_delta_mf
-        metrics['abs_delta_mf_median_pval'] = stats.mannwhitneyu(
-            x = abs_median_diffs.loc[mut_sample_name].to_numpy().ravel(),
-            y = abs_median_diffs.drop(mut_sample_name).to_numpy().ravel(),
-            alternative = 'greater'
-            ).pvalue
-        metrics['abs_delta_mf_mean_pval'] = stats.mannwhitneyu(
-            x = abs_mean_diffs.loc[mut_sample_name].to_numpy().ravel(),
-            y = abs_mean_diffs.drop(mut_sample_name).to_numpy().ravel(),
-            alternative = 'greater'
-            ).pvalue
-        metrics['zscore_mean_pval'] = stats.mannwhitneyu(
-            x = zscore_abs_mean_diffs.loc[mut_sample_name].to_numpy().ravel(),
-            y = zscore_abs_mean_diffs.drop(mut_sample_name).to_numpy().ravel(),
-            alternative = 'greater'
-            ).pvalue
+            )"""
+        metrics.columns = ['sample', 'measured_site', 'delta_mf_median', 'mutated_sample', 'zscore_abs_delta_mf_median']#, 'delta_mf_mean', 'zscore_abs_delta_mf_mean']
         return metrics
 
     def effect_on_each_site(
@@ -885,7 +989,7 @@ class mutationScan:
             # get the same age and dataset samples
             matched_samples = mut_row['matched_samples']
             # exclude samples that have ANY mutations within max_dist of a comparison site or the mutated site
-            samples_to_exclude = self._detect_effect_in_other_samples(mut_row['comparison_sites'], mut_row)
+            samples_to_exclude = self._detect_effect_in_other_samples(mut_row)
             # drop entries of matched_samples that are in samples_to_exclude 
             matched_samples = [s for s in matched_samples if s not in samples_to_exclude]
             if len(matched_samples) < self.matched_sample_num:
@@ -911,12 +1015,19 @@ class mutationScan:
             # add to output
             return metrics
         
-        tqdm.pandas(desc="Calculating effect of mutation on comparison sites", miniters=len(comparison_sites_df)/10)
+        tqdm.pandas(
+            desc="Calculating effect of mutation on comparison sites",
+            miniters=len(comparison_sites_df)/10
+            )
         # apply process_row across each row of comparison_sites_df
         all_metrics_dfs = comparison_sites_df.progress_apply(process_row, axis=1)
         # drop none values
+        print("Dropping None values", flush=True)
+        before = len(all_metrics_dfs)
         all_metrics_dfs = all_metrics_dfs.dropna()
         all_metrics_dfs = all_metrics_dfs.to_list()
+        after = len(all_metrics_dfs)
+        print(f"dropped {before - after} mutation events bc they missed mutated sample num", flush=True)
         # concat all dfs
         all_metrics_df = pd.concat(all_metrics_dfs)
         print("Done getting effect of mutation on each site", flush=True)
@@ -1406,7 +1517,7 @@ class mutationScan:
         Driver for the analysis. Finds mutations with VAF >= min_VAF_percentile that have a measured CpG within max_dist of the mutation and then looks for disturbances in the methylation of these CpGs.
         @ start_num_mut_to_process: 
         @ end_num_mut_to_process: 
-        @ linkage_method: 'dist' or 'correl' or 'db'
+        @ linkage_method: 'dist' or 'corr' or 'db'
         @ out_dir: directory to write output files to
         @ corr_direction: 'pos' or 'neg' or 'both'
         @ comparison_sites_df: optional dataframe with columns 'mut_event', 'comparison_sites', 'comparison_dists', 'case_submitter_id', 'mut_loc', 'chr', 'start', 'matched_samples', 'is_background', 'index_event'
@@ -1421,7 +1532,7 @@ class mutationScan:
                 comparison_sites_df = self._get_distance_based_comp_sites(
                     start_num_mut_to_process, end_num_mut_to_process
                     )
-            elif linkage_method == 'correl':
+            elif linkage_method == 'corr':
                 comparison_sites_df = self._get_correl_based_comp_sites(
                     start_num_mut_to_process, end_num_mut_to_process, corr_direction
                     )
@@ -1466,7 +1577,7 @@ class mutationScan:
         print("got all metrics", flush=True)
         #all_metrics_df.reset_index(inplace=True, drop=True)
         # write out to parquet using dask
-        all_metrics_dd = dask.dataframe.from_pandas(all_metrics_df, npartitions = 100)
+        all_metrics_dd = dask.dataframe.from_pandas(all_metrics_df, npartitions = 20)
         all_metrics_fn = os.path.join(
             out_dir, "all_metrics_{}-{}Muts_{}-linked_qnorm3SD_{}background".format(
                 start_num_mut_to_process, end_num_mut_to_process, linkage_method, self.num_background_events
