@@ -299,7 +299,7 @@ class mutationFeatures:
         predictor_groups: dict,
         aggregate: str,
         extend_amount: int,
-        binarize: bool
+        binarize: bool,
         ) -> tuple:
         """
         Create the training matrix for the given cpg_id and predictor_sites
@@ -314,6 +314,25 @@ class mutationFeatures:
         """
         # make list of all samples to fill in samples that do not have mutations in predictor sites
         all_samples = self.train_samples + self.test_samples
+        
+        def _create_feat_mat(
+            site_list: list, 
+            binarize: bool = False
+            ) -> pd.DataFrame:
+            mut_status = self.all_mut_w_age_df.loc[
+                self.all_mut_w_age_df['mut_loc'].isin(site_list),
+                ['DNA_VAF', 'case_submitter_id', 'mut_loc']
+                ]
+            feat_mat = pd.pivot_table(
+                mut_status, index='case_submitter_id', columns='mut_loc',
+                values='DNA_VAF', fill_value = 0
+                )
+            feat_mat = feat_mat.reindex(all_samples, fill_value=0)
+            if binarize:
+                # convert all nonzero values to 1
+                feat_mat[feat_mat > 0] = 1
+            return feat_mat
+        
         def noAgg() -> pd.DataFrame:
             """
             Create a feature matrix where each column is a predictor site from predictor_groups
@@ -324,23 +343,8 @@ class mutationFeatures:
             for key in predictor_groups:
                 predictor_sites.update(predictor_groups[key])
             predictor_sites = list(predictor_sites)
-            # get the mutation status of predictor sites, this implicitly drops 
-            # predictor sites with no mutation in any sample (train or test)
-            mut_status = self.all_mut_w_age_df.loc[
-                self.all_mut_w_age_df['mut_loc'].isin(predictor_sites),
-                ['DNA_VAF', 'case_submitter_id', 'mut_loc']
-                ]
-            # create a new dataframe with columns = predictor sites, rows = y.index,
-            # and values = variant allele frequencies
-            feat_mat = pd.pivot_table(
-                mut_status, index='case_submitter_id', columns='mut_loc',
-                values='DNA_VAF', fill_value = 0
-                )
-            # add rows of all 0s for samples that don't have any mutations in predictor sites
-            feat_mat = feat_mat.reindex(all_samples, fill_value=0)
-            if binarize:
-                # convert all nonzero values to 1
-                feat_mat[feat_mat > 0] = 1
+            # get mutation status of all predictor sites
+            feat_mat = _create_feat_mat(predictor_sites, binarize=binarize)
             return feat_mat
         
         def agg(
@@ -358,22 +362,8 @@ class mutationFeatures:
             extended_feat_agg_muts = []
             # for each predictor group, e.g. pos_corr, neg_corr, etc.
             for group_name, group_sites in predictor_groups.items():
-                # get the mutation status of all sites in the group
-                mut_status = self.all_mut_w_age_df.loc[
-                    self.all_mut_w_age_df['mut_loc'].isin(group_sites),
-                    ['DNA_VAF', 'case_submitter_id', 'mut_loc']
-                    ]
-                
-                ### Full aggregation across all sites in the group for each sample ### 
-                # and turn these into a samples x loci matrix
-                feat_mat = pd.pivot_table(
-                    mut_status, index='case_submitter_id', columns='mut_loc',
-                    values='DNA_VAF', fill_value = 0
-                    )
-                feat_mat = feat_mat.reindex(all_samples, fill_value=0)
-                if binarize:
-                    # convert all nonzero values to 1
-                    feat_mat[feat_mat > 0] = 1
+                # create feature matrix for this group
+                feat_mat = _create_feat_mat(group_sites, binarize=binarize)
                 # sum across loci within each sample to get samples x aggregate feature matrix
                 agg_feat_mat = feat_mat.sum(axis=1)
                 aggregated_muts.append(agg_feat_mat)
@@ -392,7 +382,8 @@ class mutationFeatures:
                         # create the name of the ith extended feature
                         name = group_sites[i*extend_amount] \
                                             + '-' \
-                                            + group_sites[(i+1)*extend_amount].split(':')[1]
+                                            + group_sites[(i+1)*extend_amount].split(':')[1] \
+                                            + '-' + group_name
                         col_names.append(name)
                     extended_feats = pd.concat(sums, axis=1)
                     # rename features 
@@ -409,12 +400,12 @@ class mutationFeatures:
             agg_feat_mat = pd.concat([agg_feat_mat, extended_feat_agg_muts], axis=1)
             return agg_feat_mat
         
-        def get_nested_nearby_feats(
-            nest_sizes = [5, 15, 50, 200]
+        def get_tesselated_nearby_feats(
+            tesselate_sizes = [15, 50, 100, 200, 500, 1000]
             ) -> pd.DataFrame:
             """
             For the 'nearby' predictor group, create a feature matrix with these features aggregated into
-            5bp, 10bp, 25bp, 50bp
+            5bp, 10bp, 25bp, 50bp, 200bp windows
             """
             def find_contiguous_sets(input_list, N):
                 def subtract_special(x, y):
@@ -450,47 +441,81 @@ class mutationFeatures:
                     # select these sites
                     to_sum = df[cols]
                     # sum them, naming the new column
-                    new_df_dict['{}-{}'.format(to_sum.columns[0], to_sum.columns[-1])] = to_sum.sum(axis=1)
+                    new_df_dict[f"{to_sum.columns[0]}-{to_sum.columns[-1]}_{N}_tesselated"] = to_sum.sum(axis=1)
                 return pd.DataFrame(new_df_dict)
             
             nearby_sites = predictor_groups['nearby']
-            mut_status = self.all_mut_w_age_df.loc[
-                self.all_mut_w_age_df['mut_loc'].isin(nearby_sites),
-                ['DNA_VAF', 'case_submitter_id', 'mut_loc']
-                ]
-            feat_mat = pd.pivot_table(
-                mut_status, index='case_submitter_id', columns='mut_loc',
-                values='DNA_VAF', fill_value = 0
-                )
-            feat_mat = feat_mat.reindex(all_samples, fill_value=0)
-            if binarize:
-                # convert all nonzero values to 1
-                feat_mat[feat_mat > 0] = 1
+            # create feature matrix for nearby sites
+            feat_mat = _create_feat_mat(nearby_sites, binarize=binarize)
+            # sum features in tesselate_sizes bp windows
+            all_tesse_feat_mats = []
+            for tesse_size in tesselate_sizes:
+                this_tesse_size_feat_mat = sum_columns(feat_mat, tesse_size) 
+                all_tesse_feat_mats.append(this_tesse_size_feat_mat)               
+            tesselated_feat_mats = pd.concat(all_tesse_feat_mats, axis=1)
+            return tesselated_feat_mats
+        
+        def get_nested_nearby_feats(num_nested_feats: int = 200):
+            """
+            For nest_size / 2 in each direction from mutation aggregate nearby features
+            """
+            # get nearby sites and window size
+            nearby_sites = predictor_groups['nearby']
+            nearby_window_size = len(nearby_sites)
+            # log increasing values from 10 to nearby window size
+            nested_sizes = np.logspace(
+                start = 1, stop = np.log10(nearby_window_size), num = num_nested_feats, base = 10
+                ).astype(int)
+            # mutationn statuis
+            feat_mat = _create_feat_mat(nearby_sites, binarize=binarize)
+            # find middle of window (where mutated site is)
+            middle_index = int(len(nearby_sites) / 2)
             all_nested_feat_mats = []
-            for nest_size in nest_sizes:
-                this_nest_size_feat_mat = sum_columns(feat_mat, nest_size) 
-                all_nested_feat_mats.append(this_nest_size_feat_mat)               
-            nested_feat_mats = pd.concat(all_nested_feat_mats, axis=1)
-            return nested_feat_mats
-                
+            nested_col_names = []
+            for nest_size in nested_sizes:
+                # we know that the mutated site is in the middle of the window
+                # so extend out nest_size / 2 in each direction from middle and aggregate
+                # the features in that window
+                start = middle_index - int(nest_size / 2)                
+                end = middle_index + int(nest_size / 2) + 1
+                # select these sites from nearby sites
+                this_nest_nearby_sites = nearby_sites[start:end]
+                # select these sites from feat mat, if they exist
+                this_nest_nearby_sites = list(set(this_nest_nearby_sites).intersection(set(feat_mat.columns)))
+                if len(this_nest_nearby_sites) == 0:
+                    continue
+                this_nested_size_feat_mat = feat_mat[this_nest_nearby_sites].sum(axis=1)
+                # add to list of all nested feat mats and col names
+                all_nested_feat_mats.append(this_nested_size_feat_mat)
+                nested_col_names.append(
+                    f"{this_nest_nearby_sites[0]}-{this_nest_nearby_sites[-1]}_{nest_size}_nested"
+                    )
+            if len(all_nested_feat_mats) == 0:
+                return None
+            else:
+                nested_feat_mat = pd.concat(all_nested_feat_mats, axis=1)
+                nested_feat_mat.columns = nested_col_names
+                return nested_feat_mat
+ 
         if aggregate == "Both":
-            # print size of predictor_groups
-            for group_name, group_sites in predictor_groups.items():
-                print(group_name, len(group_sites))
-            t = time.time()
             feat_mat = noAgg()
-            print("feat no agg took: ", time.time() - t, flush=True)
             agg_feat_mat = agg()
-            print("agg took ", time.time() - t, flush=True)
+            tesselated_nearby_feats = get_tesselated_nearby_feats()
             nested_nearby_feats = get_nested_nearby_feats()
-            print("nested took ", time.time() - t, flush=True)
             feat_mat = pd.merge(feat_mat, agg_feat_mat, left_index=True, right_index=True)
-            feat_mat = pd.merge(feat_mat, nested_nearby_feats, left_index=True, right_index=True)
-            print("merging took ", time.time() - t, flush=True)
+            feat_mat = pd.merge(feat_mat, tesselated_nearby_feats, left_index=True, right_index=True)
+            if nested_nearby_feats is not None:
+                feat_mat = pd.merge(feat_mat, nested_nearby_feats, left_index=True, right_index=True)
         elif aggregate == "False":
             feat_mat = noAgg()
         elif aggregate == "True":
-            feat_mat = agg()
+            agg_feat_mat = agg()
+            tesselated_nearby_feats = get_tesselated_nearby_feats()
+            nested_nearby_feats = get_nested_nearby_feats()
+            feat_mat = pd.merge(feat_mat, agg_feat_mat, left_index=True, right_index=True)
+            feat_mat = pd.merge(feat_mat, tesselated_nearby_feats, left_index=True, right_index=True)
+            if nested_nearby_feats is not None:
+                feat_mat = pd.merge(feat_mat, nested_nearby_feats, left_index=True, right_index=True)
         else:
             sys.exit("Aggregate must be either 'True', 'False', or Both")
         # add covariate columns to X
@@ -499,17 +524,35 @@ class mutationFeatures:
             if col.startswith('dataset_') or col.startswith('gender_')
             ]
         covariate_df = self.all_methyl_age_df_t.loc[all_samples, coviariate_col_names]
-        feat_mat = pd.merge(feat_mat, covariate_df, left_index=True, right_index=True)
+        # right merge to make sure all samples are included
+        feat_mat = pd.merge(
+            feat_mat, covariate_df, 
+            left_index=True, right_index=True, how = 'right'
+            )
         # convert to float16 to save memory
         feat_mat = feat_mat.astype('float16')
         # drop duplicate columns
-        feat_mat = feat_mat.loc[:, ~feat_mat.columns.duplicated()]
-        # target values
-        target_values = self.all_methyl_age_df_t.loc[all_samples, cpg_id]
+        try:
+            feat_mat = feat_mat.loc[all_samples, ~feat_mat.columns.duplicated()]
+        except: # if there is any error 
+            print(feat_mat)
+            print(set(all_samples) - set(feat_mat.index))
+            print(len(set(all_samples) - set(feat_mat.index)))
+            print(len(feat_mat.index))
         # convert feat_mat to sparse matrix
         feature_names = feat_mat.columns.to_list()
         feat_mat = csr_matrix(feat_mat)
-        return feat_mat, feature_names, target_values
+        # get MF target values
+        target_values = self.all_methyl_age_df_t.loc[all_samples, cpg_id]
+        # within each dataset convert each value to a MD score within that dataset
+        def madd(x):
+            return (x - x.median()).abs().median()
+        mad_target_values = self.all_methyl_age_df_t.loc[
+            all_samples, [cpg_id, 'dataset']
+            ].groupby('dataset').transform(lambda x: (x - x.median()).div(madd(x)))
+        # make sure same order and a series
+        mad_target_values = mad_target_values.loc[all_samples, cpg_id] 
+        return feat_mat, feature_names, target_values, mad_target_values
     
     def create_all_feat_mats(
         self, 
@@ -527,26 +570,21 @@ class mutationFeatures:
         @ predictor_groups: dict of lists of sites to be used as predictors of cpg_id's methylation
         @ samples: the samples to be included in the training matrix
         @ aggregate: whether to aggregate the mutation status by predictor group
-        @ returns: X, y where X is the training matrix and y is the methylation values of cpg_id across samples
+        @ returns: None
         """
-        predictor_groups_dict = {}
-        feat_mats, feat_names, target_values = {}, {}, {}
+        feat_mats, feat_names, target_values, mad_target_values = {}, {}, {}, {}
         for i, cpg_id in enumerate(cpg_ids):
-            print(cpg_id)
-            start_time = time.time()
             # first get the predictor groups
             predictor_groups = self._get_predictor_site_groups(
                 cpg_id, num_correl_sites, max_meqtl_sites,
                 nearby_window_size, extend_amount
                 )
-            print(f"predictor site time: {time.time() - start_time}", flush=True)
             
-            feat_mats[cpg_id], feat_names[cpg_id], target_values[cpg_id] = self._create_feature_mat(
+            feat_mats[cpg_id], feat_names[cpg_id], target_values[cpg_id], mad_target_values[cpg_id] = self._create_feature_mat(
                 cpg_id, predictor_groups, aggregate, extend_amount, binarize
                 )
-            if i % 1 == 0:
+            if i % 10 == 0:
                 print(f"Finished {i} of {len(cpg_ids)}", flush=True)
-                print(f"Time elapsed: {time.time() - start_time}", flush=True)
     
         if len(self.mutation_features_store) == 0:
             # create a dictionary to allow for easy data persistence
@@ -567,13 +605,15 @@ class mutationFeatures:
                 'cpg_ids': cpg_ids, # numpy array
                 'feat_mats': feat_mats, # dict of sparse numpy arrays
                 'feat_names': feat_names, # dict of lists
-                'target_values': target_values # dict of pandas series
+                'target_values': target_values, # dict of pandas series
+                'mad_target_values': mad_target_values # dict of pandas series
                 }
         # if mutation_features_store is not empty, add to it
         else: 
             self.mutation_features_store['feat_mats'].update(feat_mats)
             self.mutation_features_store['feat_names'].update(feat_names)
             self.mutation_features_store['target_values'].update(target_values)
+            self.mutation_features_store['mad_target_values'].update(mad_target_values)
             # append to cpg_ids numpy.ndarray
             self.mutation_features_store['cpg_ids'] = np.append(self.mutation_features_store['cpg_ids'], cpg_ids)
       

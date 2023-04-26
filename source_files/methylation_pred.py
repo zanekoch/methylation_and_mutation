@@ -22,7 +22,8 @@ class methylationPrediction:
         scramble: bool = False,
         mut_feat_store_fns: list = [],
         mut_feat_store: dict = {},
-        trained_models_fns: list = []
+        trained_models_fns: list = [],
+        target_values: str = 'target_values'
         ) -> None:
         """
         Constructor for methylationPrediction object
@@ -47,6 +48,7 @@ class methylationPrediction:
         self.test_samples = self.mut_feat_store['test_samples']
         self.cross_val_num = self.mut_feat_store['cross_val_num']
         self.model_type = model_type
+        self.target_values = target_values
         # if trained models are provided, read them in
         if len(trained_models_fns) == 0:
             self.trained_models = {}
@@ -79,7 +81,7 @@ class methylationPrediction:
                             mut_feat_store[key] = next_mut_feat_store[key]
                         else:
                             mut_feat_store[key] = mut_feat_store[key] + next_mut_feat_store[key]
-                    elif key in ['feat_mats', 'target_values']:
+                    elif key in ['feat_mats', 'target_values', 'mad_target_values', 'feat_names']:
                         if key not in mut_feat_store.keys():
                             mut_feat_store[key] = next_mut_feat_store[key]
                         else:
@@ -104,7 +106,7 @@ class methylationPrediction:
         model = self.trained_models[cpg_id]
         y_pred = model.predict(X)
         self.predictions[cpg_id] = y_pred
-        # get the number row that corresponds to the test samples in y
+        # get the number rows that corresponds to the test samples in y
         y_test_index = y.index.get_indexer(self.test_samples)
         # get predictions for test samples
         y_pred_test = y_pred[y_test_index]
@@ -147,25 +149,17 @@ class methylationPrediction:
         """       
         # for each cpg in the store, apply its trained model
         for i, cpg_id in enumerate(self.mut_feat_store['cpg_ids']):
-            if self.scramble:
-                X = self.mut_feat_store['feat_mats'][cpg_id]
-                # randomly scramble the rows of the feature matrix, but keep the same order of samples
-                save_index = X.index.copy(deep=True)
-                X = X.sample(frac=1, random_state = 0)
-                X.index = save_index
-            else:
-                if only_agg:
-                    X = self.mut_feat_store['feat_mats'][cpg_id].loc[:, self.mut_feat_store['feat_mats'][cpg_id].columns.str.contains('_') | self.mut_feat_store['feat_mats'][cpg_id].columns.str.contains('-')]
-                else:
-                    X = self.mut_feat_store['feat_mats'][cpg_id]
+            # no need to do any scrambling here, since the models are already trained 
+            X = self.mut_feat_store['feat_mats'][cpg_id] 
             # do prediction
             self.apply_one_model(
                 cpg_id = cpg_id,
-                X = X,
-                y = self.mut_feat_store['target_values'][cpg_id],
+                X = X, # 
+                y = self.mut_feat_store[self.target_values][cpg_id],
                 )
             if i % 10 == 0:
                 print(f'Predicted methylation for {i} CpGs of {len(self.mut_feat_store["cpg_ids"])}', flush=True)
+            
         self.pred_df = pd.DataFrame(self.predictions, index = self.train_samples + self.test_samples)
         self.perf_df = pd.DataFrame(self.prediction_performance).T
         return
@@ -184,6 +178,7 @@ class methylationPrediction:
         @ model_type: the type of model to train
         @ returns: None
         """
+        y = y.loc[self.train_samples]
         if self.model_type == 'elasticNet':
             model = ElasticNetCV(
                 cv=5, random_state=0, max_iter=5000,
@@ -196,11 +191,41 @@ class methylationPrediction:
         elif self.model_type == 'lasso':
             model = sklearn.linear_model.LassoCV()
         elif self.model_type == 'xgboost':
+            from sklearn.model_selection import RandomizedSearchCV
+            # Create a parameter grid for the XGBoost model
+            """param_grid = {
+                #'learning_rate': np.logspace(-4, 0, 50),
+                'n_estimators': range(10, 150, 10),
+                'max_depth': range(2, 10),
+                'min_child_weight': range(1, 6),
+                #'gamma': np.linspace(0, 0.5, 50),
+                #'subsample': np.linspace(0.5, 1, 50),
+                #'colsample_bytree': np.linspace(0.5, 1, 50),
+                #'reg_alpha': np.logspace(-4, 0, 50),
+                #'reg_lambda': np.logspace(-4, 0, 50)
+            }"""
+            # Create the XGBRegressor model
             model = xgb.XGBRegressor()
-        # get indices number of training samples from y to be able to index X
-        idx_num = [y.index.get_loc(train_sample) for train_sample in self.train_samples]
+            """# Initialize the RandomizedSearchCV object
+            random_search = RandomizedSearchCV(
+                estimator=model,
+                param_distributions=param_grid,
+                n_iter=100,  # number of parameter settings that are sampled
+                scoring='neg_mean_squared_error',
+                n_jobs=-1,
+                cv=5,
+                verbose=0,
+                random_state=42
+            )
+            # Fit the RandomizedSearchCV object to the training data
+            random_search.fit(X, y)
+            # Print the best hyperparameters
+            print("Best hyperparameters:", random_search.best_params_)
+            # Use the best estimator for predictions or further analysis
+            model = random_search.best_estimator_"""
         # fit model to training samples
-        model.fit(X[idx_num, :], y.loc[self.train_samples]) 
+        # X has already been subsetted to only contain training samples in order
+        model.fit(X, y) 
         # add to trained models dictionary
         self.trained_models[cpg_id] = model
         return
@@ -217,25 +242,57 @@ class methylationPrediction:
         """    
         # for each cpg in the store train a model
         for i, cpg_id in enumerate(self.mut_feat_store['cpg_ids']):
+            # get index of training samples from target
+            train_idx_num = [
+                self.mut_feat_store[self.target_values][cpg_id].index.get_loc(train_sample)
+                for train_sample in self.train_samples
+                ]
             if self.scramble:
+                # get the feature matrix for the cpg
                 X = self.mut_feat_store['feat_mats'][cpg_id]
-                # randomly scramble the rows of the feature matrix, but keep the same order of samples
-                save_index = X.index.copy(deep=True)
-                X = X.sample(frac=1, random_state = 0)
-                X.index = save_index
-            else:
-                if only_agg:
-                    X = self.mut_feat_store['feat_mats'][cpg_id].loc[:, self.mut_feat_store['feat_mats'][cpg_id].columns.str.contains('_') | self.mut_feat_store['feat_mats'][cpg_id].columns.str.contains('-')]
-                else:
-                    X = self.mut_feat_store['feat_mats'][cpg_id] 
+                # get column index of covariates, which are columns containing dataset or gender
+                feat_names = pd.Series(self.mut_feat_store['feat_names'][cpg_id])
+                is_covariate = feat_names.str.contains('dataset') | feat_names.str.contains('gender')
+                covariate_col_idx = feat_names.index[is_covariate].values
+                # make dense so we can scramble
+                X = X.todense()
+                # subset to only training samples
+                X_train = pd.DataFrame(X[train_idx_num, :])
+                # save covariate columns and index
+                save_covariate_cols = X_train.iloc[:, covariate_col_idx].copy(deep = True)
+                save_X_train_idx = X_train.index.copy(deep = True)
+                
+                # randomly scramble the rows of the feature matrix
+                # but keep the same order of samples and covariates
+                X_train_scrambled = X_train.sample(frac=1, random_state = 0, replace=False, axis = 0)
+                # drop covariate columns
+                X_train_scrambled.drop(covariate_col_idx, axis = 1, inplace = True)
+                # now scramble columns too
+                X_train_scrambled = X_train_scrambled.sample(frac=1, random_state = 0, replace=False, axis = 1)
+                # convert index back to original
+                X_train_scrambled.index = save_X_train_idx
+                # and add covariates back
+                X_train_scrambled = pd.concat([X_train_scrambled, save_covariate_cols], axis = 1)
+                # so now we have scrambled the mutaiton features but 
+                # kept the sample-covariates pairs the same
+                X = csr_matrix(X_train_scrambled)
+                """# assert that the covariate_col_idx columns are the same in X_train and X_train
+                # and that the other columns are different
+                assert np.all(X_train.iloc[:, covariate_col_idx].values == X_train_scrambled.iloc[:, covariate_col_idx].values)"""
+            else: # not scrambling
+                # get the feature matrix for the cpg, sparse
+                X = self.mut_feat_store['feat_mats'][cpg_id] 
+                # subset to only training samples
+                X = X[train_idx_num, :]
             # for each feature set in the store train a model
             self.train_one_model(
                 cpg_id = cpg_id,
-                X = X, # sparse matrix
-                y = self.mut_feat_store['target_values'][cpg_id]
+                X = X, # sparse matrix, subset to training samples
+                y = self.mut_feat_store[self.target_values][cpg_id] # gets subset in fxn
                 )
             if i % 10 == 0:
                 print(f"done {i} CpGs of {len(self.mut_feat_store['cpg_ids'])}", flush=True)
+            
         return
     
     def save_models_and_preds(

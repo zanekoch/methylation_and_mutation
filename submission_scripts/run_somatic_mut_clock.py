@@ -106,6 +106,8 @@ def run(
     elif consortium == "TCGA":
         all_mut_w_age_df, illumina_cpg_locs_df, all_methyl_age_df_t = read_tcga_data(dataset)
         matrix_qtl_dir = "/cellar/users/zkoch/methylation_and_mutation/data/matrixQtl_data/clumped_muts_CV"
+    generate_features = False
+    train_models = False
     if do == "Feat_gen":
         generate_features = True
     elif do == "Train_models":
@@ -148,6 +150,7 @@ def run(
         mut_feat_store_fns = [mut_feat_store_fn]
     if train_models:
         print("training models", flush=True)
+        # do non-scrambled
         methyl_pred = methylation_pred.methylationPrediction(
             mut_feat_store_fns = mut_feat_store_fns,
             model_type = model,
@@ -167,6 +170,8 @@ def run(
             methyl_pred.train_all_models()
             methyl_pred.apply_all_models()
             methyl_pred.save_models_and_preds()
+        
+        
     
 
 def main():
@@ -194,7 +199,7 @@ def main():
     # assert do has a valid value
     assert (do in ['Feat_gen', 'Train_models', 'Both']), "cannot generate features and train models at the same time"
     # if training models, need to specify a glob path to the feature files
-    if do == "train_models":
+    if do == "Train_models":
         assert (args.mut_feat_store_fns != ""), "must specify glob path to feature files if training models"    
     # expand the glob path into a list of filenames
     # may just be one file, but this still makes a list

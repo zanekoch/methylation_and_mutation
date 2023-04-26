@@ -9,7 +9,7 @@ from statsmodels.stats.weightstats import ztest as ztest
 from rich.progress import track
 import os
 import dask
-import pyarrow
+import pyarrow as pa
 import sys
 from tqdm import tqdm
 from collections import defaultdict
@@ -31,8 +31,6 @@ class analyzeComethylation:
     """
     def __init__(self):
         pass
-    
-    
     
     def get_mean_metrics_by_dist(
         self, 
@@ -80,7 +78,9 @@ class analyzeComethylation:
         mean_metrics_df, 
         metric = 'mean_dmf'
         ):
+        """
         
+        """
         # increase font size
         #sns.set_theme(style='white', font_scale=1.3, rc={'xtick.bottom': True, 'ytick.left': True})
         sns.set_context('notebook', font_scale=1.1)
@@ -90,19 +90,106 @@ class analyzeComethylation:
         sns.kdeplot(
             data=mut, x=metric, hue='Locus',
             common_norm=False, palette=[ 'maroon', 'steelblue'],
-            fill=True, ax = axes, clip = (-1, 1), common_grid=True
+            fill=True, ax = axes, clip = (-1, 1), common_grid=True, legend = False
             )
         # set xlim
-        axes.set_xlim(-.4, .4)
+        axes.set_xlim(-.2, .2)
         # write delta in geek sybol
-        axes.set_xlabel(r'Mean $\Delta$MF across locus')
+        axes.set_xlabel(r'Median $\Delta$MF across locus')
         # change legend labels
-        axes.legend(['Random', 'Mutated'], loc='upper right', title='Locus')
+        #axes.legend(['Random', 'Mutated'], loc='upper right', title='Locus')
+    
+    def add_mutation_info_to_mean_metrics_df(
+        self,
+        mean_metrics_df,
+        distance # distance for mean metrics df
+        ):
+        """
+        Read in the mutaiton info df which has all columns and merge it with the mean metrics df
         
+        @ mean_metrics_df: pd.DataFrame of the mean metrics for each mutation event within each distance
+        @ distance: distance for mean metrics df
+        @ return: pd.DataFrame of the mean metrics for each mutated sample (RC of FG) mutation event within the specified distance with additional columns such as gc_percetange, mutation type, etc.
+        """
+        VALID_MUTATIONS = ["C>A", "C>G", "C>T", "T>A", "T>C", "T>G", "G>C","G>A", "A>T", "A>G" , "A>C", "G>T", "C>-"]
+    
+        # read in mutation data
+        all_mut_all_col_df = pd.read_csv(
+            '/cellar/users/zkoch/methylation_and_mutation/data/PANCAN_mut.tsv.gz', sep = '\t'
+            )
+        all_mut_all_col_df['sample'] = all_mut_all_col_df['sample'].str[:-3]
+        all_mut_all_col_df.rename({'sample': 'case_submitter_id'}, axis = 1, inplace = True)
+        all_mut_all_col_df["mut_type"] = all_mut_all_col_df["reference"] + '>' + all_mut_all_col_df["alt"]
+        all_mut_all_col_df = all_mut_all_col_df.loc[all_mut_all_col_df["mut_type"].isin(VALID_MUTATIONS)]
+        all_mut_all_col_df['mut_event'] = all_mut_all_col_df['case_submitter_id'] + '_' + all_mut_all_col_df['chr'] + ':' + all_mut_all_col_df['start'].astype(str)
+        
+        # load reference and CGI
+        from pyfaidx import Fasta
+        reference_genome = Fasta(
+            '/cellar/users/zkoch/methylation_and_mutation/data/genome_annotations/hg19.fa'
+            )
+        cpg_islands = pd.read_csv(
+            '/cellar/users/zkoch/methylation_and_mutation/data/genome_annotations/CpG_islands_hg19.bed.gz',
+            sep = '\t', header = None
+            )
+        cpg_islands.columns = ['chr', 'start', 'end', 'name']
+        cpg_islands['chr'] = cpg_islands['chr'].str.replace('chr', '')
+        
+        # merge
+        mean_metrics_w_mut = mean_metrics_df.loc[
+            mean_metrics_df['mutated_sample']
+            #& (dist_mean_metrics_df['is_background'] == False)
+            & (mean_metrics_df['distance'] == distance)
+            ].merge(all_mut_all_col_df, left_on = 'mut_event', right_on = 'mut_event', how = 'left')
+        # map to combined mutation types
+        mean_metrics_w_mut['mut_type_combined'] = mean_metrics_w_mut['mut_type'].map({
+            'C>A': 'C>A', 'G>T': 'C>A', 
+            'C>G': 'C>G', 'G>C': 'C>G', 
+            'C>T': 'C>T', 'G>A': 'C>T', 
+            'T>A': 'T>A', 'A>T': 'T>A',
+            'T>C': 'T>C', 'A>G': 'T>C',
+            'T>G': 'T>G', 'A>C': 'T>G'})
+        # remove deletions
+        # mean_metrics_w_mut = mean_metrics_w_mut.loc[mean_metrics_w_mut['alt'] != '-']
+        # add chr and start for BG muts, and add alt as Z
+        mean_metrics_w_mut['start'] = mean_metrics_w_mut[
+            'mut_event'].str.split('_').str[1].str.split(':').str[1].astype(int)
+        mean_metrics_w_mut['chr'] = mean_metrics_w_mut[
+            'mut_event'].str.split('_').str[1].str.split(':').str[0]
+        mean_metrics_w_mut.loc[mean_metrics_w_mut['is_background'], 'alt'] = 'Z'
+        
+        # get sequences, was_cpg, becomes_cpg, is_cgi, and gc percent
+        # start - 1 is the mutated position
+        mean_metrics_w_mut['seq'] = mean_metrics_w_mut.apply(
+            lambda x: reference_genome['chr'+x['chr']][x['start']-2: x['start'] + 1].seq,
+            axis = 1)
+        # was or becomes cpg, either C or G can be removed (was_cpg) or added (becomes_cpg)
+        mean_metrics_w_mut['was_cpg'] = mean_metrics_w_mut['seq'].str.upper().str.contains('CG')
+        mean_metrics_w_mut['new_seq'] = mean_metrics_w_mut.apply(
+            lambda row: row['seq'][0] + row['alt'] + row['seq'][2],
+            axis = 1)
+        mean_metrics_w_mut['becomes_cpg'] = mean_metrics_w_mut['new_seq'].str.upper().str.contains('CG')
+        # is cgi
+        is_cgi = ((mean_metrics_w_mut['chr'].values[:, np.newaxis] == cpg_islands['chr'].values) &
+                (mean_metrics_w_mut['start'].values[:, np.newaxis] >= cpg_islands['start'].values) &
+                (mean_metrics_w_mut['start'].values[:, np.newaxis] <= cpg_islands['end'].values)).any(axis=1)
+        mean_metrics_w_mut['is_cgi'] = is_cgi
+        # also get sequence in 200bp window around each mutation 
+        mean_metrics_w_mut['seq_200bp'] = mean_metrics_w_mut.apply(
+            lambda x: reference_genome['chr'+x['chr']][x['start']-101: x['start'] + 100].seq,
+            axis = 1)
+        # get gc content in 200bp window
+        mean_metrics_w_mut['gc_perc_200bp'] = (
+            mean_metrics_w_mut['seq_200bp'].str.upper().str.count('G') \
+            + mean_metrics_w_mut['seq_200bp'].str.upper().str.count('C')
+            ) / 200
+        return mean_metrics_w_mut
+        
+    
     def plot_delta_mf_violin(
         self, 
         mean_metrics_df, 
-        metric = 'mean_dmf',
+        metric = 'median_dmf',
         axes = None
         ):
         PROPS = {
@@ -125,7 +212,7 @@ class analyzeComethylation:
             data=mut, y=metric, x = 'Locus', #split=True,
             common_norm=False, palette=['maroon', 'steelblue'],
             scale_hue=True, scale = 'area', 
-            ax = axes, cut = 0, gridsize=100,
+            ax = axes, cut = 0, gridsize=1000,
             inner = None, linewidth=0, zorder = 0,
             order = ['Mutated', 'Random']
             )
@@ -137,46 +224,15 @@ class analyzeComethylation:
             
             )
         # set xlim
-        axes.set_ylim(-.4, .4)
+        axes.set_ylim(-.15, .15)
         # write delta in geek sybol
         axes.set_ylabel(r'Median $\Delta$MF across locus')
         axes.set_xlabel('Locus')
         
         # change legend labels and colors 
-        axes.legend(['Random', 'Mutated'], loc='lower center', title='Locus')
-    
-        # mannwhitneyu test between mutated and random
-        # get the data
-        """mutated = mut.loc[mut.Locus == 'Mutated', metric]
-        random = mut.loc[mut.Locus == 'Random', metric]
-        u, p = stats.mannwhitneyu(mutated, random, alternative='two-sided')
-        print(f"p-value: {p}")
-        print(f"u-statistic: {u}")
-        print(f"mutated median: {mutated.median()}")
-        print(f"random median: {random.median()}\n")
-        # mwu of abs values
-        print("absolute mwu")
-        mutated = mut.loc[mut.Locus == 'Mutated', 'mean_abs_dmf']
-        random = mut.loc[mut.Locus == 'Random', 'mean_abs_dmf']
-        u, p = stats.mannwhitneyu(mutated, random, alternative='two-sided')
-        print(f"p-value: {p}")
-        print(f"u-statistic: {u}")
-        print(f"mutated median: {mutated.median()}")
-        print(f"random median: {random.median()}\n")
-        
-        # test normality
-        print("normality tests:")
-        print(f"mutated: {stats.normaltest(mutated)}")
-        print(f"random: {stats.normaltest(random)}\n")
-        # also do ttest 
-        t, p = stats.ttest_ind(mutated, random, equal_var=False)
-        print("t-test:")
-        print(f"p-value: {p}")
-        print(f"t-statistic: {t}")
-        print(f"mutated mean: {mutated.mean()}")
-        print(f"random mean: {random.mean()}")"""
-        
-        
+        axes.legend([], [], frameon=False)
+        #axes.legend(['Random', 'Mutated'], loc='lower center', title='Locus')
+
     def plot_delta_mf_boxplots(
         self,
         mean_metrics_df, 
@@ -212,10 +268,10 @@ class analyzeComethylation:
         num_bins,
         min_dist,
         max_dist,
-        method = 'dist'
+        method = 'dist',
+        log_scale = False
         ):
         sns.set_context('notebook', font_scale=1.1)
-        #sns.set_theme(style='white', font_scale=1.3, rc={'xtick.bottom': True, 'ytick.left': True})
         # make bigger figure
         plt.figure(figsize=(6,4), dpi=100)
         # subset
@@ -224,15 +280,30 @@ class analyzeComethylation:
         if method == 'dist':
             min_dist = int(min_dist / 1000)
             max_dist = int(max_dist / 1000)
-        # do binning
-        mut_events['dist_bin'] = pd.cut(
-            mut_events['measured_site_dist'],
-            bins = num_bins,
-            labels = [ 
-                      '[' + str(x) + ',' + str(x + int((max_dist - min_dist) / num_bins)) + ')' 
-                        for x in range(min_dist, max_dist, int((max_dist - min_dist) / num_bins))
-                        ]
+        
+        if log_scale:
+            # Generate log-scaled bin edges
+            bin_edges = np.logspace(np.log10(min_dist+1), np.log10(max_dist), num_bins + 1)
+            # Assign data to bins
+            mut_events['dist_bin'] = pd.cut(
+                mut_events['measured_site_dist'],
+                bins=bin_edges,
+                labels=[
+                    '[' + str(round(bin_edges[i], 2)) + ',' + str(round(bin_edges[i + 1], 2)) + ')'
+                    for i in range(num_bins)
+                ],
+                include_lowest=True
             )
+        else:
+            # do binning
+            mut_events['dist_bin'] = pd.cut(
+                mut_events['measured_site_dist'],
+                bins = num_bins,
+                labels = [ 
+                        '[' + str(x) + ',' + str(x + int((max_dist - min_dist) / num_bins)) + ')' 
+                            for x in range(min_dist, max_dist, int((max_dist - min_dist) / num_bins))
+                            ]
+                )
         # rename
         mut_events = mut_events.rename(columns={'is_background': 'Locus'})
         # map Mutaiton event column values
@@ -245,7 +316,8 @@ class analyzeComethylation:
             hue = 'Locus', showfliers = False, 
             palette=['steelblue', 'maroon']
         )
-        #plt.legend(['Randomized control', 'Actual mutation'], title='Mutation event')
+        # do not plot legend
+        plt.legend([], [], frameon=False)
         # angle x labels
         plt.xticks(rotation=30)
         if method == 'dist':
@@ -273,7 +345,6 @@ class analyzeComethylation:
         comparison_site_distances = comparison_sites_starts['start'] - mut_cpg_start
         return comparison_site_distances.values.tolist()
 
-    
     def plot_heatmap_dist(
         self, 
         mut_event: str, 
@@ -342,9 +413,9 @@ class analyzeComethylation:
              utils.half(matched_samples[:int(max_matched_samples)], 'second'))
             )
         
-        """comparison_sites = comparison_sites[10:-26]
+        comparison_sites = comparison_sites[10:-37]
         print(distances[10])
-        print(distances[-27])"""
+        print(distances[-37])
         # get mf of the comparison sites
         all_samples_comp_sites = all_methyl_age_df_t.loc[samples_to_plot, comparison_sites]
         if rolling_window_size > 1:
@@ -390,11 +461,47 @@ class analyzeComethylation:
         # make the mutated site label red
         axes.xaxis.get_majorticklabels()[1].set_color('red')
 
+        from matplotlib.colors import LinearSegmentedColormap
+        import matplotlib
+        
+        """cmap_segments = [
+            (0.0, matplotlib.colors.to_rgba("blue", alpha=0.0)),
+            (0.1, matplotlib.colors.to_rgba("blue", alpha=0.1)),
+            (0.2, matplotlib.colors.to_rgba("blue", alpha=0.2)),
+            (0.3, matplotlib.colors.to_rgba("blue", alpha=0.4)),
+            
+            (0.4, matplotlib.colors.to_rgba("blue", alpha=0.45)),
+            (0.5, matplotlib.colors.to_rgba("blue", alpha=0.5)),
+            (0.6, matplotlib.colors.to_rgba("blue", alpha=0.55)),
+            (0.7, matplotlib.colors.to_rgba("blue", alpha=0.6)),
+            
+            (0.8, matplotlib.colors.to_rgba("blue", alpha=0.7)),
+            (0.9, matplotlib.colors.to_rgba("blue", alpha=0.8)),
+            (1.0, matplotlib.colors.to_rgba("blue", alpha=1.0)),
+        ]
+
+        cmap = LinearSegmentedColormap.from_list("white_midnightblue_alpha", cmap_segments)"""
+
+        cmap_segments = [
+            (0.0, "white"),
+            (0.2, "aliceblue"),
+            (0.3, "lightskyblue"),
+            (0.4, "skyblue"),
+            (0.5, "deepskyblue"),
+            (0.8, "dodgerblue"),
+            (0.9, "mediumblue"),
+            (1.0, "midnightblue"),
+        ]
+        # Create the colormap
+        cmap = LinearSegmentedColormap.from_list("white_blue_very_dark_blue", cmap_segments, N =256)
+
+
+
         # plot MF
         _, axes = plt.subplots(figsize=(9,6), dpi=100)
         ax = sns.heatmap(
             data = all_samples_comp_sites, annot=False, xticklabels=False, yticklabels=True, 
-            cmap="Blues", vmin=0, vmax=1, center=0.5,
+            cmap=cmap, vmin=0, vmax=1, center=0.5,
             cbar_kws={'label': r'Methylation fraction'}, ax=axes
             )
         # label axes
@@ -1560,13 +1667,20 @@ class mutationScan:
                         )
                 print(f"{comparison_sites_df.shape[0]} mutation events total (background and foreground) to be processed", flush=True)
             # convert comparison_sites_df to dask and write to multiple parquet files
-            comparison_sites_dd = dask.dataframe.from_pandas(comparison_sites_df, npartitions = 100)
+            comparison_sites_dd = dask.dataframe.from_pandas(comparison_sites_df, npartitions = 25)
             comparison_sites_fn = os.path.join(
                 out_dir, "comparison_sites_{}-{}Muts_{}-linked_qnorm3SD_{}background".format(
                 start_num_mut_to_process, end_num_mut_to_process, linkage_method, self.num_background_events
                     )
                 )
-            comparison_sites_dd.to_parquet(comparison_sites_fn, engine = 'pyarrow', schema='infer')
+            comparison_sites_dd.to_parquet(
+                comparison_sites_fn, engine = 'pyarrow',
+                schema={
+                    "comparison_sites": pa.list_(pa.string()),
+                    "comparison_dists": pa.list_(pa.int64()),
+                    "matched_samples": pa.list_(pa.string())
+                    }
+                )
             print(f"Wrote comparison sites df to {comparison_sites_fn}", flush=True)
             
         # PHASE 2: compare methylation fractions at comparison sites
@@ -1584,5 +1698,5 @@ class mutationScan:
                 )
             )
         all_metrics_dd.to_parquet(all_metrics_fn, engine = 'pyarrow')
-        print(f"writing results to {all_metrics_fn}", flush=True)
+        print(f"Wrote results to {all_metrics_fn}", flush=True)
         return comparison_sites_df, all_metrics_df

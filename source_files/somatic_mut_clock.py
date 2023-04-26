@@ -14,6 +14,104 @@ from sklearn.linear_model import ElasticNetCV, RidgeCV, LinearRegression, SGDReg
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.svm import SVR
 import xgboost as xgb
+import glob
+
+
+class optimizeSomage:
+    """
+    Take in multiple mutationClock objects and compare them to find the best model
+    and hyperparameters
+    """
+    def __init__(
+        self,
+        results_dir: str, 
+        model_dirs: list,
+        all_methyl_age_df_t: pd.DataFrame,
+        illumina_cpg_locs_df: pd.DataFrame,
+        train_samples: list,
+        test_samples: list,
+        tissue_type: str,
+        top_dataset_n: int = 20,
+        ):
+        """
+        @ results_dir: the directory where the trained models are saved
+        @ model_dirs: list of the sub-directories where the trained models are saved
+        @ all_methyl_age_df_t: the dataframe of all the methylation ages
+        @ illumina_cpg_locs_df: the dataframe of the locations of the CpGs
+        @ train_samples: the list of training samples (from mut_feat)
+        @ test_samples: the list of testing samples (from mut_feat)
+        @ tissue_type: the tissue type to use for the analysis
+        @ top_dataset_n: the number of datasets to use for the analysis, by sample num
+        """
+        self.somages = []
+        # iterate through the model directories and create mutationClock objects
+        for model_dir in model_dirs:
+            predicted_methyl_fns =  glob.glob(
+                os.path.join(
+                    results_dir,
+                    model_dir,
+                    "methyl_predictions_xgboost_Falsescramble.parquet")
+                )
+            predicted_perf_fns = glob.glob(
+                os.path.join(
+                    results_dir,
+                    model_dir, 
+                    "prediction_performance_xgboost_Falsescramble.parquet")
+                )
+            trained_models_fns = glob.glob(
+                os.path.join(
+                    results_dir,
+                    model_dir, 
+                    "trained_models_xgboost_Falsescramble.pkl")
+                )
+            feature_mat_fns = glob.glob(
+                os.path.join(
+                    results_dir,
+                    model_dir,
+                    "*features.pkl")
+                )
+            somage = mutationClock(
+                predicted_methyl_fns = predicted_methyl_fns, 
+                predicted_perf_fns = predicted_perf_fns,
+                all_methyl_age_df_t = all_methyl_age_df_t,
+                illumina_cpg_locs_df = illumina_cpg_locs_df,
+                output_dir = "",
+                train_samples = train_samples,
+                test_samples = test_samples,
+                tissue_type = tissue_type,
+                trained_models_fns = trained_models_fns,
+                feature_mat_fns = feature_mat_fns
+                )
+            somage.populate_performance()
+            somage.performance_by_dataset()
+            self.somages.append(somage)
+            print("Finished loading soMage object for {}".format(model_dir))
+        self.all_methyl_age_df_t = all_methyl_age_df_t
+        self.illumina_cpg_locs_df = illumina_cpg_locs_df
+        self.train_samples = train_samples
+        self.test_samples = test_samples
+        self.top_datasets = self.all_methyl_age_df_t['dataset'].value_counts().index[:top_dataset_n]
+
+    def top_corr_by_dataset(
+        self,
+        top_cpg_num: int,
+        metric: str
+        ) -> list:
+        """
+        For each somage object, select the top top_cpg_num cpgs, based on metric, within each dataset and get the mean value of the metric across this CpGs for each dataset
+        @ returns: a df of the mean metric values within each dataset for each somage object, columns indexed in same order as self.somages
+        """
+        mean_metrics = []
+        for somage in self.somages:
+            # get mean metric for the highest top_cpg_num cpgs within each dataset
+            mean_metric_by_dset = somage.performance_by_dataset_df.groupby("dataset").apply(
+                lambda x: x.sort_values(
+                    metric, ascending = False
+                    ).head(top_cpg_num)[metric].mean(axis = 0)
+                )
+            mean_metrics.append(mean_metric_by_dset)
+        mean_metrics_df = pd.concat(mean_metrics, axis = 1)
+        return mean_metrics_df
 
 
 class mutationClock:
@@ -83,12 +181,86 @@ class mutationClock:
                         self.feature_mats.update(this_feat_dict)
                         first = False
                     else:
-                        minor_dicts_to_update = ['feat_mats', 'target_values']
+                        minor_dicts_to_update = ['feat_mats', 'target_values', 'feat_names']
                         for minor_dict in minor_dicts_to_update:
                             self.feature_mats[minor_dict].update(this_feat_dict[minor_dict])
                             
-        
-    def _populate_performance(self):
+    def performance_by_dataset(self):
+        """
+        Get the performance of the models by dataset
+        """
+        top_20_datasets = self.all_methyl_age_df_t['dataset'].value_counts().index[:20]
+        dataset_perf_dfs = []
+        for dataset in top_20_datasets:
+            # get the correlation between actual testing sample methylation
+            # and predicted testing sample methylation from this dataset
+            this_dataset_test_samples = self.all_methyl_age_df_t.loc[
+                self.all_methyl_age_df_t['dataset'] == dataset, 
+                :].index
+            this_dataset_test_samples = list(
+                set(this_dataset_test_samples).intersection(set(self.test_samples))
+                )
+            real_methyl_df = self.all_methyl_age_df_t.loc[
+                this_dataset_test_samples, 
+                self.predicted_methyl_df.columns
+                ]
+            pred_methyl_df = self.predicted_methyl_df.loc[
+                this_dataset_test_samples, 
+                :]
+            # also get training 
+            this_dataset_train_samples = self.all_methyl_age_df_t.loc[
+                self.all_methyl_age_df_t['dataset'] == dataset, 
+                :].index
+            this_dataset_train_samples = list(
+                set(this_dataset_train_samples).intersection(set(self.train_samples))
+                )
+            real_methyl_df_train = self.all_methyl_age_df_t.loc[
+                this_dataset_train_samples, 
+                self.predicted_methyl_df.columns
+                ]
+            pred_methyl_df_train = self.predicted_methyl_df.loc[
+                this_dataset_train_samples, 
+                :]
+            # get the correlation
+            dataset_pearson = real_methyl_df.corrwith(pred_methyl_df, method = 'pearson')
+            dataset_spearman = real_methyl_df.corrwith(pred_methyl_df, method = 'spearman')
+            dataset_mae = np.mean(np.abs(real_methyl_df - pred_methyl_df), axis = 0)
+            train_dataset_spearman = real_methyl_df_train.corrwith(
+                pred_methyl_df_train, method = 'spearman'
+                )            
+            # also get correlation between testing sample methylation and age
+            this_dataset_test_age_df = self.all_methyl_age_df_t.loc[
+                this_dataset_test_samples, 
+                'age_at_index'
+                ]
+            this_dataset_train_age_df = self.all_methyl_age_df_t.loc[
+                this_dataset_train_samples, 
+                'age_at_index'
+                ]
+            dataset_age_pearson = pred_methyl_df.corrwith(this_dataset_test_age_df, method = 'pearson').abs()
+            dataset_age_spearman = pred_methyl_df.corrwith(this_dataset_test_age_df, method = 'spearman').abs()
+            train_dataset_age_spearman = pred_methyl_df_train.corrwith(
+                this_dataset_train_age_df, method = 'spearman'
+                ).abs()
+            # create dataframe
+            dataset_perf_df = pd.DataFrame({
+                'AvP_methyl_pearson': dataset_pearson,
+                'AvP_methyl_spearman': dataset_spearman,
+                'train_AvP_methyl_spearman': train_dataset_spearman,
+                'AvP_methyl_mae': dataset_mae,
+                'abs_Pmethyl_v_Age_pearson': dataset_age_pearson,
+                'abs_Pmethyl_v_Age_spearman': dataset_age_spearman,
+                'train_abs_Pmethyl_v_Age_spearman': train_dataset_age_spearman
+                }, index = self.predicted_methyl_df.columns)
+            dataset_perf_df['dataset'] = dataset
+            dataset_perf_dfs.append(dataset_perf_df)
+        all_dataset_perf_df = pd.concat(dataset_perf_dfs)
+        # make cpg a column
+        all_dataset_perf_df.reset_index(inplace = True)
+        all_dataset_perf_df.rename(columns = {'index':'cpg'}, inplace = True)
+        self.performance_by_dataset_df = all_dataset_perf_df
+    
+    def populate_performance(self):
         """
         Add interesting column to self.performance_df
         """
@@ -113,6 +285,48 @@ class mutationClock:
         # and actual testing samples with age
         self.performance_df['testing_real_mf_age_spearmanr'] = self.all_methyl_age_df_t.loc[self.test_samples, self.performance_df.index].corrwith(self.all_methyl_age_df_t.loc[self.test_samples, 'age_at_index'], method='spearman')
     
+    def plot_real_vs_predicted_methylation(
+        self, 
+        cpg: str, 
+        dataset: str = "", 
+        sample_set: str = "test"
+        ):
+        if sample_set == "test":
+            samples = self.test_samples
+        elif sample_set == "train":
+            samples = self.train_samples
+        else: # both
+            samples = self.test_samples + self.train_samples
+        
+        if dataset == "":
+            predicted_values = self.predicted_methyl_df.loc[samples, cpg]
+            actual_values = self.all_methyl_age_df_t.loc[samples, cpg]
+        else:
+            # subset samples to only those in the dataset
+            dset_samples = self.all_methyl_age_df_t.loc[self.all_methyl_age_df_t['dataset'] == dataset, :].index
+            samples = list(set(samples) & set(dset_samples))
+            predicted_values = self.predicted_methyl_df.loc[samples, cpg]
+            actual_values = self.all_methyl_age_df_t.loc[samples, cpg]
+        # plot scatterplot of predicted vs actual
+        fig, axes = plt.subplots(figsize=(6, 4))
+        if dataset != "":
+            sns.scatterplot(
+                y=predicted_values, x=actual_values,
+                ax=axes, hue = self.all_methyl_age_df_t.loc[samples, 'age_at_index']
+                )
+        else:
+            sns.scatterplot(
+                y=predicted_values, x=actual_values,
+                ax=axes, hue = self.all_methyl_age_df_t.loc[samples, 'dataset']
+                )
+        axes.set_ylabel(f'Predicted Methylation {cpg}')
+        axes.set_xlabel(f'Actual Methylation {cpg}')
+        # change legend title
+        axes.legend(title='Age')
+        # y = x line based on min and max values
+        min_val = min(min(predicted_values), min(actual_values))
+        max_val = max(max(predicted_values), max(actual_values))
+        axes.plot([min_val, max_val], [min_val, max_val], color='black')
     
     def _combine_fns(
         self,
@@ -150,7 +364,8 @@ class mutationClock:
     def train_epi_clock(
         self,
         X, 
-        y
+        y,
+        model_type: str = 'elasticnet'
         ) -> None:
         """
         Trains an epigenetic clock to predict chronological age from cpg methylation
@@ -164,11 +379,16 @@ class mutationClock:
         #model = xgb.XGBRegressor()
         # model = RandomForestRegressor(n_estimators=1000, max_depth=100, n_jobs=-1, verbose=1)
         
-        # Create an ElasticNetCV object
-        model = ElasticNetCV(
-            cv=5, random_state=0, max_iter=10000,
-            selection = 'random', n_jobs=-1, verbose=0
-            )
+        if model_type == 'elasticnet':
+            # Create an ElasticNetCV object
+            model = ElasticNetCV(
+                cv=5, random_state=0, max_iter=10000,
+                selection = 'random', n_jobs=-1, verbose=0
+                )
+        elif model_type == 'xgboost':
+            model = xgb.XGBRegressor()
+        else:
+            raise ValueError("model_type must be 'elasticnet' or 'xgboost'")
         model.fit(X, y)
         return model
         # write the model to a .pkl file in output_dir

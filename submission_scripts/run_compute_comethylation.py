@@ -38,15 +38,15 @@ all_mut_w_age_df, all_methyl_age_df_t = utils.add_ages_to_mut_and_methyl(
     all_mut_df, all_meta_df, all_methyl_df_t
     )
 
-"""if linkage_method == 'corr':
-    c_path = f"/cellar/users/zkoch/methylation_and_mutation/output_dirs/032423_comethyl_output/correl_based_1000Top_no_mutMF/comparison_sites_{start_num_mut_to_process}-{end_num_mut_to_process}Muts_correl-linked_qnorm3SD_100background"
+if linkage_method == 'corr':
+    c_path = f"/cellar/users/zkoch/methylation_and_mutation/output_dirs/032423_comethyl_output/correl_based_1000Top_no_mutMF/comparison_sites_{start_num_mut_to_process}-{end_num_mut_to_process}Muts_corr-linked_qnorm3SD_100background"
     all_comparison_site_dd = dd.read_parquet(c_path)
     all_comparison_site_df = all_comparison_site_dd.compute()
 else:
     c_path = f"/cellar/users/zkoch/methylation_and_mutation/output_dirs/032423_comethyl_output/distance_based_100kbMax/comparison_sites_{start_num_mut_to_process}-{end_num_mut_to_process}Muts_dist-linked_qnorm3SD_100background"
     all_comparison_site_dd = dd.read_parquet(c_path)
     all_comparison_site_df = all_comparison_site_dd.compute()
-print("read in comparison sites", flush=True)"""
+print("read in comparison sites", flush=True)
 
 #meqtls = pd.read_parquet(meqtl_fn)
 
@@ -64,5 +64,5 @@ comparison_sites_df_test, all_metrics_df_test = mut_scan.look_for_disturbances(
     linkage_method = linkage_method, 
     out_dir = out_dir, 
     corr_direction = 'pos',
-    #comparison_sites_df = all_comparison_site_df
+    comparison_sites_df = all_comparison_site_df
     )
