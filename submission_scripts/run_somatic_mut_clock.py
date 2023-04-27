@@ -149,18 +149,18 @@ def run(
             )
         mut_feat_store_fns = [mut_feat_store_fn]
     if train_models:
-        print("training models", flush=True)
-        # do non-scrambled
-        methyl_pred = methylation_pred.methylationPrediction(
-            mut_feat_store_fns = mut_feat_store_fns,
-            model_type = model,
-            scramble = False
-            )
-        methyl_pred.train_all_models()
-        methyl_pred.apply_all_models()
-        methyl_pred.save_models_and_preds()
-        # also do scrambled
-        if scramble:
+        if scramble == 'Both':
+            print("training models scrambled and nonscrambled", flush=True)
+            # do non-scrambled
+            methyl_pred = methylation_pred.methylationPrediction(
+                mut_feat_store_fns = mut_feat_store_fns,
+                model_type = model,
+                scramble = False
+                )
+            methyl_pred.train_all_models()
+            methyl_pred.apply_all_models()
+            methyl_pred.save_models_and_preds()
+            # scrambled
             methyl_pred = methylation_pred.methylationPrediction(
                 mut_feat_store_fns = mut_feat_store_fns,
                 model_type = model,
@@ -170,6 +170,31 @@ def run(
             methyl_pred.train_all_models()
             methyl_pred.apply_all_models()
             methyl_pred.save_models_and_preds()
+        elif scramble == 'True':
+            print("training models scrambled ", flush=True)
+            
+            methyl_pred = methylation_pred.methylationPrediction(
+                mut_feat_store_fns = mut_feat_store_fns,
+                model_type = model,
+                scramble = True
+                #trained_models_fns = [trained_models_fn]
+                )
+            methyl_pred.train_all_models()
+            methyl_pred.apply_all_models()
+            methyl_pred.save_models_and_preds()
+        else:
+            print("training models non-scrambled", flush=True)
+            
+            # do non-scrambled
+            methyl_pred = methylation_pred.methylationPrediction(
+                mut_feat_store_fns = mut_feat_store_fns,
+                model_type = model,
+                scramble = False
+                )
+            methyl_pred.train_all_models()
+            methyl_pred.apply_all_models()
+            methyl_pred.save_models_and_preds()
+        
         
         
     
@@ -186,7 +211,7 @@ def main():
     parser.add_argument('--start_top_cpgs', type=int, help='index of top cpgs to start with', default=0)
     parser.add_argument('--end_top_cpgs', type=int, help='index of top cpgs to end with', default=0)
     parser.add_argument('--aggregate', type=str, help='False, True, or Both', default="Both")
-    parser.add_argument('--scramble' , type=bool, help='whether to scramble the mutation data', default=False)
+    parser.add_argument('--scramble' , type=str, help='whether to scramble the mutation data', default='False')
     parser.add_argument('--model', type=str, help='xgboost or elasticNet', default="xgboost")
     parser.add_argument('--burden_bin_size', type=int, help='bin size for burden test', default=25000)
     parser.add_argument('--num_correl_sites', type=int, help='num_correl_sites', default=50)

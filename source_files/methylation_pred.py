@@ -149,8 +149,21 @@ class methylationPrediction:
         """       
         # for each cpg in the store, apply its trained model
         for i, cpg_id in enumerate(self.mut_feat_store['cpg_ids']):
-            # no need to do any scrambling here, since the models are already trained 
-            X = self.mut_feat_store['feat_mats'][cpg_id] 
+            if self.scramble:
+                # get the feature matrix for the cpg
+                X = self.mut_feat_store['feat_mats'][cpg_id]
+                # make dense so we can scramble
+                X = pd.DataFrame(X.todense())
+                # scramble the feature matrix
+                X_scrambled = self.do_scramble(X, cpg_id)
+                X = csr_matrix(X_scrambled)
+                """# assert that the covariate_col_idx columns are the same in X_train and X_train
+                # and that the other columns are different
+                assert np.all(X_train.iloc[:, covariate_col_idx].values == X_train_scrambled.iloc[:, covariate_col_idx].values)"""
+            else: # not scrambling
+                # get the feature matrix for the cpg, sparse
+                X = self.mut_feat_store['feat_mats'][cpg_id] 
+
             # do prediction
             self.apply_one_model(
                 cpg_id = cpg_id,
@@ -159,7 +172,7 @@ class methylationPrediction:
                 )
             if i % 10 == 0:
                 print(f'Predicted methylation for {i} CpGs of {len(self.mut_feat_store["cpg_ids"])}', flush=True)
-            
+
         self.pred_df = pd.DataFrame(self.predictions, index = self.train_samples + self.test_samples)
         self.perf_df = pd.DataFrame(self.prediction_performance).T
         return
@@ -230,6 +243,47 @@ class methylationPrediction:
         self.trained_models[cpg_id] = model
         return
     
+    def do_scramble(
+        self, 
+        X_train: pd.DataFrame, 
+        cpg_id: str
+        ):
+        """
+        Scramble the non-covariate rows and columns of the feature matrix
+        @ X_train: the feature matrix for the CpG site
+        @ cpg_id: the id of the CpG site
+        """
+        # get column index of covariates, which are columns containing dataset or gender
+        feat_names = pd.Series(self.mut_feat_store['feat_names'][cpg_id])
+        is_covariate = feat_names.str.contains('dataset') | feat_names.str.contains('gender')
+        covariate_cols = feat_names.index[is_covariate].values
+        # save covariate columns and sample order
+        save_covariate_cols = X_train.iloc[:, covariate_cols].copy(deep = True)
+        save_X_train_idx = X_train.index.copy(deep = True)
+        
+        # drop covariate columns
+        X_train_scrambled = X_train.drop(covariate_cols, axis = 1).copy(deep = True)
+        # randomly select values from 
+        def scramble_dataframe(df):
+            vals = df.values
+            # shuffle vals and every sub array
+            np.random.shuffle(vals)
+            for i in range(vals.shape[0]):
+                np.random.shuffle(vals[i])
+            scrambled_df = pd.DataFrame(vals, index = df.index, columns = df.columns)
+            return scrambled_df
+        X_train_scrambled = scramble_dataframe(X_train_scrambled)
+        
+        """X_train_scrambled = X_train_scrambled.sample(frac=1, axis=1, random_state=42, replace = False).sample(frac=1, axis=0, random_state=42, replace = False)"""
+        
+        # reset columns
+        X_train_scrambled.columns = np.arange(X_train_scrambled.shape[1])
+        # convert index back to original
+        X_train_scrambled.index = save_X_train_idx
+        # and add covariates back
+        X_train_scrambled = pd.concat([X_train_scrambled, save_covariate_cols], axis = 1)
+        return X_train_scrambled
+    
     def train_all_models(
         self, 
         only_agg: bool = False
@@ -250,31 +304,12 @@ class methylationPrediction:
             if self.scramble:
                 # get the feature matrix for the cpg
                 X = self.mut_feat_store['feat_mats'][cpg_id]
-                # get column index of covariates, which are columns containing dataset or gender
-                feat_names = pd.Series(self.mut_feat_store['feat_names'][cpg_id])
-                is_covariate = feat_names.str.contains('dataset') | feat_names.str.contains('gender')
-                covariate_col_idx = feat_names.index[is_covariate].values
                 # make dense so we can scramble
                 X = X.todense()
                 # subset to only training samples
                 X_train = pd.DataFrame(X[train_idx_num, :])
-                # save covariate columns and index
-                save_covariate_cols = X_train.iloc[:, covariate_col_idx].copy(deep = True)
-                save_X_train_idx = X_train.index.copy(deep = True)
-                
-                # randomly scramble the rows of the feature matrix
-                # but keep the same order of samples and covariates
-                X_train_scrambled = X_train.sample(frac=1, random_state = 0, replace=False, axis = 0)
-                # drop covariate columns
-                X_train_scrambled.drop(covariate_col_idx, axis = 1, inplace = True)
-                # now scramble columns too
-                X_train_scrambled = X_train_scrambled.sample(frac=1, random_state = 0, replace=False, axis = 1)
-                # convert index back to original
-                X_train_scrambled.index = save_X_train_idx
-                # and add covariates back
-                X_train_scrambled = pd.concat([X_train_scrambled, save_covariate_cols], axis = 1)
-                # so now we have scrambled the mutaiton features but 
-                # kept the sample-covariates pairs the same
+                # scramble the feature matrix
+                X_train_scrambled = self.do_scramble(X_train, cpg_id)
                 X = csr_matrix(X_train_scrambled)
                 """# assert that the covariate_col_idx columns are the same in X_train and X_train
                 # and that the other columns are different
@@ -292,7 +327,6 @@ class methylationPrediction:
                 )
             if i % 10 == 0:
                 print(f"done {i} CpGs of {len(self.mut_feat_store['cpg_ids'])}", flush=True)
-            
         return
     
     def save_models_and_preds(

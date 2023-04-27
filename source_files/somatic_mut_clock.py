@@ -7,7 +7,7 @@ import pickle
 import matplotlib.pyplot as plt
 import time
 import seaborn as sns
-
+from sklearn.metrics import mutual_info_score
 from sklearn.model_selection import cross_validate, KFold
 from sklearn.metrics import mean_absolute_error, r2_score
 from sklearn.linear_model import ElasticNetCV, RidgeCV, LinearRegression, SGDRegressor
@@ -15,6 +15,7 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.svm import SVR
 import xgboost as xgb
 import glob
+
 
 
 class optimizeSomage:
@@ -189,16 +190,21 @@ class mutationClock:
         """
         Get the performance of the models by dataset
         """
-        top_20_datasets = self.all_methyl_age_df_t['dataset'].value_counts().index[:20]
+        top_20_datasets = self.all_methyl_age_df_t['dataset'].value_counts().index[:20].to_list()
+        # remove certain vals from top_20_datasets
+        for dset in top_20_datasets:
+            if dset == 'BRCA' or dset == 'LGG' or dset == 'THCA' or dset == 'LAML' or dset == 'KIRC' or dset == 'KIRP' or dset == 'SARC' or dset =='THCA' or dset =='LIHC' or dset =='LUSC' or dset =='CESC' or dset == 'SARC':
+                top_20_datasets.remove(dset) 
+        print(top_20_datasets)
         dataset_perf_dfs = []
         for dataset in top_20_datasets:
             # get the correlation between actual testing sample methylation
             # and predicted testing sample methylation from this dataset
-            this_dataset_test_samples = self.all_methyl_age_df_t.loc[
+            this_dataset_samples = self.all_methyl_age_df_t.loc[
                 self.all_methyl_age_df_t['dataset'] == dataset, 
                 :].index
             this_dataset_test_samples = list(
-                set(this_dataset_test_samples).intersection(set(self.test_samples))
+                set(this_dataset_samples).intersection(set(self.test_samples))
                 )
             real_methyl_df = self.all_methyl_age_df_t.loc[
                 this_dataset_test_samples, 
@@ -207,12 +213,9 @@ class mutationClock:
             pred_methyl_df = self.predicted_methyl_df.loc[
                 this_dataset_test_samples, 
                 :]
-            # also get training 
-            this_dataset_train_samples = self.all_methyl_age_df_t.loc[
-                self.all_methyl_age_df_t['dataset'] == dataset, 
-                :].index
+            # also get training samples
             this_dataset_train_samples = list(
-                set(this_dataset_train_samples).intersection(set(self.train_samples))
+                set(this_dataset_samples).intersection(set(self.train_samples))
                 )
             real_methyl_df_train = self.all_methyl_age_df_t.loc[
                 this_dataset_train_samples, 
@@ -221,13 +224,24 @@ class mutationClock:
             pred_methyl_df_train = self.predicted_methyl_df.loc[
                 this_dataset_train_samples, 
                 :]
-            # get the correlation
+            
+            # get the correlation and mutual informaiton
             dataset_pearson = real_methyl_df.corrwith(pred_methyl_df, method = 'pearson')
             dataset_spearman = real_methyl_df.corrwith(pred_methyl_df, method = 'spearman')
             dataset_mae = np.mean(np.abs(real_methyl_df - pred_methyl_df), axis = 0)
+            # get mutual informaiton using sklearn
+            try:
+                dataset_mi = mutual_info_score(real_methyl_df, pred_methyl_df)
+            except:
+                dataset_mi = np.nan
+            try:
+                train_dataset_mi = mutual_info_score(real_methyl_df_train, pred_methyl_df_train)
+            except:
+                train_dataset_mi = np.nan
+                
             train_dataset_spearman = real_methyl_df_train.corrwith(
                 pred_methyl_df_train, method = 'spearman'
-                )            
+                )   
             # also get correlation between testing sample methylation and age
             this_dataset_test_age_df = self.all_methyl_age_df_t.loc[
                 this_dataset_test_samples, 
@@ -242,18 +256,23 @@ class mutationClock:
             train_dataset_age_spearman = pred_methyl_df_train.corrwith(
                 this_dataset_train_age_df, method = 'spearman'
                 ).abs()
+            
             # create dataframe
             dataset_perf_df = pd.DataFrame({
                 'AvP_methyl_pearson': dataset_pearson,
                 'AvP_methyl_spearman': dataset_spearman,
+                'AvP_methyl_mi': dataset_mi,
+                'train_AvP_methyl_mi': train_dataset_mi,
                 'train_AvP_methyl_spearman': train_dataset_spearman,
                 'AvP_methyl_mae': dataset_mae,
                 'abs_Pmethyl_v_Age_pearson': dataset_age_pearson,
                 'abs_Pmethyl_v_Age_spearman': dataset_age_spearman,
-                'train_abs_Pmethyl_v_Age_spearman': train_dataset_age_spearman
+                'train_abs_Pmethyl_v_Age_spearman': train_dataset_age_spearman,
+
                 }, index = self.predicted_methyl_df.columns)
             dataset_perf_df['dataset'] = dataset
             dataset_perf_dfs.append(dataset_perf_df)
+            print("done with dataset: " + dataset, flush = True)
         all_dataset_perf_df = pd.concat(dataset_perf_dfs)
         # make cpg a column
         all_dataset_perf_df.reset_index(inplace = True)
@@ -291,6 +310,7 @@ class mutationClock:
         dataset: str = "", 
         sample_set: str = "test"
         ):
+        sns.set_context("notebook", font_scale=1.1)
         if sample_set == "test":
             samples = self.test_samples
         elif sample_set == "train":
@@ -309,16 +329,35 @@ class mutationClock:
             actual_values = self.all_methyl_age_df_t.loc[samples, cpg]
         # plot scatterplot of predicted vs actual
         fig, axes = plt.subplots(figsize=(6, 4))
+        fig2, axes2 = plt.subplots(figsize=(6, 4))
         if dataset != "":
             sns.scatterplot(
                 y=predicted_values, x=actual_values,
                 ax=axes, hue = self.all_methyl_age_df_t.loc[samples, 'age_at_index']
                 )
+            pred_act_df = pd.DataFrame({
+                'Methylation fraction': predicted_values.to_list() + actual_values.to_list(), 
+                'Age': self.all_methyl_age_df_t.loc[samples, 'age_at_index'].to_list()* 2, 
+                'Type': ['Predicted']*len(predicted_values) + ['Actual']*len(actual_values)
+                })
+            sns.scatterplot(
+                y='Methylation fraction', x='Age',
+                ax=axes2, hue = 'Type', data=pred_act_df,
+            )
         else:
             sns.scatterplot(
                 y=predicted_values, x=actual_values,
                 ax=axes, hue = self.all_methyl_age_df_t.loc[samples, 'dataset']
                 )
+            pred_act_df = pd.DataFrame({
+                'Methylation fraction': predicted_values.to_list() + actual_values.to_list(), 
+                'Age': self.all_methyl_age_df_t.loc[samples, 'age_at_index'].to_list()* 2, 
+                'Type': ['Predicted']*len(predicted_values) + ['Actual']*len(actual_values)
+                })
+            sns.scatterplot(
+                y='Methylation fraction', x='Age',
+                ax=axes2, hue = 'Type', data=pred_act_df,
+            )
         axes.set_ylabel(f'Predicted Methylation {cpg}')
         axes.set_xlabel(f'Actual Methylation {cpg}')
         # change legend title
@@ -373,23 +412,50 @@ class mutationClock:
         @ y: a series of chronological ages for the samples
         @ return: the trained model
         """
-        # X = self.all_methyl_age_df_t.loc[samples, cpgs]
-        #y = self.all_methyl_age_df_t.loc[samples, 'age_at_index']
-        #X = self.predicted_methyl_df.loc[samples, cpgs]
-        #model = xgb.XGBRegressor()
-        # model = RandomForestRegressor(n_estimators=1000, max_depth=100, n_jobs=-1, verbose=1)
-        
+        from sklearn.model_selection import RandomizedSearchCV
         if model_type == 'elasticnet':
             # Create an ElasticNetCV object
             model = ElasticNetCV(
                 cv=5, random_state=0, max_iter=10000,
                 selection = 'random', n_jobs=-1, verbose=0
                 )
+            model.fit(X, y)
         elif model_type == 'xgboost':
+            """# Create a parameter grid for the XGBoost model
+            param_grid = {
+                'learning_rate': np.logspace(-4, 0, 50),
+                'n_estimators': range(100, 500, 100),
+                'max_depth': range(3, 10),
+                'min_child_weight': range(1, 6),
+                'gamma': np.linspace(0, 0.5, 50),
+                'subsample': np.linspace(0.5, 1, 50),
+                'colsample_bytree': np.linspace(0.5, 1, 50),
+                'reg_alpha': np.logspace(-4, 0, 50),
+                'reg_lambda': np.logspace(-4, 0, 50)
+            }
+            # Create the XGBRegressor model
             model = xgb.XGBRegressor()
+            # Initialize the RandomizedSearchCV object
+            random_search = RandomizedSearchCV(
+                estimator=model,
+                param_distributions=param_grid,
+                n_iter=100,  # number of parameter settings that are sampled
+                scoring='neg_mean_absolute_error',
+                n_jobs=-1,
+                cv=5,
+                verbose=0,
+                random_state=42
+            )
+            # Fit the RandomizedSearchCV object to the training data
+            random_search.fit(X, y)
+            # Print the best hyperparameters
+            print("Best hyperparameters:", random_search.best_params_)
+            # Use the best estimator for predictions or further analysis
+            model = random_search.best_estimator_ """
+            model = xgb.XGBRegressor()
+            model.fit(X, y)
         else:
             raise ValueError("model_type must be 'elasticnet' or 'xgboost'")
-        model.fit(X, y)
         return model
         # write the model to a .pkl file in output_dir
         #out_fn = os.path.join(self.output_dir, f"{self.tissue_type}_{len(cpgs)}numCpgsMostAgeCorr_trained_epiClock.pkl")
