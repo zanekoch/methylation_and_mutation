@@ -79,7 +79,8 @@ def run(
     start_top_cpgs: int, 
     end_top_cpgs: int,
     mut_feat_params: dict,
-    scramble: bool,
+    train_baseline: str,
+    train_actual_model:str,
     model: str,
     mut_feat_store_fns: list,
     ) -> None:
@@ -94,7 +95,8 @@ def run(
     @ end_top_cpgs: end of range of top cpgs to use
     @ mut_feat_params: dictionary of mutation feature parameters
     @ aggregate: feature aggregation strategy True, False, or Both
-    @ scramble: whether to scramble the methylation data
+    @ train_baseline: whether to scramble, cov_only, or none for baseline
+    @ train_actual_model: whether to train the actual, non-baseline, model
     @ model: model to use
     @ mut_feat_store_fns: list of mutation feature store filenames
     @ returns: None
@@ -149,55 +151,53 @@ def run(
             )
         mut_feat_store_fns = [mut_feat_store_fn]
     if train_models:
-        if scramble == 'Both':
-            print("training models scrambled and nonscrambled", flush=True)
+        # there are 3 options: train baseline, train actual model, or both
+        # both
+        if train_actual_model == 'True' and train_baseline != 'none':
+            print(f"training actual model and {train_baseline} baseline", flush=True)
+            # do actual model
+            methyl_pred = methylation_pred.methylationPrediction(
+                mut_feat_store_fns = mut_feat_store_fns,
+                model_type = model,
+                baseline = "none"
+                )
+            methyl_pred.train_all_models()
+            methyl_pred.apply_all_models()
+            methyl_pred.save_models_and_preds()
+            # baseline
+            methyl_pred = methylation_pred.methylationPrediction(
+                mut_feat_store_fns = mut_feat_store_fns,
+                model_type = model,
+                baseline = train_baseline
+                )
+            methyl_pred.train_all_models()
+            methyl_pred.apply_all_models()
+            methyl_pred.save_models_and_preds()
+        elif train_actual_model == 'True' and train_baseline == 'none':
+            print("training actual model and not baseline ", flush=True)
+            methyl_pred = methylation_pred.methylationPrediction(
+                mut_feat_store_fns = mut_feat_store_fns,
+                model_type = model,
+                baseline = "none"
+                )
+            methyl_pred.train_all_models()
+            methyl_pred.apply_all_models()
+            methyl_pred.save_models_and_preds()
+        elif train_actual_model == 'False' and train_baseline != 'none':
+            print(f"training only {train_baseline} baseline", flush=True)
             # do non-scrambled
             methyl_pred = methylation_pred.methylationPrediction(
                 mut_feat_store_fns = mut_feat_store_fns,
                 model_type = model,
-                scramble = False
-                )
-            methyl_pred.train_all_models()
-            methyl_pred.apply_all_models()
-            methyl_pred.save_models_and_preds()
-            # scrambled
-            methyl_pred = methylation_pred.methylationPrediction(
-                mut_feat_store_fns = mut_feat_store_fns,
-                model_type = model,
-                scramble = True
-                #trained_models_fns = [trained_models_fn]
-                )
-            methyl_pred.train_all_models()
-            methyl_pred.apply_all_models()
-            methyl_pred.save_models_and_preds()
-        elif scramble == 'True':
-            print("training models scrambled ", flush=True)
-            
-            methyl_pred = methylation_pred.methylationPrediction(
-                mut_feat_store_fns = mut_feat_store_fns,
-                model_type = model,
-                scramble = True
-                #trained_models_fns = [trained_models_fn]
+                baseline = train_baseline
                 )
             methyl_pred.train_all_models()
             methyl_pred.apply_all_models()
             methyl_pred.save_models_and_preds()
         else:
-            print("training models non-scrambled", flush=True)
-            
-            # do non-scrambled
-            methyl_pred = methylation_pred.methylationPrediction(
-                mut_feat_store_fns = mut_feat_store_fns,
-                model_type = model,
-                scramble = False
-                )
-            methyl_pred.train_all_models()
-            methyl_pred.apply_all_models()
-            methyl_pred.save_models_and_preds()
-        
-        
-        
-    
+            print(f"{train_baseline} and {train_actual_model} are not a valid combination",
+                  flush=True
+                  )
 
 def main():
     # parse arguments 
@@ -211,7 +211,8 @@ def main():
     parser.add_argument('--start_top_cpgs', type=int, help='index of top cpgs to start with', default=0)
     parser.add_argument('--end_top_cpgs', type=int, help='index of top cpgs to end with', default=0)
     parser.add_argument('--aggregate', type=str, help='False, True, or Both', default="Both")
-    parser.add_argument('--scramble' , type=str, help='whether to scramble the mutation data', default='False')
+    parser.add_argument('--train_baseline' , type=str, help='whether to use a baseline, if so scrambled or cov_only [scramble, cov_only, both, none]', default='none')
+    parser.add_argument('--train_actual_model', type=str, help='whether to train the actual non-baseline model [True, False]', default='True')
     parser.add_argument('--model', type=str, help='xgboost or elasticNet', default="xgboost")
     parser.add_argument('--burden_bin_size', type=int, help='bin size for burden test', default=25000)
     parser.add_argument('--num_correl_sites', type=int, help='num_correl_sites', default=50)
@@ -235,7 +236,8 @@ def main():
     out_dir = args.out_dir
     start_top_cpgs = args.start_top_cpgs
     end_top_cpgs = args.end_top_cpgs
-    scramble = args.scramble
+    train_baseline = args.train_baseline
+    train_actual_model = args.train_actual_model
     model = args.model
     if model not in ['xgboost', 'elasticNet']:
         raise ValueError("model must be xgboost or elasticNet")
@@ -247,12 +249,13 @@ def main():
         'nearby_window_size' : args.nearby_window_size, 'extend_amount' : args.extend_amount
     }
     print(mut_feat_params)
+    print(model)
     run(
         do = do,
         consortium = consortium, dataset = dataset, cross_val_num = cross_val_num,
         out_dir = out_dir, start_top_cpgs = start_top_cpgs,
         end_top_cpgs = end_top_cpgs, mut_feat_params = mut_feat_params,
-        scramble = scramble, model = model, mut_feat_store_fns = mut_feat_store_fns
+        train_baseline = train_baseline, train_actual_model = train_actual_model, model = model, mut_feat_store_fns = mut_feat_store_fns
         )
         
 

@@ -15,7 +15,7 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.svm import SVR
 import xgboost as xgb
 import glob
-
+from scipy.stats import spearmanr, pearsonr
 
 
 class optimizeSomage:
@@ -114,7 +114,6 @@ class optimizeSomage:
         mean_metrics_df = pd.concat(mean_metrics, axis = 1)
         return mean_metrics_df
 
-
 class mutationClock:
     """
     Train epigenetic clocks on predicted methylation and actual methylation, comparing
@@ -193,7 +192,7 @@ class mutationClock:
         top_20_datasets = self.all_methyl_age_df_t['dataset'].value_counts().index[:20].to_list()
         # remove certain vals from top_20_datasets
         for dset in top_20_datasets:
-            if dset == 'BRCA' or dset == 'LGG' or dset == 'THCA' or dset == 'LAML' or dset == 'KIRC' or dset == 'KIRP' or dset == 'SARC' or dset =='THCA' or dset =='LIHC' or dset =='LUSC' or dset =='CESC' or dset == 'SARC':
+            if dset == 'BRCA' or dset == 'LGG' or dset == 'THCA' or dset == 'LAML' or dset == 'KIRC' or dset == 'KIRP' or dset == 'SARC' or dset =='THCA' or dset =='LIHC' or dset =='LUSC' or dset =='CESC' or dset == 'SARC' or dset == 'CESC' or dset == 'THCA' or dset == 'LUAD':
                 top_20_datasets.remove(dset) 
         print(top_20_datasets)
         dataset_perf_dfs = []
@@ -224,51 +223,62 @@ class mutationClock:
             pred_methyl_df_train = self.predicted_methyl_df.loc[
                 this_dataset_train_samples, 
                 :]
-            
             # get the correlation and mutual informaiton
             dataset_pearson = real_methyl_df.corrwith(pred_methyl_df, method = 'pearson')
             dataset_spearman = real_methyl_df.corrwith(pred_methyl_df, method = 'spearman')
             dataset_mae = np.mean(np.abs(real_methyl_df - pred_methyl_df), axis = 0)
-            # get mutual informaiton using sklearn
-            try:
-                dataset_mi = mutual_info_score(real_methyl_df, pred_methyl_df)
-            except:
-                dataset_mi = np.nan
-            try:
-                train_dataset_mi = mutual_info_score(real_methyl_df_train, pred_methyl_df_train)
-            except:
-                train_dataset_mi = np.nan
-                
-            train_dataset_spearman = real_methyl_df_train.corrwith(
-                pred_methyl_df_train, method = 'spearman'
-                )   
-            # also get correlation between testing sample methylation and age
+            real_methyl_df_rounded = np.round(real_methyl_df)
+            pred_methyl_df_rounded = np.round(pred_methyl_df)
+            dataset_mi = real_methyl_df_rounded.apply(
+                lambda col: mutual_info_score(col, pred_methyl_df_rounded[col.name]), axis=0
+                )
             this_dataset_test_age_df = self.all_methyl_age_df_t.loc[
                 this_dataset_test_samples, 
                 'age_at_index'
                 ]
+            dataset_age_pearson = pred_methyl_df.corrwith(this_dataset_test_age_df, method = 'pearson').abs()
+            dataset_age_spearman = pred_methyl_df.corrwith(this_dataset_test_age_df, method = 'spearman').abs()
+            methyl_age_mi = pred_methyl_df_rounded.apply(
+                lambda col: mutual_info_score(col, this_dataset_test_age_df), axis=0
+                )
+            # same for training samples
+            train_dataset_pearson = real_methyl_df_train.corrwith(
+                pred_methyl_df_train, method = 'pearson'
+                ) 
+            train_dataset_spearman = real_methyl_df_train.corrwith(
+                pred_methyl_df_train, method = 'spearman'
+                ) 
+            real_methyl_df_train_rounded = np.round(real_methyl_df_train)
+            pred_methyl_df_train_rounded = np.round(pred_methyl_df_train)
+            train_dataset_mi = real_methyl_df_train_rounded.apply(
+                lambda col: mutual_info_score(col, pred_methyl_df_train_rounded[col.name]), axis=0
+                )      
             this_dataset_train_age_df = self.all_methyl_age_df_t.loc[
                 this_dataset_train_samples, 
                 'age_at_index'
                 ]
-            dataset_age_pearson = pred_methyl_df.corrwith(this_dataset_test_age_df, method = 'pearson').abs()
-            dataset_age_spearman = pred_methyl_df.corrwith(this_dataset_test_age_df, method = 'spearman').abs()
             train_dataset_age_spearman = pred_methyl_df_train.corrwith(
                 this_dataset_train_age_df, method = 'spearman'
                 ).abs()
+            train_methyl_age_mi = pred_methyl_df_train_rounded.apply(
+                lambda col: mutual_info_score(col, this_dataset_train_age_df), axis=0
+                ) 
             
             # create dataframe
             dataset_perf_df = pd.DataFrame({
                 'AvP_methyl_pearson': dataset_pearson,
                 'AvP_methyl_spearman': dataset_spearman,
                 'AvP_methyl_mi': dataset_mi,
-                'train_AvP_methyl_mi': train_dataset_mi,
-                'train_AvP_methyl_spearman': train_dataset_spearman,
                 'AvP_methyl_mae': dataset_mae,
-                'abs_Pmethyl_v_Age_pearson': dataset_age_pearson,
-                'abs_Pmethyl_v_Age_spearman': dataset_age_spearman,
-                'train_abs_Pmethyl_v_Age_spearman': train_dataset_age_spearman,
-
+                'Pmethyl_v_Age_pearson_abs': dataset_age_pearson,
+                'Pmethyl_v_Age_spearman_abs': dataset_age_spearman,
+                'Pmethyl_v_Age_mi': methyl_age_mi,
+                # train
+                'train_AvP_methyl_pearson': train_dataset_pearson,
+                'train_AvP_methyl_spearman': train_dataset_spearman,
+                'train_AvP_methyl_mi': train_dataset_mi,
+                'train_Pmethyl_v_Age_spearman_abs': train_dataset_age_spearman,
+                'train_Pmethyl_v_Age_mi': train_methyl_age_mi
                 }, index = self.predicted_methyl_df.columns)
             dataset_perf_df['dataset'] = dataset
             dataset_perf_dfs.append(dataset_perf_df)
@@ -303,6 +313,66 @@ class mutationClock:
         self.performance_df['testing_pred_mf_age_spearmanr'] = self.predicted_methyl_df.loc[self.test_samples, :].corrwith(self.all_methyl_age_df_t.loc[self.test_samples, 'age_at_index'], method='spearman')
         # and actual testing samples with age
         self.performance_df['testing_real_mf_age_spearmanr'] = self.all_methyl_age_df_t.loc[self.test_samples, self.performance_df.index].corrwith(self.all_methyl_age_df_t.loc[self.test_samples, 'age_at_index'], method='spearman')
+    
+    def get_model_and_feat_names(self, cpg_name):
+        """
+        For a given CpG name, return the trained model object and the feature names
+        """
+        model = self.trained_models[cpg_name]
+        feat_names = self.feature_mats['feat_names'][cpg_name]
+        return model, feat_names
+    
+    def get_feat_score_by_cat(self, model, feat_names, importance_type = 'gain'):
+        """
+        Get the feature importances from model of feat_names and assign each feature to the 
+        category it came from.
+        """
+        import re
+        
+        importances = model.get_booster().get_score(importance_type = importance_type)
+        
+        index_to_name = {f'f{i}': name for i, name in enumerate(feat_names)}
+        importance_with_names = {index_to_name.get(key, key): value for key, value in importances.items()}
+        
+        # make a dataframe of the feature importances and names
+        feat_imp_df = pd.DataFrame(importance_with_names, index = ['importance']).T.reset_index()
+        feat_imp_df.rename(columns = {'index':'feat_name'}, inplace = True)
+        
+        def name_to_cat(feat_name):
+            """
+            Given a feature name, return a category name
+            """
+            if feat_name[:7] == 'dataset':
+                return 'dataset'
+            elif feat_name[:6] == 'gender':
+                return 'gender'
+            elif re.search(r'ext|corr', feat_name):
+                # if it starts with a number
+                if re.search(r'^\d+', feat_name):
+                    return 'specific_' + '_'.join(feat_name.split('_')[1:])
+                else:
+                    return feat_name
+            # if ends with tesselated, nested
+            elif re.search(r'tesselated|nested', feat_name):
+                # if it starts with a number
+                if re.search(r'^\d+', feat_name):
+                    return  'specific_' + feat_name.split('_')[-1]
+                else:
+                    return feat_name
+            # if has no numbers or :, return the whole string
+            elif not re.search(r'\d+:\d+', feat_name) and not re.search(r'\d+:\d+-\w+', feat_name):
+                return feat_name
+            # if onyl contains a number on either size of :, return loci_nearby
+            elif re.search(r'\d+:\d+', feat_name):
+                return 'Nearby locus'
+            else:
+                return "confused_" + feat_name
+    
+        # based on the feat_name, set category column
+        feat_imp_df['category'] = feat_imp_df['feat_name'].apply(name_to_cat)
+        
+        return feat_imp_df
+        
     
     def plot_real_vs_predicted_methylation(
         self, 
@@ -439,7 +509,7 @@ class mutationClock:
             random_search = RandomizedSearchCV(
                 estimator=model,
                 param_distributions=param_grid,
-                n_iter=100,  # number of parameter settings that are sampled
+                n_iter=1000,  # number of parameter settings that are sampled
                 scoring='neg_mean_absolute_error',
                 n_jobs=-1,
                 cv=5,
@@ -451,17 +521,12 @@ class mutationClock:
             # Print the best hyperparameters
             print("Best hyperparameters:", random_search.best_params_)
             # Use the best estimator for predictions or further analysis
-            model = random_search.best_estimator_ """
+            model = random_search.best_estimator_"""
             model = xgb.XGBRegressor()
             model.fit(X, y)
         else:
             raise ValueError("model_type must be 'elasticnet' or 'xgboost'")
         return model
-        # write the model to a .pkl file in output_dir
-        #out_fn = os.path.join(self.output_dir, f"{self.tissue_type}_{len(cpgs)}numCpgsMostAgeCorr_trained_epiClock.pkl")
-        """with open(out_fn, 'wb') as f:
-            pickle.dump(model, f)"""
-        
    
     def apply_epi_clock(
         self,
@@ -474,3 +539,125 @@ class mutationClock:
         @ returns: a series of predicted ages
         """
         return model.predict(X)
+    
+    def scan_for_best_clock(
+        self,
+        datasets: list,
+        cpg_choosing_metrics: list,
+        number_of_cpgs: list,
+        training_methylation_types: list,
+        train_sets: list,
+        model_types: list,
+        train_tissues: list
+        ):
+        """
+        Scan through all combinations of parameters to find the best clock for each dataset
+        @ datasets: a list of datasets to use
+        @ cpg_choosing_metrics: a list of metrics to use to choose the top cpgs
+        @ number_of_cpgs: a list of number of cpgs to use
+        @ training_methylation_types: [pred, actual]
+        @ train_sets: [train, test]
+        @ model_types: a list of model types to use
+        @ train_tissues: [self, all_others]
+        """
+        # based on length of lists, print number of iterations that will be performed
+        iters = len(datasets) * len(cpg_choosing_metrics) * len(number_of_cpgs) * len(training_methylation_types) * len(train_sets) * len(model_types) * len(train_tissues)
+        print(f"doing {iters} iterations")
+        i = 0
+        results = []
+        # track nested for loop progress based on expected iters 
+        for dataset in datasets:
+            for cpg_choosing_metric in cpg_choosing_metrics:
+                for number_of_cpg in number_of_cpgs:
+                    for training_methylation_type in training_methylation_types:
+                        for train_set in train_sets:
+                            for model_type in model_types:
+                                for train_tissue in train_tissues:
+                                    # get the top CpGs from this dataset based on the metric
+                                    top_cpgs = self.performance_by_dataset_df.query(
+                                        "dataset == @dataset").sort_values(
+                                            by = cpg_choosing_metric, ascending = False).head(
+                                                number_of_cpg)['cpg'].to_list()
+                                    # get this datasets sample's
+                                    this_dset_samples = self.all_methyl_age_df_t.loc[
+                                        self.all_methyl_age_df_t['dataset'] == dataset, :
+                                            ].index.tolist()
+                                    this_dset_test_samples = list(
+                                        set(this_dset_samples).intersection(set(self.test_samples))
+                                        )
+                                    # if we are using the tissue being predicted to train
+                                    if train_tissue == "self":
+                                        # select this tissue's training samples
+                                        chosen_train_samples = list(
+                                            set(this_dset_samples).intersection(set(self.train_samples))
+                                            )
+                                    elif train_tissue == "all_others":
+                                        # otherwise select all other tissue's training samples
+                                        all_other_dset_samples = self.all_methyl_age_df_t.loc[
+                                            self.all_methyl_age_df_t['dataset'] != dataset, :
+                                                ].index.tolist()
+                                        chosen_train_samples = list(
+                                            set(all_other_dset_samples).intersection(set(self.train_samples))
+                                            )
+                                    else: # train_tissue == some specific dataset
+                                        if train_tissue == dataset:
+                                            continue
+                                        # otherwise select all other tissue's training samples
+                                        other_specific_dset_samples = self.all_methyl_age_df_t.loc[
+                                            self.all_methyl_age_df_t['dataset'] != train_tissue, :
+                                                ].index.tolist()
+                                        chosen_train_samples = list(
+                                            set(all_other_dset_samples).intersection(set(self.train_samples))
+                                            )
+                            
+                                    
+                                    # get the methyl data to use for training, predicted or actual
+                                    methyl_to_use = self.predicted_methyl_df \
+                                                    if training_methylation_type != "actual" \
+                                                    else self.all_methyl_age_df_t
+                                                    
+                                    # if we are using actual methyl, we can choose either train or test
+                                    if training_methylation_type == "actual":
+                                        # we can choose either train or test
+                                        train_samples = this_dset_test_samples \
+                                                    if train_set == "test" \
+                                                    else chosen_train_samples
+                                    # otherwise, we have to use the training samples            
+                                    elif training_methylation_type == "pred":
+                                        train_samples = chosen_train_samples
+                                        # set train_set to reflect
+                                        train_set = "train"
+
+                                    X_train = methyl_to_use.loc[train_samples, top_cpgs]
+                                    y_train = self.all_methyl_age_df_t.loc[train_samples, 'age_at_index']
+                                    X_test = self.predicted_methyl_df.loc[this_dset_test_samples, top_cpgs]
+                                    y_test = self.all_methyl_age_df_t.loc[this_dset_test_samples, 'age_at_index'] 
+                                    
+                                    #train clock
+                                    trained_clock = self.train_epi_clock(
+                                        X_train, y_train, model_type = model_type
+                                        )
+                                    # apply clock
+                                    y_pred = trained_clock.predict(X_test)
+                                    p = pearsonr(y_test, y_pred)[0]
+                                    s = spearmanr(y_test, y_pred)[0]
+                                    
+                                    # add everything to the results dict
+                                    this_results = {
+                                        "dataset": dataset,
+                                        "cpg_choosing_metric": cpg_choosing_metric,
+                                        "number_of_cpg": number_of_cpg,
+                                        "training_methylation_type": training_methylation_type,
+                                        "train_set": train_set,
+                                        "model_type": model_type,
+                                        "train_tissue": train_tissue,
+                                        "pearson": p,
+                                        "spearman": s,
+                                        "trained_clock": trained_clock,
+                                        "y_pred": y_pred,
+                                        "y_test": y_test
+                                    }
+                                    i += 1
+                                    results.append(this_results)
+                        print(f"Done {i / iters}")
+        return pd.DataFrame(results).sort_values('pearson', ascending = False)

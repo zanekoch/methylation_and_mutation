@@ -512,8 +512,7 @@ class mutationFeatures:
             agg_feat_mat = agg()
             tesselated_nearby_feats = get_tesselated_nearby_feats()
             nested_nearby_feats = get_nested_nearby_feats()
-            feat_mat = pd.merge(feat_mat, agg_feat_mat, left_index=True, right_index=True)
-            feat_mat = pd.merge(feat_mat, tesselated_nearby_feats, left_index=True, right_index=True)
+            feat_mat = pd.merge(agg_feat_mat, tesselated_nearby_feats, left_index=True, right_index=True)
             if nested_nearby_feats is not None:
                 feat_mat = pd.merge(feat_mat, nested_nearby_feats, left_index=True, right_index=True)
         else:

@@ -65,7 +65,6 @@ rule create_folds:
   shell:
     "python {snake_source_dir}/train_test_split.py --num_folds {NUM_FOLDS} --covariate_fn {input.cov_fn} --out_dir {out_dir} "
   
-
 rule piv_and_clump_mutations:
   """
   Pivot and optionally clump mutations and write to files
@@ -95,7 +94,6 @@ rule matrixQTL:
     os.path.join(out_dir, "muts_fold_{fold}_partition_{partition_num}.meqtl")
   shell:
     "Rscript {snake_source_dir}/run_matrixQTL.R {input.muts_fn} {input.methyl_fn} {input.cov_fn} {wildcards.partition_num} {NUM_MATRIXQTL_PARTITIONS}"
-
 
 rule group_meqtls:
   """

@@ -93,7 +93,6 @@ def compare_mf_mutated_sample_vs_avg(mutation_in_measured_cpg_df, out_dir, all_m
     # output plots of avg vs not as seaborn kde's
     sns.set_context('notebook', font_scale=1.1)
     
-    fig, axes = plt.subplots(dpi=100, figsize=(8,5), facecolor="white")
     non_mutated_methyl_df_t = all_methyl_df_t.loc[:, ~all_methyl_df_t.columns.isin(mutation_in_measured_cpg_df['#id'])]
     
     # limit to only big DNA_VAF mutations
@@ -107,10 +106,25 @@ def compare_mf_mutated_sample_vs_avg(mutation_in_measured_cpg_df, out_dir, all_m
     
     to_plot_df.columns = ['Methylation Fraction']
     to_plot_df['Type'] = ['Non mutated CpGs'] * len(mutation_in_measured_cpg_df['avg_methyl_frac']) +  ['Mutated CpGs'] * len(mutation_in_measured_cpg_df['methyl_fraction']) + ['Site of no CpG mutation'] * len(non_mutated_methyl_df_t.mean(axis=0))
-    # seaborn kde plot
+    # all together
+    fig, axes = plt.subplots(dpi=100, figsize=(8,5), facecolor="white")
     p = sns.kdeplot(
         data=to_plot_df, x='Methylation Fraction', hue='Type', fill=True,
         common_norm=False, clip=[0,1], palette = ['steelblue', 'maroon', 'grey'], 
+        ax=axes, legend=False
+        )
+    # just Non mutated CpGs vs Site of no CpG mutation
+    fig, axes = plt.subplots(dpi=100, figsize=(8,5), facecolor="white")
+    p = sns.kdeplot(
+        data=to_plot_df[to_plot_df['Type'].isin(['Non mutated CpGs', 'Site of no CpG mutation'])], x='Methylation Fraction', hue='Type', fill=True,
+        common_norm=False, clip=[0,1], palette = ['steelblue', 'grey'], 
+        ax=axes, legend=False
+        )
+    # just Site of no CpG mutation
+    fig, axes = plt.subplots(dpi=100, figsize=(8,5), facecolor="white")
+    p = sns.kdeplot(
+        data=to_plot_df[to_plot_df['Type'].isin(['Site of no CpG mutation'])], x='Methylation Fraction', hue='Type', fill=True,
+        common_norm=False, clip=[0,1], palette = ['grey'], 
         ax=axes, legend=False
         )
 
@@ -201,11 +215,11 @@ def methylation_fraction_comparison(
     mut_in_measured_cpg_w_methyl_age_df = mut_in_measured_cpg_w_methyl_age_df.dropna(subset=['age_at_index'])
     
     # get means 
-    mut_in_measured_cpg_w_methyl_age_df = get_same_age_tissue_means(
+    """mut_in_measured_cpg_w_methyl_age_df = get_same_age_tissue_means(
         mut_in_measured_cpg_w_methyl_age_df, all_methyl_age_df_t, age_bin_size = age_bin_size
-        )
+        )"""
     # old way
-    """mut_in_measured_cpg_w_methyl_age_df['avg_methyl_frac'] = all_methyl_df_t[mut_in_measured_cpg_w_methyl_age_df['#id']].mean().values"""
+    mut_in_measured_cpg_w_methyl_age_df['avg_methyl_frac'] = all_methyl_df_t[mut_in_measured_cpg_w_methyl_age_df['#id']].mean().values
 
     # get difference between mean and mutated sample
     mut_in_measured_cpg_w_methyl_age_df['difference'] = mut_in_measured_cpg_w_methyl_age_df['methyl_fraction'] - mut_in_measured_cpg_w_methyl_age_df['avg_methyl_frac']

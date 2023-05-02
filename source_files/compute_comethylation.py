@@ -49,17 +49,43 @@ class analyzeComethylation:
         mean_metric_by_dist_dfs = []
         for dist in absolute_distances:
             # subset to only sites within the distance
-            subset_df = all_metrics_df[all_metrics_df['measured_site_dist'].abs() <= dist]
+            subset_df = all_metrics_df.loc[all_metrics_df['measured_site_dist'].abs() <= dist]
             # group by mutation event and sample
             grouped_subset_df = subset_df.groupby(['mut_event', 'sample'])
+            
             # get the mean and median of the delta_mf_median and abs_delta_mf_median
             mean_by_sample = grouped_subset_df[['delta_mf_median', 'abs_delta_mf_median']].mean()
             mean_by_sample.columns = ['mean_dmf', 'mean_abs_dmf']
             median_by_sample = grouped_subset_df[['delta_mf_median','abs_delta_mf_median']].median()
             median_by_sample.columns = ['median_dmf', 'median_abs_dmf']
+            
+            # get weighted means
+            # linear
+            weighted_mean_by_sample = grouped_subset_df.apply(
+                lambda x: np.average(x['delta_mf_median'], weights=(1/x['measured_site_dist'].abs()))
+                ).to_frame().rename(columns={0: 'weighted_mean_dmf'})
+            abs_weighted_mean_by_sample = grouped_subset_df.apply(
+                lambda x: np.average(x['abs_delta_mf_median'], weights=(1/x['measured_site_dist'].abs()))
+                ).to_frame().rename(columns={0: 'weighted_mean_abs_dmf'})
+            # log
+            log_weighted_mean_by_sample = grouped_subset_df.apply(
+                lambda x: np.average(x['delta_mf_median'], weights=(1/np.log(x['measured_site_dist'].abs())))
+                ).to_frame().rename(columns={0: 'log_weighted_mean_dmf'})
+            log_abs_weighted_mean_by_sample = grouped_subset_df.apply(
+                lambda x: np.average(x['abs_delta_mf_median'], weights=(1/np.log(x['measured_site_dist'].abs())))
+                ).to_frame().rename(columns={0: 'log_weighted_mean_dmf'})
+            # gaussian
+            gaussian_weighted_mean_by_sample = grouped_subset_df.apply(
+                lambda x: np.average(x['delta_mf_median'], weights=(stats.norm.pdf(x['measured_site_dist'].abs()))))
+            
             # merge mean and median dfs
             mean_metrics_df = mean_by_sample.merge(median_by_sample, left_index=True, right_index=True)
             mean_metrics_df['distance'] = dist
+            # merge weighted mean and median
+            mean_metrics_df = mean_metrics_df.merge(weighted_mean_by_sample, left_index=True, right_index=True)
+            mean_metrics_df = mean_metrics_df.merge(abs_weighted_mean_by_sample, left_index=True, right_index=True)
+            mean_metrics_df = mean_metrics_df.merge(log_weighted_mean_by_sample, left_index=True, right_index=True)
+            mean_metrics_df = mean_metrics_df.merge(log_abs_weighted_mean_by_sample, left_index=True, right_index=True)
             mean_metric_by_dist_dfs.append(mean_metrics_df)
             print(f"finished distance: {dist}", flush = True)
         # combine all the mean metrics dfs
@@ -71,12 +97,14 @@ class analyzeComethylation:
             mut_event_to_background_map[['is_background', 'index_event', 'mutated_sample']], 
             left_index=True, right_index=True
             )
-        return mean_metrics_by_dist_df.reset_index()
+        mean_metrics_by_dist_df = mean_metrics_by_dist_df.reset_index()
+        return mean_metrics_by_dist_df
     
     def plot_delta_mf_kdeplot(
         self, 
         mean_metrics_df, 
-        metric = 'mean_dmf'
+        metric,
+        axes
         ):
         """
         
@@ -84,16 +112,18 @@ class analyzeComethylation:
         # increase font size
         #sns.set_theme(style='white', font_scale=1.3, rc={'xtick.bottom': True, 'ytick.left': True})
         sns.set_context('notebook', font_scale=1.1)
-        fig, axes = plt.subplots(figsize=(8, 3.5), dpi = 100)
+        #fig, axes = plt.subplots(figsize=(8, 3.5), dpi = 100)
         mut = mean_metrics_df.loc[mean_metrics_df.mutated_sample == True]
         mut = mut.rename(columns={'is_background': 'Locus'})#.replace({'Mutation event': {True: 'BG mutated samples', False: 'FG mutated samples'}})
         sns.kdeplot(
             data=mut, x=metric, hue='Locus',
-            common_norm=False, palette=[ 'maroon', 'steelblue'],
-            fill=True, ax = axes, clip = (-1, 1), common_grid=True, legend = False
+            common_norm=False, palette=['maroon', 'steelblue'],
+            fill=True, ax = axes, clip = (-1, 1), common_grid=True, legend = False,
+            gridsize=1000
             )
         # set xlim
         axes.set_xlim(-.2, .2)
+        #axes.set_yscale('log')
         # write delta in geek sybol
         axes.set_xlabel(r'Median $\Delta$MF across locus')
         # change legend labels
