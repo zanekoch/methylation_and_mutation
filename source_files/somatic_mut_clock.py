@@ -181,7 +181,7 @@ class mutationClock:
                         self.feature_mats.update(this_feat_dict)
                         first = False
                     else:
-                        minor_dicts_to_update = ['feat_mats', 'target_values', 'feat_names']
+                        minor_dicts_to_update = ['feat_mats', 'target_values', 'mad_target_values', 'feat_names']
                         for minor_dict in minor_dicts_to_update:
                             self.feature_mats[minor_dict].update(this_feat_dict[minor_dict])
                             
@@ -196,7 +196,8 @@ class mutationClock:
                 top_20_datasets.remove(dset) 
         print(top_20_datasets)
         dataset_perf_dfs = []
-        for dataset in top_20_datasets:
+        for dataset in ['COAD', 'SKCM']:# top_20_datasets:
+            
             # get the correlation between actual testing sample methylation
             # and predicted testing sample methylation from this dataset
             this_dataset_samples = self.all_methyl_age_df_t.loc[
@@ -205,6 +206,7 @@ class mutationClock:
             this_dataset_test_samples = list(
                 set(this_dataset_samples).intersection(set(self.test_samples))
                 )
+            
             real_methyl_df = self.all_methyl_age_df_t.loc[
                 this_dataset_test_samples, 
                 self.predicted_methyl_df.columns
@@ -263,7 +265,6 @@ class mutationClock:
             train_methyl_age_mi = pred_methyl_df_train_rounded.apply(
                 lambda col: mutual_info_score(col, this_dataset_train_age_df), axis=0
                 ) 
-            
             # create dataframe
             dataset_perf_df = pd.DataFrame({
                 'AvP_methyl_pearson': dataset_pearson,

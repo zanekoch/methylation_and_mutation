@@ -21,7 +21,8 @@ class mutationFeatures:
         consortium: str,
         dataset: str,
         cross_val_num: int,
-        matrix_qtl_dir: str
+        matrix_qtl_dir: str,
+        covariate_fn: str
         #meqtl_db: pd.DataFrame = None
         ):
         self.all_mut_w_age_df = all_mut_w_age_df
@@ -32,6 +33,7 @@ class mutationFeatures:
         self.dataset = dataset
         self.consortium = consortium
         self.cross_val_num = cross_val_num
+        self.covariate_df = pd.read_csv(covariate_fn, header = 0, index_col=0).T
         # pre-process the mutation and methylation data
         self._preproc_mut_and_methyl()
         # choose train and test samples based on cross validation number
@@ -52,25 +54,23 @@ class mutationFeatures:
         """
         # if a dataset is specified, subset the data to only this tissue type
         if self.dataset != "":
-            if self.dataset == 'RCC':
-                RCC_datasets = ['KIRC', 'KIRP' , 'KICH']
-                self.all_methyl_age_df_t = self.all_methyl_age_df_t.loc[
-                    self.all_methyl_age_df_t['dataset'].isin(RCC_datasets), :]
-                self.all_methyl_age_df_t['dataset'] = 'RCC'
-                self.all_mut_w_age_df = self.all_mut_w_age_df.loc[
-                    self.all_mut_w_age_df['dataset'].isin(RCC_datasets), :].copy(deep=True)
-                self.all_mut_w_age_df['dataset'] = 'RCC'
-            else:
-                self.all_methyl_age_df_t = self.all_methyl_age_df_t.loc[
-                    self.all_methyl_age_df_t['dataset'] == self.dataset, :]
-                self.all_mut_w_age_df = self.all_mut_w_age_df.loc[
-                    self.all_mut_w_age_df['dataset'] == self.dataset, :].copy(deep=True)
+            self.all_methyl_age_df_t = self.all_methyl_age_df_t.loc[
+                self.all_methyl_age_df_t['dataset'] == self.dataset, :]
+            self.all_mut_w_age_df = self.all_mut_w_age_df.loc[
+                self.all_mut_w_age_df['dataset'] == self.dataset, :].copy(deep=True)
+        else:
+            # exlude LGG samples
+            self.all_methyl_age_df_t = self.all_methyl_age_df_t.loc[
+                self.all_methyl_age_df_t['dataset'] != 'LGG', :]
+            self.all_mut_w_age_df = self.all_mut_w_age_df.loc[
+                self.all_mut_w_age_df['dataset'] != 'LGG', :].copy(deep=True)
             
         # if a mut_loc column does not exit, add it
         if 'mut_loc' not in self.all_mut_w_age_df.columns:
             self.all_mut_w_age_df['mut_loc'] = self.all_mut_w_age_df['chr'] + ':' \
                                                 + self.all_mut_w_age_df['start'].astype(str)
-        # mutations: non X and Y chromosomes and occured in samples with measured methylation
+                                                
+        # mutations: non X and Y chromosomes which occured in samples with measured methylation
         self.all_mut_w_age_df = self.all_mut_w_age_df.loc[
             (self.all_mut_w_age_df['chr'] != 'X') 
             & (self.all_mut_w_age_df['chr'] != 'Y')
@@ -105,6 +105,18 @@ class mutationFeatures:
             self.all_methyl_age_df_t = pd.get_dummies(self.all_methyl_age_df_t, columns=["gender"])
         # subset meqtl_db to only cpgs in all_methyl_age_df_t 
         #self.meqtl_db = self.meqtl_db.loc[self.meqtl_db['cpg'].isin(self.all_methyl_age_df_t.columns), :]
+        
+        # subset methylations and mutations to only samples present in covariate_df
+        covariate_and_methyl_samples = set(self.covariate_df.index).intersection(
+            set(self.all_methyl_age_df_t.index))
+        covariate_and_mut_samples = set(self.covariate_df.index).intersection(
+            set(self.all_mut_w_age_df['case_submitter_id'].to_list()))
+        cov_mut_methyl_samples = list(covariate_and_methyl_samples.intersection(covariate_and_mut_samples))
+        self.all_methyl_age_df_t = self.all_methyl_age_df_t.loc[
+            cov_mut_methyl_samples, :]
+        self.all_mut_w_age_df = self.all_mut_w_age_df.loc[
+            self.all_mut_w_age_df['case_submitter_id'].isin(cov_mut_methyl_samples), :]
+    
     
     def cross_val_samples(self):
         """
@@ -114,10 +126,19 @@ class mutationFeatures:
         # implicitly subsets to only this dataset's samples bc of preproc_mut_and_methyl
         skf = StratifiedKFold(n_splits=3, random_state=10, shuffle=True)
         # select the self.cross_val_num fold
-        for i, (train_index, test_index) in enumerate(skf.split(self.all_methyl_age_df_t, self.all_methyl_age_df_t.loc[:, 'age_at_index'])):
+        for i, (train_index, test_index) in enumerate(
+            skf.split(self.covariate_df, self.covariate_df.loc[:, 'age_at_index'])
+            ):
             if i == self.cross_val_num:
-                train_samples = self.all_methyl_age_df_t.iloc[train_index].index.to_list()
-                test_samples = self.all_methyl_age_df_t.iloc[test_index].index.to_list()
+                train_samples = self.covariate_df.iloc[train_index].index.to_list()
+                test_samples = self.covariate_df.iloc[test_index].index.to_list()
+                # subset to only those in the methyl and mut dfs
+                train_samples = list(set(train_samples).intersection(
+                    set(self.all_methyl_age_df_t.index)
+                    ))
+                test_samples = list(set(test_samples).intersection(
+                    set(self.all_methyl_age_df_t.index)
+                    ))
                 break
         return train_samples, test_samples
 

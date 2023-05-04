@@ -3,6 +3,7 @@ import numpy as np
 import pickle
 import sklearn
 from sklearn.linear_model import LinearRegression, ElasticNetCV, ElasticNet
+import sklearn.preprocessing
 import xgboost as xgb
 import sys
 #import statsmodels.api as sm
@@ -93,30 +94,34 @@ class methylationPrediction:
     def apply_one_model(
         self,
         cpg_id: str,
-        X: csr_matrix,
+        X,
         y: pd.Series
         ):
         """
         Predict the methylation for a given CpG site on self.test_samples
         @ cpg_id: the id of the CpG site
-        @ X: the mutation feature matrix for the CpG site
+        @ X: the mutation feature matrix for the CpG site, csr if model_type is xgboost, otherwise numpy array
         @ y: the target methylation values for the CpG site
         """
-        # scale the features of training and testing samples, seperately
-        train_idx_num = [
-                self.mut_feat_store[self.target_values][cpg_id].index.get_loc(train_sample)
-                for train_sample in self.train_samples
+        
+        if self.model_type == 'elasticNet':
+            # scale the features of training and testing samples, seperately
+            train_idx_num = [
+                    self.mut_feat_store[self.target_values][cpg_id].index.get_loc(train_sample)
+                    for train_sample in self.train_samples
+                    ]
+            test_idx_num = [
+                    self.mut_feat_store[self.target_values][cpg_id].index.get_loc(test_sample)
+                    for test_sample in self.test_samples
                 ]
-        test_idx_num = [
-                self.mut_feat_store[self.target_values][cpg_id].index.get_loc(test_sample)
-                for test_sample in self.test_samples
-            ]       
-        X = X.toarray()
-        X_train = sklearn.preprocessing.minmax_scale(X[train_idx_num, :])
-        X_test = sklearn.preprocessing.minmax_scale(X[test_idx_num, :])
-        # recombine the training and testing samples into one matrix, they are in order of train then test
-        # per mutation_features._create_feature_mat
-        X = np.concatenate((X_train, X_test), axis=0)
+            # Create a MinMaxScaler using the training data
+            scaler = sklearn.preprocessing.MinMaxScaler(feature_range=(0, 1))
+            X_train = scaler.fit_transform(X[train_idx_num, :])
+            # Apply the same scaling factors from the training data to the testing data
+            X_test = scaler.transform(X[test_idx_num, :])
+            # recombine the training and testing samples into one matrix, they are in order of train then test
+            # per mutation_features._create_feature_mat()
+            X = np.concatenate((X_train, X_test), axis=0)
         
         # predict methylation for all samples
         model = self.trained_models[cpg_id]
@@ -165,34 +170,6 @@ class methylationPrediction:
         """       
         # for each cpg in the store, apply its trained model
         for i, cpg_id in enumerate(self.mut_feat_store['cpg_ids']):
-            """if self.baseline == 'scramble':
-                # get the feature matrix for the cpg
-                X = self.mut_feat_store['feat_mats'][cpg_id]
-                # make dense so we can scramble
-                X = pd.DataFrame(X.todense())
-                # scramble the feature matrix
-                X_scrambled = self.do_scramble(X, cpg_id)
-                X = csr_matrix(X_scrambled)
-                # assert that the covariate_col_idx columns are the same in X_train and X_train
-                # and that the other columns are different
-                assert np.all(X_train.iloc[:, covariate_col_idx].values == X_train_scrambled.iloc[:, covariate_col_idx].values)
-            elif self.baseline == 'cov_only':
-                # get the feature matrix for the cpg
-                X = self.mut_feat_store['feat_mats'][cpg_id]
-                X = pd.DataFrame(X.todense())
-                # select only the covariate columns
-                feat_names = pd.Series(self.mut_feat_store['feat_names'][cpg_id])
-                is_covariate = feat_names.str.contains('dataset') | feat_names.str.contains('gender')
-                covariate_cols = feat_names.index[is_covariate].values
-                # select only the covariate columns from X
-                X = X.iloc[:, covariate_cols]
-                # convert back to sparse
-                X = csr_matrix(X)
-            elif self.baseline == 'none': # actual model
-                # get the feature matrix for the cpg, sparse
-                X = self.mut_feat_store['feat_mats'][cpg_id] 
-            else:
-                raise ValueError(f"Baseline {self.baseline} not supported")"""
             if self.baseline == 'cov_only':
                 # get the feature matrix for the cpg
                 X = self.mut_feat_store['feat_mats'][cpg_id]
@@ -203,8 +180,6 @@ class methylationPrediction:
                 covariate_cols = feat_names.index[is_covariate].values
                 # select only the covariate columns from X
                 X = X.iloc[:, covariate_cols]
-                # convert back to sparse
-                X = csr_matrix(X)
             else:
                 # get the feature matrix for the cpg, sparse
                 X = self.mut_feat_store['feat_mats'][cpg_id] 
@@ -218,7 +193,8 @@ class methylationPrediction:
             if i % 10 == 0:
                 print(f'Predicted methylation for {i} CpGs of {len(self.mut_feat_store["cpg_ids"])}', flush=True)
             if just_one:
-                break
+                if i == 10:
+                    break
         self.pred_df = pd.DataFrame(self.predictions, index = self.train_samples + self.test_samples)
         self.perf_df = pd.DataFrame(self.prediction_performance).T
         return
@@ -237,15 +213,17 @@ class methylationPrediction:
         @ model_type: the type of model to train
         @ returns: None
         """
-        # min-max scale the features of sparse matrix X
-        X = sklearn.preprocessing.minmax_scale(X.toarray(), feature_range=(0, 1), axis=0, copy=False)
-        
         y = y.loc[self.train_samples]
         if self.model_type == 'elasticNet':
+            # min-max scale the features of sparse matrix X
+            scaler = sklearn.preprocessing.MinMaxScaler(feature_range=(0, 1))
+            X = scaler.fit_transform(X.toarray())
             model = ElasticNetCV(
                 cv=5, random_state=0, max_iter=1000,
                 selection = 'random', n_jobs=-1
                 )
+            model.fit(X, y) 
+            
             #model = ElasticNet(selection = 'random')
         elif self.model_type == 'linreg':
             model = sklearn.linear_model.LinearRegression()
@@ -254,24 +232,25 @@ class methylationPrediction:
         elif self.model_type == 'lasso':
             model = sklearn.linear_model.LassoCV()
         elif self.model_type == 'xgboost':
-            # convert back to sparse bc xgboost faster this way
-            X = csr_matrix(X)
+            # keep as sparse bc xgboost faster this way
             # Create the XGBRegressor model
             model = xgb.XGBRegressor(n_jobs=-1)
+            model.fit(X, y)
+            
             # Create a parameter grid for the XGBoost model
-            """
-            from sklearn.model_selection import RandomizedSearchCV
+            
+            """from sklearn.model_selection import RandomizedSearchCV
             model = xgb.XGBRegressor()
             param_grid = {
-                #'learning_rate': np.logspace(-4, 0, 50),
+                'learning_rate': np.logspace(-4, 0, 50),
                 'n_estimators': range(10, 150, 10),
                 'max_depth': range(2, 10),
                 'min_child_weight': range(1, 6),
-                #'gamma': np.linspace(0, 0.5, 50),
-                #'subsample': np.linspace(0.5, 1, 50),
-                #'colsample_bytree': np.linspace(0.5, 1, 50),
-                #'reg_alpha': np.logspace(-4, 0, 50),
-                #'reg_lambda': np.logspace(-4, 0, 50)
+                'gamma': np.linspace(0, 0.5, 50),
+                'subsample': np.linspace(0.5, 1, 50),
+                'colsample_bytree': np.linspace(0.5, 1, 50),
+                'reg_alpha': np.logspace(-4, 0, 50),
+                'reg_lambda': np.logspace(-4, 0, 50)
             }
             # Initialize the RandomizedSearchCV object
             random_search = RandomizedSearchCV(
@@ -279,7 +258,7 @@ class methylationPrediction:
                 param_distributions=param_grid,
                 n_iter=100,  # number of parameter settings that are sampled
                 scoring='neg_mean_squared_error',
-                n_jobs=-1,
+                #n_jobs=-1,
                 cv=5,
                 verbose=0,
                 random_state=42
@@ -292,51 +271,9 @@ class methylationPrediction:
             model = random_search.best_estimator_"""
         # fit model to training samples
         # X has already been subsetted to only contain training samples in order
-        model.fit(X, y) 
         # add to trained models dictionary
         self.trained_models[cpg_id] = model
         return
-    
-    def do_scramble(
-        self, 
-        X_train: pd.DataFrame, 
-        cpg_id: str
-        ):
-        """
-        Scramble the non-covariate rows and columns of the feature matrix
-        @ X_train: the feature matrix for the CpG site
-        @ cpg_id: the id of the CpG site
-        """
-        # get column index of covariates, which are columns containing dataset or gender
-        feat_names = pd.Series(self.mut_feat_store['feat_names'][cpg_id])
-        is_covariate = feat_names.str.contains('dataset') | feat_names.str.contains('gender')
-        covariate_cols = feat_names.index[is_covariate].values
-        # save covariate columns and sample order
-        save_covariate_cols = X_train.iloc[:, covariate_cols].copy(deep = True)
-        save_X_train_idx = X_train.index.copy(deep = True)
-        
-        # drop covariate columns
-        X_train_scrambled = X_train.drop(covariate_cols, axis = 1).copy(deep = True)
-        # randomly select values from 
-        def scramble_dataframe(df):
-            vals = df.values
-            # shuffle vals and every sub array
-            np.random.shuffle(vals)
-            for i in range(vals.shape[0]):
-                np.random.shuffle(vals[i])
-            scrambled_df = pd.DataFrame(vals, index = df.index, columns = df.columns)
-            return scrambled_df
-        X_train_scrambled = scramble_dataframe(X_train_scrambled)
-        
-        """X_train_scrambled = X_train_scrambled.sample(frac=1, axis=1, random_state=42, replace = False).sample(frac=1, axis=0, random_state=42, replace = False)"""
-        
-        # reset columns
-        X_train_scrambled.columns = np.arange(X_train_scrambled.shape[1])
-        # convert index back to original
-        X_train_scrambled.index = save_X_train_idx
-        # and add covariates back
-        X_train_scrambled = pd.concat([X_train_scrambled, save_covariate_cols], axis = 1)
-        return X_train_scrambled
     
     def train_all_models(
         self, 
@@ -388,14 +325,56 @@ class methylationPrediction:
             # for each feature set in the store train a model
             self.train_one_model(
                 cpg_id = cpg_id,
-                X = X, # sparse matrix, subset to training samples
+                X = X, #subset to training samples
                 y = self.mut_feat_store[self.target_values][cpg_id] # gets subset in fxn
                 )
             if i % 10 == 0:
                 print(f"done {i} CpGs of {len(self.mut_feat_store['cpg_ids'])}", flush=True)
             if just_one:
-                break
-            
+                if i == 10:
+                    break
+    
+    def do_scramble(
+        self, 
+        X_train: pd.DataFrame, 
+        cpg_id: str
+        ):
+        """
+        Scramble the non-covariate rows and columns of the feature matrix
+        @ X_train: the feature matrix for the CpG site
+        @ cpg_id: the id of the CpG site
+        """
+        # get column index of covariates, which are columns containing dataset or gender
+        feat_names = pd.Series(self.mut_feat_store['feat_names'][cpg_id])
+        is_covariate = feat_names.str.contains('dataset') | feat_names.str.contains('gender')
+        covariate_cols = feat_names.index[is_covariate].values
+        # save covariate columns and sample order
+        save_covariate_cols = X_train.iloc[:, covariate_cols].copy(deep = True)
+        save_X_train_idx = X_train.index.copy(deep = True)
+        
+        # drop covariate columns
+        X_train_scrambled = X_train.drop(covariate_cols, axis = 1).copy(deep = True)
+        # randomly select values from 
+        def scramble_dataframe(df):
+            vals = df.values
+            # shuffle vals and every sub array
+            np.random.shuffle(vals)
+            for i in range(vals.shape[0]):
+                np.random.shuffle(vals[i])
+            scrambled_df = pd.DataFrame(vals, index = df.index, columns = df.columns)
+            return scrambled_df
+        X_train_scrambled = scramble_dataframe(X_train_scrambled)
+        
+        """X_train_scrambled = X_train_scrambled.sample(frac=1, axis=1, random_state=42, replace = False).sample(frac=1, axis=0, random_state=42, replace = False)"""
+        
+        # reset columns
+        X_train_scrambled.columns = np.arange(X_train_scrambled.shape[1])
+        # convert index back to original
+        X_train_scrambled.index = save_X_train_idx
+        # and add covariates back
+        X_train_scrambled = pd.concat([X_train_scrambled, save_covariate_cols], axis = 1)
+        return X_train_scrambled
+         
     def save_models_and_preds(
         self,
         out_dir: str = ""

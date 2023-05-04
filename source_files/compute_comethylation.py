@@ -64,28 +64,30 @@ class analyzeComethylation:
             weighted_mean_by_sample = grouped_subset_df.apply(
                 lambda x: np.average(x['delta_mf_median'], weights=(1/x['measured_site_dist'].abs()))
                 ).to_frame().rename(columns={0: 'weighted_mean_dmf'})
-            abs_weighted_mean_by_sample = grouped_subset_df.apply(
+            """abs_weighted_mean_by_sample = grouped_subset_df.apply(
                 lambda x: np.average(x['abs_delta_mf_median'], weights=(1/x['measured_site_dist'].abs()))
-                ).to_frame().rename(columns={0: 'weighted_mean_abs_dmf'})
+                ).to_frame().rename(columns={0: 'weighted_mean_abs_dmf'})"""
             # log
             log_weighted_mean_by_sample = grouped_subset_df.apply(
-                lambda x: np.average(x['delta_mf_median'], weights=(1/np.log(x['measured_site_dist'].abs())))
+                lambda x: np.average(x['delta_mf_median'], weights=(1/np.log10(x['measured_site_dist'].abs())))
                 ).to_frame().rename(columns={0: 'log_weighted_mean_dmf'})
+            """
             log_abs_weighted_mean_by_sample = grouped_subset_df.apply(
                 lambda x: np.average(x['abs_delta_mf_median'], weights=(1/np.log(x['measured_site_dist'].abs())))
                 ).to_frame().rename(columns={0: 'log_weighted_mean_dmf'})
             # gaussian
             gaussian_weighted_mean_by_sample = grouped_subset_df.apply(
-                lambda x: np.average(x['delta_mf_median'], weights=(stats.norm.pdf(x['measured_site_dist'].abs()))))
+                lambda x: np.average(x['delta_mf_median'], weights=(stats.norm.pdf(x['measured_site_dist'].abs()))))"""
             
             # merge mean and median dfs
             mean_metrics_df = mean_by_sample.merge(median_by_sample, left_index=True, right_index=True)
             mean_metrics_df['distance'] = dist
             # merge weighted mean and median
             mean_metrics_df = mean_metrics_df.merge(weighted_mean_by_sample, left_index=True, right_index=True)
-            mean_metrics_df = mean_metrics_df.merge(abs_weighted_mean_by_sample, left_index=True, right_index=True)
             mean_metrics_df = mean_metrics_df.merge(log_weighted_mean_by_sample, left_index=True, right_index=True)
-            mean_metrics_df = mean_metrics_df.merge(log_abs_weighted_mean_by_sample, left_index=True, right_index=True)
+            """mean_metrics_df = mean_metrics_df.merge(abs_weighted_mean_by_sample, left_index=True, right_index=True)
+            mean_metrics_df = mean_metrics_df.merge(log_weighted_mean_by_sample, left_index=True, right_index=True)
+            mean_metrics_df = mean_metrics_df.merge(log_abs_weighted_mean_by_sample, left_index=True, right_index=True)"""
             mean_metric_by_dist_dfs.append(mean_metrics_df)
             print(f"finished distance: {dist}", flush = True)
         # combine all the mean metrics dfs
@@ -243,18 +245,18 @@ class analyzeComethylation:
             common_norm=False, palette=['maroon', 'steelblue'],
             scale_hue=True, scale = 'area', 
             ax = axes, cut = 0, gridsize=1000,
-            inner = None, linewidth=0, zorder = 0,
+            #inner = None, linewidth=0, zorder = 0,
             order = ['Mutated', 'Random']
             )
-        sns.boxplot(
+        """sns.boxplot(
             data=mut, y=metric,  x = 'Locus', 
             showfliers=False, ax = axes, boxprops={"zorder": 2, 'facecolor':'none', 'edgecolor':'black', }, medianprops = {'color':'black'},
             capprops = {'color':'black'}, whiskerprops = {'color':'black'}, zorder = 2, linewidth=1, 
             order = ['Mutated', 'Random']
             
-            )
+            )"""
         # set xlim
-        axes.set_ylim(-.15, .15)
+        axes.set_ylim(-.17, .17)
         # write delta in geek sybol
         axes.set_ylabel(r'Median $\Delta$MF across locus')
         axes.set_xlabel('Locus')
@@ -1146,8 +1148,11 @@ class mutationScan:
             comparison_site_mfs = self.all_methyl_age_df_t.loc[all_samples, mut_row['comparison_sites']]
             # measure the change in methylation between sites in the mutated samples and in other non-mutated samples of the same age
             metrics = self._compare_sites(comparison_site_mfs, mut_sample_name = mut_row['case_submitter_id'])
+            
             metrics['mut_loc'], metrics['mut_event'], metrics['is_background'], metrics['index_event'] = mut_row['mut_loc'], mut_row['mut_event'], mut_row['is_background'], mut_row['index_event']
+            
             cpg_to_dist_dict = dict(zip(mut_row['comparison_sites'], mut_row['comparison_dists']))
+            
             metrics['measured_site_dist'] = metrics['measured_site'].map(cpg_to_dist_dict)
             # add to output
             return metrics

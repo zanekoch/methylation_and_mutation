@@ -125,7 +125,8 @@ def run(
             all_mut_w_age_df = all_mut_w_age_df, illumina_cpg_locs_df = illumina_cpg_locs_df, 
             all_methyl_age_df_t = all_methyl_age_df_t, out_dir = out_dir, 
             consortium = consortium, dataset = dataset, cross_val_num = cross_val_num, 
-            matrix_qtl_dir = matrix_qtl_dir
+            matrix_qtl_dir = matrix_qtl_dir,
+            covariate_fn = "/cellar/users/zkoch/methylation_and_mutation/data/matrixQtl_data/tcga_covariates.csv.gz"
             )
         ######## choose CpGs ############
         # choose the top cpgs sorted by nearby mutation count and then absolute age correlation
