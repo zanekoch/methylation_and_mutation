@@ -48,7 +48,9 @@ def read_tcga_data(
     out_dir = "/cellar/users/zkoch/methylation_and_mutation/output_dirs/output_010423"
     dependency_f_dir = "/cellar/users/zkoch/methylation_and_mutation/dependency_files"
     data_dir = "/cellar/users/zkoch/methylation_and_mutation/data"
-    methylation_dir = '/cellar/users/zkoch/methylation_and_mutation/data/processed_methylation'
+    #methylation_dir = '/cellar/users/zkoch/methylation_and_mutation/data/processed_methylation'
+    methylation_dir = '/cellar/users/zkoch/methylation_and_mutation/data/dropped3SD_qnormed_methylation'
+    
     illumina_cpg_locs_df, all_mut_df, _, all_methyl_df_t, all_meta_df, _ = get_data.main(
         illum_cpg_locs_fn = os.path.join(dependency_f_dir, "illumina_cpg_450k_locations.csv"),
         out_dir = out_dir,
@@ -60,14 +62,6 @@ def read_tcga_data(
     all_mut_w_age_df, all_methyl_age_df_t = utils.add_ages_to_mut_and_methyl(
         all_mut_df, all_meta_df, all_methyl_df_t
         )
-    # mi dfs
-    """mi_df = pd.read_parquet('/cellar/users/zkoch/methylation_and_mutation/dependency_files/mutual_informations/tcga_combinedMI_top10MI.parquet')
-    if dataset != "":
-        mi_df = mi_df[dataset]
-    else:
-        mi_df = mi_df['combined']
-    mi_df = mi_df.to_frame()
-    mi_df.columns = ['mutual_info']"""
     return all_mut_w_age_df, illumina_cpg_locs_df, all_methyl_age_df_t
 
 def run(
@@ -83,6 +77,7 @@ def run(
     train_actual_model:str,
     model: str,
     mut_feat_store_fns: list,
+    agg_only_methyl_pred: bool
     ) -> None:
     """
     Driver function for generating features or training models
@@ -160,7 +155,8 @@ def run(
             methyl_pred = methylation_pred.methylationPrediction(
                 mut_feat_store_fns = mut_feat_store_fns,
                 model_type = model,
-                baseline = "none"
+                baseline = "none",
+                agg_only = agg_only_methyl_pred
                 )
             methyl_pred.train_all_models()
             methyl_pred.apply_all_models()
@@ -169,7 +165,8 @@ def run(
             methyl_pred = methylation_pred.methylationPrediction(
                 mut_feat_store_fns = mut_feat_store_fns,
                 model_type = model,
-                baseline = train_baseline
+                baseline = train_baseline,
+                agg_only = agg_only_methyl_pred
                 )
             methyl_pred.train_all_models()
             methyl_pred.apply_all_models()
@@ -179,7 +176,8 @@ def run(
             methyl_pred = methylation_pred.methylationPrediction(
                 mut_feat_store_fns = mut_feat_store_fns,
                 model_type = model,
-                baseline = "none"
+                baseline = "none",
+                agg_only = agg_only_methyl_pred
                 )
             methyl_pred.train_all_models()
             methyl_pred.apply_all_models()
@@ -190,7 +188,8 @@ def run(
             methyl_pred = methylation_pred.methylationPrediction(
                 mut_feat_store_fns = mut_feat_store_fns,
                 model_type = model,
-                baseline = train_baseline
+                baseline = train_baseline,
+                agg_only = agg_only_methyl_pred
                 )
             methyl_pred.train_all_models()
             methyl_pred.apply_all_models()
@@ -207,7 +206,7 @@ def main():
     parser.add_argument('--mut_feat_store_fns', type=str, help='glob path to feature files', default="")
     parser.add_argument('--consortium', type=str, help='TCGA or ICGC')
     parser.add_argument('--dataset', type=str, help='tissue type to run, e.g. BRCA, COAD, ...', default="")
-    parser.add_argument('--cross_val', type=int, help='cross val fold number, assuming 5', default=0)
+    parser.add_argument('--cross_val', type=int, help='cross val fold number, assuming 3', default=0)
     parser.add_argument('--out_dir', type=str, help='path to output directory')
     parser.add_argument('--start_top_cpgs', type=int, help='index of top cpgs to start with', default=0)
     parser.add_argument('--end_top_cpgs', type=int, help='index of top cpgs to end with', default=0)
@@ -220,6 +219,7 @@ def main():
     parser.add_argument('--max_meqtl_sites', type=int, help='max_meqtl_sites', default=100000)
     parser.add_argument('--nearby_window_size', type=int, help='nearby_window_size', default=50000)
     parser.add_argument('--extend_amount', type=int, help='extend_amount', default=100)
+    parser.add_argument('--agg_only_methyl_pred', type=str, help='to train the models on aggregate features only or not: "True" or "False" ')
     
     args = parser.parse_args()
     do = args.do
@@ -239,6 +239,13 @@ def main():
     end_top_cpgs = args.end_top_cpgs
     train_baseline = args.train_baseline
     train_actual_model = args.train_actual_model
+    agg_only_methyl_pred = args.agg_only_methyl_pred
+    if agg_only_methyl_pred == 'True':
+        agg_only_methyl_pred = True
+    elif agg_only_methyl_pred == 'False':
+        agg_only_methyl_pred = False
+    else:
+        raise ValueError("agg_only_methyl_pred must be True or False")
     model = args.model
     if model not in ['xgboost', 'elasticNet']:
         raise ValueError("model must be xgboost or elasticNet")
@@ -251,12 +258,14 @@ def main():
     }
     print(mut_feat_params)
     print(model)
+    print(f"agg only {agg_only_methyl_pred}")
     run(
         do = do,
         consortium = consortium, dataset = dataset, cross_val_num = cross_val_num,
         out_dir = out_dir, start_top_cpgs = start_top_cpgs,
         end_top_cpgs = end_top_cpgs, mut_feat_params = mut_feat_params,
-        train_baseline = train_baseline, train_actual_model = train_actual_model, model = model, mut_feat_store_fns = mut_feat_store_fns
+        train_baseline = train_baseline, train_actual_model = train_actual_model, model = model, mut_feat_store_fns = mut_feat_store_fns,
+        agg_only_methyl_pred = agg_only_methyl_pred
         )
         
 

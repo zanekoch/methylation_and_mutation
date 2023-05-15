@@ -24,7 +24,8 @@ class methylationPrediction:
         mut_feat_store_fns: list = [],
         mut_feat_store: dict = {},
         trained_models_fns: list = [],
-        target_values: str = 'target_values'
+        target_values: str = 'target_values',
+        agg_only: bool = False
         ) -> None:
         """
         Constructor for methylationPrediction object
@@ -50,6 +51,10 @@ class methylationPrediction:
         self.cross_val_num = self.mut_feat_store['cross_val_num']
         self.model_type = model_type
         self.target_values = target_values
+        self.agg_only = agg_only
+        # assert these agg_only is not True while baseline is cov_only
+        if self.agg_only and self.baseline == 'cov_only':
+            sys.exit("agg_only cannot be True while baseline is cov_only")
         # if trained models are provided, read them in
         if len(trained_models_fns) == 0:
             self.trained_models = {}
@@ -167,9 +172,17 @@ class methylationPrediction:
         Predict methylation for all CpG in mutation feature store for test_samples
         using the models trained by train_all_models stored in self.trained_models
         @ mut_feat_store: the path to the mutation features store
-        """       
+        """
         # for each cpg in the store, apply its trained model
         for i, cpg_id in enumerate(self.mut_feat_store['cpg_ids']):
+            train_idx_num = [
+                self.mut_feat_store[self.target_values][cpg_id].index.get_loc(train_sample)
+                for train_sample in self.train_samples
+                ]
+            test_idx_num = [
+                    self.mut_feat_store[self.target_values][cpg_id].index.get_loc(test_sample)
+                    for test_sample in self.test_samples
+                ]
             if self.baseline == 'cov_only':
                 # get the feature matrix for the cpg
                 X = self.mut_feat_store['feat_mats'][cpg_id]
@@ -180,10 +193,28 @@ class methylationPrediction:
                 covariate_cols = feat_names.index[is_covariate].values
                 # select only the covariate columns from X
                 X = X.iloc[:, covariate_cols]
+                X = csr_matrix(X)
+            elif self.baseline == 'scramble':
+                # get the feature matrix for the cpg
+                X = self.mut_feat_store['feat_mats'][cpg_id]
+                X = X.todense()
+                # subset to only training samples and scramble
+                X_train = pd.DataFrame(X[train_idx_num, :])
+                X_train_scrambled = self.do_scramble(X_train, cpg_id)
+                # subset to only testing samples and scramble
+                X_test = pd.DataFrame(X[test_idx_num, :])
+                X_test_scrambled = self.do_scramble(X_test, cpg_id)
+                # recombine the training and testing samples into one matrix, they are in order of train then test
+                X = np.concatenate((X_train_scrambled, X_test_scrambled), axis=0)
+                X = csr_matrix(X)
             else:
                 # get the feature matrix for the cpg, sparse
-                X = self.mut_feat_store['feat_mats'][cpg_id] 
-    
+                X = self.mut_feat_store['feat_mats'][cpg_id]
+                
+            # subset to only aggregate features
+            if self.agg_only:
+                X = self.subset_matrix_to_agg_only_feats(X, cpg_id)
+            print(X.shape)
             # do prediction
             self.apply_one_model(
                 cpg_id = cpg_id,
@@ -193,8 +224,7 @@ class methylationPrediction:
             if i % 10 == 0:
                 print(f'Predicted methylation for {i} CpGs of {len(self.mut_feat_store["cpg_ids"])}', flush=True)
             if just_one:
-                if i == 10:
-                    break
+                break
         self.pred_df = pd.DataFrame(self.predictions, index = self.train_samples + self.test_samples)
         self.perf_df = pd.DataFrame(self.prediction_performance).T
         return
@@ -300,7 +330,7 @@ class methylationPrediction:
                 X_train = pd.DataFrame(X[train_idx_num, :])
                 # scramble the feature matrix
                 X_train_scrambled = self.do_scramble(X_train, cpg_id)
-                X = csr_matrix(X_train_scrambled)
+                X = csr_matrix(X_train_scrambled)   
             elif self.baseline == 'cov_only':
                 # get the feature matrix for the cpg
                 X = self.mut_feat_store['feat_mats'][cpg_id]
@@ -310,8 +340,11 @@ class methylationPrediction:
                 feat_names = pd.Series(self.mut_feat_store['feat_names'][cpg_id])
                 is_covariate = feat_names.str.contains('dataset') | feat_names.str.contains('gender')
                 covariate_cols = feat_names.index[is_covariate].values
+                print(feat_names[is_covariate])
                 # select only the covariate columns from X
                 X = X.iloc[:, covariate_cols]
+                # sum the columns of x
+                print(X.sum(axis=1))
                 # convert back to sparse
                 X = csr_matrix(X)
             elif self.baseline == 'none': # actual model
@@ -322,6 +355,9 @@ class methylationPrediction:
             else:
                 raise ValueError(f"baseline {self.baseline} not supported")
             
+            if self.agg_only:
+                X = self.subset_matrix_to_agg_only_feats(X, cpg_id)
+            print(X.shape, flush=True)
             # for each feature set in the store train a model
             self.train_one_model(
                 cpg_id = cpg_id,
@@ -331,8 +367,26 @@ class methylationPrediction:
             if i % 10 == 0:
                 print(f"done {i} CpGs of {len(self.mut_feat_store['cpg_ids'])}", flush=True)
             if just_one:
-                if i == 10:
-                    break
+                break
+    
+    def subset_matrix_to_agg_only_feats(
+        self, 
+        feat_mat: csr_matrix,
+        cpg_id: str
+        ) -> csr_matrix:
+        """
+        Given a matrix, subset its feature matrix to only include aggregate features
+        """
+        feat_names = pd.Series(self.mut_feat_store['feat_names'][cpg_id])
+        feat_mat = pd.DataFrame(feat_mat.toarray(), columns=feat_names)
+        # select only the features which are aggregate features, 
+        pattern = '^[0-9:]*$'
+        selected_columns = feat_mat.columns[~feat_mat.columns.str.contains(pattern, regex=True)]
+        feat_mat = feat_mat[selected_columns]
+        # convert to csr matrix
+        feat_mat = csr_matrix(feat_mat)
+        return feat_mat
+
     
     def do_scramble(
         self, 
@@ -385,11 +439,16 @@ class methylationPrediction:
         # default output directory is where the feature store came from
         if out_dir == "":
             out_dir = self.mut_feat_store_fns[0][:self.mut_feat_store_fns[0].rfind('/')]
+            
+        agg_only_str = ''
+        if self.agg_only:
+            agg_only_str = '_agg_only'
+        
         # write out files to there, including the model type in name
-        with open(f"{out_dir}/trained_models_{self.model_type}_{self.baseline}baseline.pkl", 'wb') as f:
+        with open(f"{out_dir}/trained_models_{self.model_type}_{self.baseline}baseline{agg_only_str}.pkl", 'wb') as f:
             pickle.dump(self.trained_models, f)
         # write to parquet files
-        self.pred_df.to_parquet(f"{out_dir}/methyl_predictions_{self.model_type}_{self.baseline}baseline.parquet")
-        self.perf_df.to_parquet(f"{out_dir}/prediction_performance_{self.model_type}_{self.baseline}baseline.parquet")
+        self.pred_df.to_parquet(f"{out_dir}/methyl_predictions_{self.model_type}_{self.baseline}baseline{agg_only_str}.parquet")
+        self.perf_df.to_parquet(f"{out_dir}/prediction_performance_{self.model_type}_{self.baseline}baseline{agg_only_str}.parquet")
         print(f"wrote out trained models, predictions, and performances to {out_dir}", flush=True)
         
