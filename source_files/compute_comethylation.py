@@ -24,7 +24,6 @@ CHROM_LENGTHS = {
     '21': 46709983,'22': 50818468,
 }
 
-
 class analyzeComethylation:
     """
     For analysis of a completed mutationScan run
@@ -1464,12 +1463,13 @@ class mutationScan:
         valid_muts_w_illum = valid_muts_w_illum.loc[
             valid_muts_w_illum['matched_samples'].apply(len) >= self.matched_sample_num
             ]
+        # TECHNICALLY DEPRECATED< NO LONGER USED
         # get the delta MF of the mutated site
         tqdm.pandas(desc="Getting mut site delta MF", miniters=len(valid_muts_w_illum)/10)
         valid_muts_w_illum['mut_delta_mf'] = valid_muts_w_illum.progress_apply(
             lambda mut_event: self._mut_site_delta_mf(mut_event), axis=1
             )
-        # sort mutations low to high by mut_delta_mf and and high to low by DNA_VAF
+        # sort mutations high to low by DNA_VAF
         valid_muts_w_illum = valid_muts_w_illum.sort_values(
             by='DNA_VAF',
             ascending=False
@@ -1675,6 +1675,7 @@ class mutationScan:
                     start_num_mut_to_process, end_num_mut_to_process
                     )
             elif linkage_method == 'corr':
+                # does just in time correlation of the methylation data in memory
                 comparison_sites_df = self._get_correl_based_comp_sites(
                     start_num_mut_to_process, end_num_mut_to_process, corr_direction
                     )

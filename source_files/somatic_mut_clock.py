@@ -110,7 +110,7 @@ class optimizeSomage:
 
 class mutationClock:
     """
-    Train epigenetic clocks on predicted methylation and actual methylation, comparing
+    Train epigenetic clocks on predicted methylation and actual methylation
     """
     def __init__(
         self,
@@ -147,15 +147,12 @@ class mutationClock:
         self.tissue_type = tissue_type
         # if tissue type is specified, subset the data to only this tissue type
         if self.tissue_type != "":
-            if self.tissue_type == 'RCC':
-                RCC_datasets = ['KIRC', 'KIRP' , 'KICH']
-                self.all_methyl_age_df_t = self.all_methyl_age_df_t.loc[
-                    self.all_methyl_age_df_t['dataset'].isin(RCC_datasets), :]
-                self.all_methyl_age_df_t['dataset'] = 'RCC'
-            else:
-                self.all_methyl_age_df_t = self.all_methyl_age_df_t.loc[self.all_methyl_age_df_t['dataset'] == tissue_type, :]
+            self.all_methyl_age_df_t = self.all_methyl_age_df_t.loc[
+                self.all_methyl_age_df_t['dataset'] == tissue_type,
+                :]
         self.test_samples = test_samples
         self.train_samples = train_samples
+        
         self.trained_models = {}
         if len(trained_models_fns) > 0:
             for fn in trained_models_fns:
@@ -164,6 +161,7 @@ class mutationClock:
                     these_models = pickle.load(f)
                     # add to dictionary
                     self.trained_models.update(these_models)
+                    
         self.feature_mats = {}
         if len(feature_mat_fns) > 0:
             first = True
@@ -469,7 +467,6 @@ class mutationClock:
             combined_df = combined_df.loc[:,~combined_df.columns.duplicated()].copy()
         else: # if axis = 0 
             combined_df = combined_df.loc[~combined_df.index.duplicated(), :].copy()
-
         return combined_df
  
     def feature_selection(self):

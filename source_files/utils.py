@@ -541,12 +541,16 @@ def each_tissue_drop_divergent_and_qnorm(
     @ methyl_df: pandas dataframe with samples as columns and CpGs as rows
     @ all_meta_df: pandas dataframe with samples as index and columns 'dataset' and 'sample_type'
     """
+    print("Dropping divergent samples and quantile normalizing within each tissue", flush=True)
     # transpose
     methyl_df_t = methyl_df.T
+    print("transposed", flush=True)
     # merge to get tissue
     methyl_df_t = methyl_df_t.merge(all_meta_df['dataset'], left_index=True, right_index=True)
+    print(" merged", flush=True)
     # calculate mean methylation of each sample
     methyl_df_t['mean_methyl'] = methyl_df_t.mean(axis=1)
+    print(" calculated mean methylation", flush=True)
     # for each tissue
     qnormed_dfs = []
     for tissue in methyl_df_t['dataset'].unique():
@@ -565,9 +569,9 @@ def each_tissue_drop_divergent_and_qnorm(
             methyl_df = tissue_df.drop(['dataset', 'mean_methyl'], axis=1).T
             )
         qnormed_dfs.append(tissue_df_qnorm)
+        print(f"{tissue} done", flush=True)
     # qnormed_dfs are sites x samples, so concat next to eachother
     qnormed_df = pd.concat(qnormed_dfs, axis=1)
-    
     return qnormed_df
         
         

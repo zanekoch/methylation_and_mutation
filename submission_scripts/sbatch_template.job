@@ -1,0 +1,49 @@
+#!/bin/bash
+#SBATCH --array=0-9%5
+#SBATCH --partition=nrnb-compute
+#SBATCH --mem=70GB
+#SBATCH --time=8:00:00
+#SBATCH --job-name=icgc_somAge
+##/SBA/TCH --cpus-per-task=32
+##/SBA/TCH --ntasks=1
+eval "$(conda shell.bash hook)"
+conda activate /cellar/users/zkoch/miniconda3/envs/tf_env
+
+############################################
+# ICGC run_somatic_mut_clock.py
+start_top_cpgs_values=(0 1000 2000 3000 4000 0 1000 2000 3000 4000)
+end_top_cpgs_values=(1000 2000 3000 4000 5000 1000 2000 3000 4000 5000)
+cv_num_values=(0 0 0 0 0 1 1 1 1 1)
+srun python /cellar/users/zkoch/methylation_and_mutation/submission_scripts/run_somatic_mut_clock.py \
+--do Both \
+--consortium ICGC \
+--cross_val ${cv_num_values[$SLURM_ARRAY_TASK_ID]} \
+--out_dir /cellar/users/zkoch/methylation_and_mutation/output_dirs/051723_icgc_somage_output \
+--start_top_cpgs ${start_top_cpgs_values[$SLURM_ARRAY_TASK_ID]} \
+--end_top_cpgs ${end_top_cpgs_values[$SLURM_ARRAY_TASK_ID]} \
+--aggregate Both \
+--train_baseline scramble \
+--train_actual_model True \
+--model xgboost \
+--burden_bin_size 25000 \
+--num_correl_sites 500 \
+--max_meqtl_sites 200 \
+--nearby_window_size 100000 \
+--extend_amount 500 \
+--agg_only_methyl_pred True
+############################################
+
+############################################
+# run calculate all correlations
+# srun python /cellar/users/zkoch/methylation_and_mutation/submission_scripts/calc_all_chrDset_corrs.py --out_dir /cellar/users/zkoch/methylation_and_mutation/data/final_tcga_data/chr_dset_corrs_qnorm --consortium TCGA
+############################################
+
+############################################
+# run_somatic_mut_clock.py: creates features and/or predicts methylaiton
+#srun python /cellar/users/zkoch/methylation_and_mutation/submission_scripts/run_somatic_mut_clock.py --Both
+############################################
+
+############################################
+# run_soMage.py: reads in predicted methylation and does something
+# srun python /cellar/users/zkoch/methylation_and_mutation/submission_scripts/run_soMage.py --somage_path /cellar/users/zkoch/methylation_and_mutation/output_dirs/050723_somage_qnorm_output --directory_glob TCGA__500correl_100meqtl_100000nearby_Trueagg_500numCpGs_\*startTopCpGs_500extendAmount_2crossValNum --file_suffix xgboost_nonebaseline --read_scrambled_suffix xgboost_scramblebaseline --cross_val 2 --do output_methyl_and_dset_perf --out_dir /cellar/users/zkoch/methylation_and_mutation/output_dirs/050723_somage_qnorm_output 
+############################################

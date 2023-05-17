@@ -22,7 +22,7 @@ class mutationFeatures:
         dataset: str,
         cross_val_num: int,
         matrix_qtl_dir: str,
-        covariate_fn: str
+        covariate_fn: str,
         #meqtl_db: pd.DataFrame = None
         ):
         self.all_mut_w_age_df = all_mut_w_age_df
@@ -31,8 +31,8 @@ class mutationFeatures:
         #self.meqtl_db = meqtl_db
         self.out_dir = out_dir
         self.dataset = dataset
-        self.consortium = consortium
         self.cross_val_num = cross_val_num
+        self.consortium = consortium
         self.covariate_df = pd.read_csv(covariate_fn, header = 0, index_col=0).T
         # pre-process the mutation and methylation data
         self._preproc_mut_and_methyl()
@@ -59,11 +59,12 @@ class mutationFeatures:
             self.all_mut_w_age_df = self.all_mut_w_age_df.loc[
                 self.all_mut_w_age_df['dataset'] == self.dataset, :].copy(deep=True)
         else:
-            # exlude LGG samples
-            self.all_methyl_age_df_t = self.all_methyl_age_df_t.loc[
-                self.all_methyl_age_df_t['dataset'] != 'LGG', :]
-            self.all_mut_w_age_df = self.all_mut_w_age_df.loc[
-                self.all_mut_w_age_df['dataset'] != 'LGG', :].copy(deep=True)
+            if self.consortium == 'TCGA':
+                # exlude LGG samples
+                self.all_methyl_age_df_t = self.all_methyl_age_df_t.loc[
+                    self.all_methyl_age_df_t['dataset'] != 'LGG', :]
+                self.all_mut_w_age_df = self.all_mut_w_age_df.loc[
+                    self.all_mut_w_age_df['dataset'] != 'LGG', :].copy(deep=True)
             
         # if a mut_loc column does not exit, add it
         if 'mut_loc' not in self.all_mut_w_age_df.columns:
@@ -117,14 +118,13 @@ class mutationFeatures:
         self.all_mut_w_age_df = self.all_mut_w_age_df.loc[
             self.all_mut_w_age_df['case_submitter_id'].isin(cov_mut_methyl_samples), :]
     
-    
     def cross_val_samples(self):
         """
         Choose train and test samples based on cross validation number and dataset
         @ return: train_samples, test_samples
         """
         # implicitly subsets to only this dataset's samples bc of preproc_mut_and_methyl
-        skf = StratifiedKFold(n_splits=3, random_state=10, shuffle=True)
+        skf = StratifiedKFold(n_splits=5, random_state=10, shuffle=True)
         # select the self.cross_val_num fold
         for i, (train_index, test_index) in enumerate(
             skf.split(self.covariate_df, self.covariate_df.loc[:, 'age_at_index'])
@@ -197,7 +197,7 @@ class mutationFeatures:
         """
         # if chrom is not in the keys of the matrixQTL_store
         if chrom not in self.matrixQTL_store:
-            # read in the matrixQTL results for this chromosome        
+            # read in the matrixQTL results for this chromosome  
             meqtl_df = pd.read_parquet(
                 os.path.join(self.matrix_qtl_dir, f"chr{chrom}_meqtl_fold_{self.cross_val_num}.parquet"),
                 columns=['#id', 'SNP', 'p-value', 'beta', 'distance', 'snp_chr'])       
@@ -564,15 +564,7 @@ class mutationFeatures:
         feat_mat = csr_matrix(feat_mat)
         # get MF target values
         target_values = self.all_methyl_age_df_t.loc[all_samples, cpg_id]
-        # within each dataset convert each value to a MD score within that dataset
-        def madd(x):
-            return (x - x.median()).abs().median()
-        mad_target_values = self.all_methyl_age_df_t.loc[
-            all_samples, [cpg_id, 'dataset']
-            ].groupby('dataset').transform(lambda x: (x - x.median()).div(madd(x)))
-        # make sure same order and a series
-        mad_target_values = mad_target_values.loc[all_samples, cpg_id] 
-        return feat_mat, feature_names, target_values, mad_target_values
+        return feat_mat, feature_names, target_values
     
     def create_all_feat_mats(
         self, 
@@ -592,7 +584,7 @@ class mutationFeatures:
         @ aggregate: whether to aggregate the mutation status by predictor group
         @ returns: None
         """
-        feat_mats, feat_names, target_values, mad_target_values = {}, {}, {}, {}
+        feat_mats, feat_names, target_values = {}, {}, {}
         for i, cpg_id in enumerate(cpg_ids):
             # first get the predictor groups
             predictor_groups = self._get_predictor_site_groups(
@@ -600,7 +592,7 @@ class mutationFeatures:
                 nearby_window_size, extend_amount
                 )
             
-            feat_mats[cpg_id], feat_names[cpg_id], target_values[cpg_id], mad_target_values[cpg_id] = self._create_feature_mat(
+            feat_mats[cpg_id], feat_names[cpg_id], target_values[cpg_id] = self._create_feature_mat(
                 cpg_id, predictor_groups, aggregate, extend_amount, binarize
                 )
             if i % 10 == 0:
@@ -626,14 +618,12 @@ class mutationFeatures:
                 'feat_mats': feat_mats, # dict of sparse numpy arrays
                 'feat_names': feat_names, # dict of lists
                 'target_values': target_values, # dict of pandas series
-                'mad_target_values': mad_target_values # dict of pandas series
                 }
         # if mutation_features_store is not empty, add to it
         else: 
             self.mutation_features_store['feat_mats'].update(feat_mats)
             self.mutation_features_store['feat_names'].update(feat_names)
             self.mutation_features_store['target_values'].update(target_values)
-            self.mutation_features_store['mad_target_values'].update(mad_target_values)
             # append to cpg_ids numpy.ndarray
             self.mutation_features_store['cpg_ids'] = np.append(self.mutation_features_store['cpg_ids'], cpg_ids)
       

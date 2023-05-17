@@ -87,7 +87,7 @@ class methylationPrediction:
                             mut_feat_store[key] = next_mut_feat_store[key]
                         else:
                             mut_feat_store[key] = mut_feat_store[key] + next_mut_feat_store[key]
-                    elif key in ['feat_mats', 'target_values', 'mad_target_values', 'feat_names']:
+                    elif key in ['feat_mats', 'target_values', 'feat_names']:
                         if key not in mut_feat_store.keys():
                             mut_feat_store[key] = next_mut_feat_store[key]
                         else:
