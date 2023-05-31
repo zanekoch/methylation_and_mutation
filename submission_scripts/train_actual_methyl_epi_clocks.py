@@ -2,14 +2,11 @@ import sys
 sys.path.append('/cellar/users/zkoch/methylation_and_mutation/source_files')
 import get_data, mutation_features
 import os
-import numpy as np
 import pandas as pd
 import pickle
 from sklearn import linear_model
 import argparse
 import xgboost as xgb
-from sklearn.model_selection import RandomizedSearchCV
-
 
 # train enet on real methylation
 def all_together_elasticNet(
@@ -110,37 +107,7 @@ def all_together_xgboost(
     # no optimization
     model = xgb.XGBRegressor(n_jobs=-1, random_state=42)
     model.fit(X_train, y_train)
-    
-    """    # with opt
-    param_grid = {
-                'learning_rate': np.logspace(-4, 0, 50),
-                'n_estimators': range(100, 1000, 100),
-                'max_depth': range(3, 20),
-                'min_child_weight': range(1, 6),
-                'gamma': np.linspace(0, 0.5, 50),
-                'subsample': np.linspace(0.5, 1, 50),
-                'colsample_bytree': np.linspace(0.5, 1, 50),
-                'reg_alpha': np.logspace(-4, 0, 50),
-                'reg_lambda': np.logspace(-4, 0, 50)
-                }
-    model = xgb.XGBRegressor(random_state=42)
-    # Initialize the RandomizedSearchCV object
-    random_search = RandomizedSearchCV(
-        estimator=model,
-        param_distributions=param_grid,
-        n_iter=1000,  # number of parameter settings that are sampled
-        scoring='neg_mean_squared_error',
-        n_jobs=-1,
-        cv=5,
-        verbose=1,
-        random_state=42
-    )
-    # Fit the RandomizedSearchCV object to the training data
-    random_search.fit(X_train, y_train)
-    # Print the best hyperparameters
-    print("Best hyperparameters:", random_search.best_params_)
-    # Use the best estimator for predictions or further analysis
-    model = random_search.best_estimator_"""
+
     # save the model with pickle
     with open(os.path.join(out_dir, f"epiClock_{consortium}_cv{cv_num}_all_actualMethyl_xgb_no_opt.pkl"), 'wb') as f:
         pickle.dump(model, f)
@@ -178,21 +145,25 @@ def main():
     y_train = all_methyl_age_df_t.loc[mut_feat.train_samples, 'age_at_index']
     
     # train an elasticNet for each dataset
+    print("training each dset elasticNets", flush = True)
     each_dataset_elasticNet(
         all_methyl_age_df_t, mut_feat,
         out_dir, consortium, cv_num
         )
     # train an elasticNet for all datasets together
+    print("training all dset elasticNet", flush = True)
     all_together_elasticNet(
         X_train, y_train,
         out_dir, consortium, cv_num
         )
     # train an xgboost for each dataset
+    print("training each dset xgboost", flush = True)
     each_dataset_xgboost(
         all_methyl_age_df_t, mut_feat,
         out_dir, consortium, cv_num
         )
     # train an xgboost for all datasets together
+    print("training all dset xgboost", flush = True)
     all_together_xgboost(
         X_train, y_train,
         out_dir, consortium, cv_num

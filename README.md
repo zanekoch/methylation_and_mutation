@@ -1,5 +1,11 @@
 # methylation_and_mutation
 # Data wrangling (yeehaw!)
+
+## Environments ##
+### Conda ###
+- `big_data` for snakemake (matrixQTL)
+- `tf_env` for everything else
+
 ## **Stage 0**: Data formatting
 1. ### Convert methylation into a samples x CpGs matrix
     - To go from .csv to parquet `/cellar/users/zkoch/methylation_and_mutation/submission_scripts/convert_pancanMethylcsv_to_methylParquet.py`
@@ -44,8 +50,26 @@
         - ICGC `/cellar/users/zkoch/methylation_and_mutation/data/final_icgc_data/chr_dset_corrs_qnorm`
 
 # Methylation disturbance analysis
-## **Methylation disturbance Step 1**: 
-
+## **Methylation disturbance**: 
+1. ### Run the comethylation disturbance analysis ###
+    - Script: `/cellar/users/zkoch/methylation_and_mutation/submission_scripts/run_compute_comethylation.py` 
+    - Inputs:
+        - `consortium`: which consortium to use **qnormed** methylation from
+        - `out_dir`
+        - preprocessed methylation and mutation data
+        - parameters specifying the comethylation analysis
+    - Outputs:
+        - comparison_sites_df: a dir of parquet files specifying the comparison sites for each mutation event
+        - all_metrics_df: a dir of parquet files specifying the resulting methylation disturbance metrics (e.g. delta MF) for each mutation event   
+2. ### Get the mean effect across each mutated locus ###
+    - Script: `/cellar/users/zkoch/methylation_and_mutation/submission_scripts/run_get_mean_metrics_comethylation.py`
+    - Inputs:
+        - `all_metrics_glob_path`: glob to find all_metrics_df parquet files
+        - `out_dir`
+    - Outputs:
+        - One mean metrics file in outdir for each `all_metrics_glob_path`
+3. ### Annotate mutated loci ###
+    
 
 # soMage
 ## **soMage Step 1**: Feature creating and methylation prediction
@@ -54,7 +78,6 @@
     - Outputs:
         - trained model files in `out_dir`
         - predicted methylation in `out_dir`
-    
 ## **soMage Step 2**: Clock training and validation
 1. ### Train predicted methylation clocks ###
     - Script: `/cellar/users/zkoch/methylation_and_mutation/submission_scripts/run_combined_predicted_methyl_clock.py`
@@ -68,7 +91,6 @@
     - Outputs:
         - A combined predicted methylation file
         - Trained clocks from a grid-search
-
 2. ### Train actual methylation clocks ###
     - Trains a elasticNet and xgboost clock for each tissue type within a dataset
     - Also trains an elasticNet and xgboost clock for all tissues together within a dataset
@@ -78,3 +100,4 @@
         - Depends on data from Stage 1.1 already being in `final_tcga_data` or `final_icgc_data`
     - Outputs:
         - trained model files in `out_dir`
+        - ICGC: `/cellar/users/zkoch/methylation_and_mutation/data/final_icgc_data/actual_methyl_epi_clocks`

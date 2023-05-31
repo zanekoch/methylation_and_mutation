@@ -10,7 +10,9 @@ from sklearn.svm import SVR
 import xgboost as xgb
 import glob
 from scipy.stats import spearmanr, pearsonr
-
+plt.rcParams['svg.fonttype'] = 'none'
+plt.rcParams['pdf.fonttype'] = 42
+plt.rcParams['ps.fonttype'] = 42
 
 class optimizeSomage:
     """
@@ -173,7 +175,7 @@ class mutationClock:
                         self.feature_mats.update(this_feat_dict)
                         first = False
                     else:
-                        minor_dicts_to_update = ['feat_mats', 'target_values', 'mad_target_values', 'feat_names']
+                        minor_dicts_to_update = ['feat_mats', 'target_values', 'feat_names']
                         for minor_dict in minor_dicts_to_update:
                             self.feature_mats[minor_dict].update(this_feat_dict[minor_dict])
                             
@@ -183,9 +185,13 @@ class mutationClock:
         """
         top_20_datasets = self.all_methyl_age_df_t['dataset'].value_counts().index[:20].to_list()
         # remove certain vals from top_20_datasets
-        for dset in top_20_datasets:
-            if dset == 'BRCA' or dset == 'LGG'  or dset == 'OV' or dset == 'LAML':
-                top_20_datasets.remove(dset) 
+        try:
+            for dset in top_20_datasets:
+                if dset == 'BRCA' or dset == 'LGG'  or dset == 'OV' or dset == 'LAML':
+                    top_20_datasets.remove(dset)
+        except:
+            # ICGC data doesn't have these datasets
+            pass
         print(top_20_datasets)
         dataset_perf_dfs = []
         for dataset in top_20_datasets:
@@ -388,9 +394,9 @@ class mutationClock:
         self, 
         cpg: str, 
         dataset: str = "", 
-        sample_set: str = "test"
+        sample_set: str = "test",
         ):
-        sns.set_context("notebook", font_scale=1.1)
+        sns.set_context("paper")
         if sample_set == "test":
             samples = self.test_samples
         elif sample_set == "train":
@@ -410,42 +416,39 @@ class mutationClock:
         # plot scatterplot of predicted vs actual
         fig, axes = plt.subplots(figsize=(6, 4))
         fig2, axes2 = plt.subplots(figsize=(6, 4))
-        if dataset != "":
-            sns.scatterplot(
-                y=predicted_values, x=actual_values,
-                ax=axes, hue = self.all_methyl_age_df_t.loc[samples, 'age_at_index']
-                )
-            pred_act_df = pd.DataFrame({
-                'Methylation fraction': predicted_values.to_list() + actual_values.to_list(), 
-                'Age': self.all_methyl_age_df_t.loc[samples, 'age_at_index'].to_list()* 2, 
-                'Type': ['Predicted']*len(predicted_values) + ['Actual']*len(actual_values)
-                })
-            sns.scatterplot(
-                y='Methylation fraction', x='Age',
-                ax=axes2, hue = 'Type', data=pred_act_df,
+        fig3, axes3 = plt.subplots(figsize=(6, 4))
+        sns.scatterplot(
+            y=predicted_values, x=actual_values,
+            ax=axes, hue = self.all_methyl_age_df_t.loc[samples, 'age_at_index']
             )
-        else:
-            sns.scatterplot(
-                y=predicted_values, x=actual_values,
-                ax=axes, hue = self.all_methyl_age_df_t.loc[samples, 'dataset']
-                )
-            pred_act_df = pd.DataFrame({
-                'Methylation fraction': predicted_values.to_list() + actual_values.to_list(), 
-                'Age': self.all_methyl_age_df_t.loc[samples, 'age_at_index'].to_list()* 2, 
-                'Type': ['Predicted']*len(predicted_values) + ['Actual']*len(actual_values)
-                })
-            sns.scatterplot(
-                y='Methylation fraction', x='Age',
-                ax=axes2, hue = 'Type', data=pred_act_df,
-            )
-        axes.set_ylabel(f'Predicted Methylation {cpg}')
-        axes.set_xlabel(f'Actual Methylation {cpg}')
-        # change legend title
+        pred_act_df = pd.DataFrame({
+            'Methylation fraction': predicted_values.to_list() + actual_values.to_list(), 
+            'Age': self.all_methyl_age_df_t.loc[samples, 'age_at_index'].to_list()* 2, 
+            'Type': ['Predicted']*len(predicted_values) + ['Actual']*len(actual_values)
+            })
+        sns.scatterplot(
+            y='Methylation fraction', x='Age',
+            ax=axes2, hue = 'Type', data=pred_act_df,
+        )
         axes.legend(title='Age')
-        # y = x line based on min and max values
         min_val = min(min(predicted_values), min(actual_values))
         max_val = max(max(predicted_values), max(actual_values))
         axes.plot([min_val, max_val], [min_val, max_val], color='black')
+
+        for_box_df = pd.DataFrame({'Predicted': predicted_values, 'Actual': actual_values})
+        # make interval index for bins
+        bins = pd.IntervalIndex.from_tuples([(0, .2), (.2, .4), (.4, .6), (.6, .8)])          
+        for_box_df['actual_bin'] = pd.cut(for_box_df['Actual'].values, bins=bins)
+        sns.violinplot(
+            x='actual_bin', y='Predicted', data=for_box_df, ax=axes3,
+            palette=['steelblue'], alpha = .5
+        )
+        axes3.set_ylabel(f'UCEC predicted methylation {cpg}')
+        axes3.set_xlabel(f'UCEC actual methylation {cpg}')
+        plt.savefig('/cellar/users/zkoch/methylation_and_mutation/output_dirs/final_figures/figure5/figure5B_methyl_pred_example.svg', dpi=300, format = 'svg')
+        # change legend title
+        # y = x line based on min and max values
+        
     
     def _combine_fns(
         self,
@@ -772,7 +775,7 @@ class mutationClock:
         """
         Plot the feature matrix for a particular CpG, optionally in a particular dataset 
         """
-        sns.set_context('notebook', font_scale=1.1)
+        sns.set_context('paper')
         fig, axes = plt.subplots(figsize=(8, 6), dpi=100)
         # get the feature names
         model, feat_names = self.get_model_and_feat_names(
@@ -812,5 +815,6 @@ class mutationClock:
             :, (feat_mat_scaled != 0).any(axis=0)
             ]
         # plot a heatmap
-        sns.heatmap(feat_mat_scaled, cmap = 'rocket', ax = axes)
+        sns.heatmap(feat_mat_scaled, cmap = 'rocket', ax = axes, rasterized = True)
+        plt.savefig('/cellar/users/zkoch/methylation_and_mutation/output_dirs/final_figures/figure5/figure5A_feat_mat.svg', dpi=300, format = 'svg')
         return feat_mat_scaled

@@ -14,6 +14,12 @@ import sys
 from tqdm import tqdm
 from collections import defaultdict
 import random
+import matplotlib
+matplotlib.rcParams['svg.fonttype'] = 'none'
+matplotlib.rcParams['pdf.fonttype'] = 42
+matplotlib.rcParams['ps.fonttype'] = 42
+matplotlib.rcParams['text.usetex'] = False
+
 
 CHROM_LENGTHS = {
     '1': 248956422,'2': 242193529,'3': 198295559, '4': 190214555,
@@ -105,35 +111,84 @@ class analyzeComethylation:
         self, 
         mean_metrics_df, 
         metric,
-        axes
+        axes,
+        consortium,
+        out_fn
         ):
         """
         
         """
         # increase font size
         #sns.set_theme(style='white', font_scale=1.3, rc={'xtick.bottom': True, 'ytick.left': True})
-        sns.set_context('notebook', font_scale=1.1)
+        sns.set_context('paper')
         #fig, axes = plt.subplots(figsize=(8, 3.5), dpi = 100)
         mut = mean_metrics_df.loc[mean_metrics_df.mutated_sample == True]
-        mut = mut.rename(columns={'is_background': 'Locus'})#.replace({'Mutation event': {True: 'BG mutated samples', False: 'FG mutated samples'}})
+        mut = mut.rename(
+            columns={'is_background': 'Locus'}
+            )
         sns.kdeplot(
             data=mut, x=metric, hue='Locus',
             common_norm=False, palette=['maroon', 'steelblue'],
-            fill=True, ax = axes, clip = (-1, 1), common_grid=True, legend = False,
+            fill=True, ax = axes[0], clip = (-1, 1), common_grid=True, legend = False,
             gridsize=1000
             )
+        # create 30 bin edges from -.75 to .75
+        bins = np.linspace(-.75, .75, 28)
+        """sns.histplot(
+            data=mut, x=metric, hue='Locus',
+            common_norm=False, palette=['maroon', 'steelblue'],
+            fill=True, ax = axes[0],  legend = False, bins=bins, stat='probability',
+            element= 'step',
+            #kde = True, kde_kws={'clip': (-1, 1), 'gridsize': 1000}
+            #gridsize=1000
+            )"""
+        axes[0].set_xlim(-.4, .4)
+        
+        # get counts of observations in each bin, for each locus
+        counts = mut.groupby(['Locus', pd.cut(mut[metric], bins)]).size().unstack(fill_value=0).T
+        counts['mut_prop'] = counts[False] / counts[False].sum()
+        counts['bg_prop'] = counts[True] / counts[True].sum()
+        counts['ratio'] = counts['mut_prop'] / counts['bg_prop']
+        # for rows with False and/or true < 10, set ration to np.nan
+        if consortium == 'ICGC':
+            counts.loc[counts[False] < 5, 'ratio'] = np.nan
+            # set y ticks tp be 0, 1, 2,3,4
+            axes[1].set_yticks([0, 1, 2, 3, 4, 5])
+            # set y tick labels to be 0, 1, 2, 3, 4
+            axes[1].set_yticklabels([0, 1, 2, 3, 4,5])
+            #axes[1].set_ylim(0,5)
+        elif consortium == 'TCGA':
+            counts.loc[counts[False] < 5, 'ratio'] = np.nan
+        else:
+            raise ValueError('consortium must be TCGA or ICGC')
+        # plot ratio as a lineplot with the same x axis and dots at each observation
+        sns.lineplot(
+            data=counts, x=bins[1:] - np.abs((bins[0] - bins[1]))/2, y='ratio', 
+            ax = axes[1], legend = False, color='black',
+            marker='o', markersize=6
+            )
+        # plot dashed line as y=1
+        axes[1].axhline(y=1, color='black', linestyle='--')
+        
+
         # set xlim
-        axes.set_xlim(-.2, .2)
         #axes.set_yscale('log')
         # write delta in geek sybol
-        axes.set_xlabel(r'Median $\Delta$MF across locus')
+        axes[1].set_xlabel(r'Median $\Delta$MF across locus')
+        axes[1].set_ylabel('Ratio of density')
+        
         # change legend labels
         #axes.legend(['Random', 'Mutated'], loc='upper right', title='Locus')
+        # save as an svg
+        plt.savefig(fname=out_fn, format='pdf', dpi = 300)
+        return counts
+        
     
     def add_mutation_info_to_mean_metrics_df(
         self,
-        mean_metrics_df,
-        distance # distance for mean metrics df
+        mean_metrics_df: pd.DataFrame,
+        distance: int, # distance for mean metrics df
+        consortium: str
         ):
         """
         Read in the mutaiton info df which has all columns and merge it with the mean metrics df
@@ -142,17 +197,29 @@ class analyzeComethylation:
         @ distance: distance for mean metrics df
         @ return: pd.DataFrame of the mean metrics for each mutated sample (RC of FG) mutation event within the specified distance with additional columns such as gc_percetange, mutation type, etc.
         """
-        VALID_MUTATIONS = ["C>A", "C>G", "C>T", "T>A", "T>C", "T>G", "G>C","G>A", "A>T", "A>G" , "A>C", "G>T", "C>-"]
-    
-        # read in mutation data
-        all_mut_all_col_df = pd.read_csv(
-            '/cellar/users/zkoch/methylation_and_mutation/data/PANCAN_mut.tsv.gz', sep = '\t'
-            )
-        all_mut_all_col_df['sample'] = all_mut_all_col_df['sample'].str[:-3]
+        VALID_MUTATIONS = [
+            "C>A", "C>G", "C>T", "T>A", "T>C", "T>G", "G>C",
+            "G>A", "A>T", "A>G" , "A>C", "G>T", "C>-"
+            ]
+        if consortium == 'TCGA':
+            # read in mutation data
+            all_mut_all_col_df = pd.read_csv(
+                '/cellar/users/zkoch/methylation_and_mutation/data/final_tcga_data/PANCAN_mut.tsv.gz',
+                sep = '\t'
+                )
+            all_mut_all_col_df['sample'] = all_mut_all_col_df['sample'].str[:-3]
+        elif consortium == 'ICGC':
+            all_mut_all_col_df = pd.read_csv(
+                '/cellar/users/zkoch/methylation_and_mutation/data/final_icgc_data/icgc_mut_df.csv.gz',
+                sep = '\t'
+                )
+        else:
+            raise ValueError('consortium must be TCGA or ICGC')
         all_mut_all_col_df.rename({'sample': 'case_submitter_id'}, axis = 1, inplace = True)
         all_mut_all_col_df["mut_type"] = all_mut_all_col_df["reference"] + '>' + all_mut_all_col_df["alt"]
         all_mut_all_col_df = all_mut_all_col_df.loc[all_mut_all_col_df["mut_type"].isin(VALID_MUTATIONS)]
-        all_mut_all_col_df['mut_event'] = all_mut_all_col_df['case_submitter_id'] + '_' + all_mut_all_col_df['chr'] + ':' + all_mut_all_col_df['start'].astype(str)
+        all_mut_all_col_df['mut_event'] = all_mut_all_col_df['case_submitter_id'] + '_' + all_mut_all_col_df['chr'] + ':' + all_mut_all_col_df['start'].astype(str)  
+        
         
         # load reference and CGI
         from pyfaidx import Fasta
@@ -232,12 +299,16 @@ class analyzeComethylation:
         }
         # increase font size
         #sns.set_theme(style='white', font_scale=1.3, rc={'xtick.bottom': True, 'ytick.left': True})
-        sns.set_context('notebook', font_scale=1.1)
+        sns.set_context('paper')
         if axes is None:
             fig, axes = plt.subplots(figsize=(7, 4), dpi = 100)
             
         mut = mean_metrics_df.loc[mean_metrics_df.mutated_sample == True]
-        mut = mut.rename(columns={'is_background': 'Locus'}).replace({'Locus': {True: 'Random', False: 'Mutated'}})
+        mut = mut.rename(
+            columns={'is_background': 'Locus'}
+            ).replace(
+                {'Locus': {True: 'Random', False: 'Mutated'}}
+                )
         mut['dummy'] = 0
         sns.violinplot(
             data=mut, y=metric, x = 'Locus', #split=True,
@@ -247,13 +318,12 @@ class analyzeComethylation:
             #inner = None, linewidth=0, zorder = 0,
             order = ['Mutated', 'Random']
             )
-        """sns.boxplot(
+        sns.boxplot(
             data=mut, y=metric,  x = 'Locus', 
             showfliers=False, ax = axes, boxprops={"zorder": 2, 'facecolor':'none', 'edgecolor':'black', }, medianprops = {'color':'black'},
-            capprops = {'color':'black'}, whiskerprops = {'color':'black'}, zorder = 2, linewidth=1, 
+            capprops = {'color':'black'}, whiskerprops = {'color':'black'}, zorder = 2, linewidth=1.2, 
             order = ['Mutated', 'Random']
-            
-            )"""
+            )
         # set xlim
         axes.set_ylim(-.17, .17)
         # write delta in geek sybol
@@ -270,7 +340,7 @@ class analyzeComethylation:
         metric = 'mean_dmf'
         ):
         #sns.set_theme(style='white', font_scale=1.3, rc={'xtick.bottom': True, 'ytick.left': True})
-        sns.set_context('notebook', font_scale=1.1)
+        sns.set_context('paper')
 
         fig, axes = plt.subplots(figsize=(8, 4), dpi=100)
         # Randomized control or actual mutation
@@ -293,7 +363,391 @@ class analyzeComethylation:
         # delta in geek symbol
         axes.set_ylabel(r'Mean $\Delta$MF across locus')
         
-    def plot_distance_of_effect(
+    def plot_distance_of_effect_lineplot(
+        self,
+        mean_metrics_df: pd.DataFrame,
+        all_metrics_df: pd.DataFrame,
+        num_top_muts: int = 1000,
+        smoothing_window_size_dist: int = 10000,
+        smoothing_window_size_corr: int = 300,
+        dist: int = 100000,
+        plot_bg:bool = True,
+        out_fn: str = None,
+        corr_vs_dist: bool = False,
+        illumina_cpg_locs_df: pd.DataFrame = None,
+        ):
+        """
+        @ mean_metrics_df: DataFrame with mean metrics for each mutation event
+        @ all_metrics_df: DataFrame with all metrics for each mutation, without matched samples
+        """
+        # select only a certain distance of median rows 
+        filtered_df = mean_metrics_df.query(
+            'distance == @dist & mutated_sample == True & is_background == False'
+            )
+        # sort them in order of median_dmf
+        sorted_df = filtered_df.sort_values(by='median_dmf', ascending=False)
+        # either get all or the top & bottom X rows
+        if num_top_muts == -1:
+            pos_indices = sorted_df.loc[sorted_df['median_dmf'] > 0].index
+            neg_indices = sorted_df.loc[sorted_df['median_dmf'] < 0].index
+        else:
+            neg_indices = sorted_df.index[-num_top_muts:]
+            pos_indices = sorted_df.index[:num_top_muts]
+        # get the 'mut_event' identifiers for these top events
+        biggest_neg_effect = sorted_df.loc[neg_indices, 'mut_event'].values
+        biggest_pos_effect = sorted_df.loc[pos_indices, 'mut_event'].values
+        # in all_metrics, select these mut events
+        biggest_neg_to_plot = all_metrics_df.loc[
+            all_metrics_df['mutated_sample'] == True
+            ].query('mut_event in @biggest_neg_effect or index_event in @biggest_neg_effect')
+        biggest_pos_to_plot = all_metrics_df.loc[
+            all_metrics_df['mutated_sample'] == True
+            ].query('mut_event in @biggest_pos_effect or index_event in @biggest_pos_effect')
+        
+        def custom_agg1(column):
+            return column.quantile(0.4)
+        def custom_agg2(column):
+            return column.median()
+        def custom_agg3(column):
+            return column.quantile(0.6)
+        
+        if corr_vs_dist:
+            def get_genomic_dist_from_corr(corr_metrics_df, illumina_cpg_locs_df):
+                mut_corr_all_metrics_df = corr_metrics_df.copy()
+                #mut_corr_all_metrics_df = corr_all_metrics_df.query("is_background == False").copy()
+                mut_corr_all_metrics_df.loc[:, 'mut_start'] = mut_corr_all_metrics_df['mut_event'].apply(
+                    lambda x: int(x.split(':')[-1])
+                    )
+                mut_corr_all_metrics_df = illumina_cpg_locs_df.merge(
+                    mut_corr_all_metrics_df, left_on='#id', right_on='measured_site', how = 'right'
+                    )
+                mut_corr_all_metrics_df.rename(columns={'start': 'measured_start'}, inplace=True)
+                mut_corr_all_metrics_df['genomic_dist'] = mut_corr_all_metrics_df['mut_start'].astype(int) - mut_corr_all_metrics_df['measured_start'].astype(int)
+                mut_corr_all_metrics_df['abs_genomic_dist'] = mut_corr_all_metrics_df['genomic_dist'].abs()
+                return mut_corr_all_metrics_df
+            # convet the corr distance to genomic distance
+            biggest_neg_to_plot_fg = get_genomic_dist_from_corr(
+                biggest_neg_to_plot.query("is_background == False"), illumina_cpg_locs_df
+                )
+            biggest_pos_to_plot_fg = get_genomic_dist_from_corr(
+                biggest_pos_to_plot.query("is_background == False"), illumina_cpg_locs_df
+                )
+            # measured_site_dist is correlation distance
+            # abs_genomic_dist is genomic distance
+            # sort the DataFrames by measured_site_dist and drop duplicates
+            biggest_neg_to_plot_sorted_corr = biggest_neg_to_plot_fg.query(
+                "is_background == False"
+                ).sort_values(by='measured_site_dist', ascending=False).drop_duplicates()
+            biggest_pos_to_plot_sorted_corr = biggest_pos_to_plot_fg.query(
+                "is_background == False"
+                ).sort_values(by='measured_site_dist', ascending=False).drop_duplicates()
+            # within each rolling window, calculate the median, 40th and 60th percentile
+            biggest_neg_to_plot_smoothed_corr = (
+                biggest_neg_to_plot_sorted_corr.set_index('measured_site_dist')
+                .rolling(smoothing_window_size_corr, center=True, min_periods=0)
+                ['delta_mf_median'].agg([custom_agg1, custom_agg2, custom_agg3]).reset_index()
+                .rename(columns={'custom_agg1': '5th', 'custom_agg2': 'median', 'custom_agg3': '95th'})
+                #.agg(['mean',  'std', 'count']).reset_index()
+                ).iloc[::num_top_muts, :]
+            # keep only every 1000th row
+            biggest_pos_to_plot_smoothed_corr = (
+                biggest_pos_to_plot_sorted_corr.set_index('measured_site_dist')
+                .rolling(smoothing_window_size_corr, center=True, min_periods=0)
+                ['delta_mf_median'].agg([custom_agg1, custom_agg2, custom_agg3]).reset_index()
+                .rename(columns={'custom_agg1': '5th', 'custom_agg2': 'median', 'custom_agg3': '95th'})
+                #.agg(['mean',  'std', 'count']).reset_index()
+                ).iloc[::num_top_muts, :]
+            # then do the same for abs genomic distance
+            biggest_neg_to_plot_sorted_dist = biggest_neg_to_plot_fg.query(
+                "is_background == False"
+                ).sort_values(by='abs_genomic_dist', ascending=False).drop_duplicates()
+            biggest_pos_to_plot_sorted_dist = biggest_pos_to_plot_fg.query(
+                "is_background == False"
+                ).sort_values(by='abs_genomic_dist', ascending=False).drop_duplicates()
+            biggest_neg_to_plot_smoothed_dist = (
+                biggest_neg_to_plot_sorted_dist.set_index('abs_genomic_dist')
+                .rolling(smoothing_window_size_dist, center=True, min_periods=0)
+                ['delta_mf_median'].agg([custom_agg1, custom_agg2, custom_agg3]).reset_index()
+                .rename(columns={'custom_agg1': '5th', 'custom_agg2': 'median', 'custom_agg3': '95th'})
+                #.agg(['mean',  'std', 'count']).reset_index()
+                ).iloc[::num_top_muts, :]
+            biggest_pos_to_plot_smoothed_dist = (
+                biggest_pos_to_plot_sorted_dist.set_index('abs_genomic_dist')
+                .rolling(smoothing_window_size_dist, center=True, min_periods=0)
+                ['delta_mf_median'].agg([custom_agg1, custom_agg2, custom_agg3]).reset_index()
+                .rename(columns={'custom_agg1': '5th', 'custom_agg2': 'median', 'custom_agg3': '95th'})
+                #.agg(['mean',  'std', 'count']).reset_index()
+                ).iloc[::num_top_muts, :]
+            fig, axes = plt.subplots(2, 2, figsize=(10, 6), dpi = 100, sharex='col', sharey='row')
+            axes = axes.flatten()
+            # show y and x tick labels on all subplots
+            for i in range(len(axes)):
+                axes[i].xaxis.set_tick_params(labelbottom=True)
+                axes[i].yaxis.set_tick_params(labelleft=True)
+                
+            sns.set_context("paper")
+            # positive corr
+            axes[0].plot(
+                biggest_pos_to_plot_smoothed_corr['measured_site_dist'],
+                biggest_pos_to_plot_smoothed_corr['median'],
+                color='maroon'
+                )
+            axes[0].fill_between(
+                biggest_pos_to_plot_smoothed_corr['measured_site_dist'],
+                biggest_pos_to_plot_smoothed_corr['5th'],
+                biggest_pos_to_plot_smoothed_corr['95th'],
+                color='maroon', alpha=0.2, rasterized=True
+                )
+            axes[0].set_xlabel('Correlation distance (rank order)')
+            axes[0].set_ylabel('$\Delta$MF')
+            # negative corr
+            axes[2].plot(
+                biggest_neg_to_plot_smoothed_corr['measured_site_dist'],
+                biggest_neg_to_plot_smoothed_corr['median'],
+                color='maroon'
+                )
+            axes[2].fill_between(
+                biggest_neg_to_plot_smoothed_corr['measured_site_dist'],
+                biggest_neg_to_plot_smoothed_corr['5th'],
+                biggest_neg_to_plot_smoothed_corr['95th'],
+                color='maroon', alpha=0.2, rasterized=True
+                )
+            axes[2].set_xlabel('Correlation distance (rank order)')
+            axes[2].set_ylabel('$\Delta$MF')
+            # positive dist  
+            axes[1].plot(
+                biggest_pos_to_plot_smoothed_dist['abs_genomic_dist']/1000,
+                biggest_pos_to_plot_smoothed_dist['median'],
+                color='maroon'
+                )
+            axes[1].fill_between(
+                biggest_pos_to_plot_smoothed_dist['abs_genomic_dist']/1000,
+                biggest_pos_to_plot_smoothed_dist['5th'],
+                biggest_pos_to_plot_smoothed_dist['95th'],
+                color='maroon', alpha=0.2, rasterized=True
+                )
+            axes[1].set_xlabel('Genomic distance (kb)')
+            axes[1].set_ylabel('')
+            # negative dist
+            axes[3].plot(
+                biggest_neg_to_plot_smoothed_dist['abs_genomic_dist']/1000,
+                biggest_neg_to_plot_smoothed_dist['median'],
+                color='maroon'
+                )
+            axes[3].fill_between(
+                biggest_neg_to_plot_smoothed_dist['abs_genomic_dist']/1000,
+                biggest_neg_to_plot_smoothed_dist['5th'],
+                biggest_neg_to_plot_smoothed_dist['95th'],
+                color='maroon', alpha=0.2, rasterized=True
+                )
+            axes[3].set_xlabel('Genomic distance (kb)')
+            axes[3].set_ylabel('')
+            
+            if plot_bg:
+                biggest_neg_bg_to_plot = get_genomic_dist_from_corr(
+                    biggest_neg_to_plot.query("is_background == True").head(len(biggest_neg_to_plot_sorted_dist)), illumina_cpg_locs_df
+                    )
+                biggest_pos_bg_to_plot = get_genomic_dist_from_corr(
+                    biggest_pos_to_plot.query("is_background == True").head(len(biggest_neg_to_plot_sorted_dist)), illumina_cpg_locs_df
+                    )
+                # correlation
+                biggest_neg_bg_to_plot_sorted_corr = biggest_neg_bg_to_plot.query(
+                    "is_background == True"
+                    ).sort_values(by='measured_site_dist', ascending=False).drop_duplicates()
+                biggest_pos_bg_to_plot_sorted_corr = biggest_pos_bg_to_plot.query(
+                    "is_background == True"
+                    ).sort_values(by='measured_site_dist', ascending=False).drop_duplicates()
+                bg_biggest_neg_to_plot_smoothed_corr = (
+                    biggest_neg_bg_to_plot_sorted_corr.set_index('measured_site_dist')
+                    .rolling(smoothing_window_size_corr, center=True, min_periods=0)
+                    ['delta_mf_median'].agg([custom_agg1, custom_agg2, custom_agg3]).reset_index()
+                    .rename(columns={'custom_agg1': '5th', 'custom_agg2': 'median', 'custom_agg3': '95th'})
+                    ).iloc[::num_top_muts, :]
+                bg_biggest_pos_to_plot_smoothed_corr = (
+                    biggest_pos_bg_to_plot_sorted_corr.set_index('measured_site_dist')
+                    .rolling(smoothing_window_size_corr, center=True, min_periods=0)
+                    ['delta_mf_median'].agg([custom_agg1, custom_agg2, custom_agg3]).reset_index()
+                    .rename(columns={'custom_agg1': '5th', 'custom_agg2': 'median', 'custom_agg3': '95th'})
+                    ).iloc[::num_top_muts, :]
+                # distance
+                biggest_neg_bg_to_plot_sorted_dist = biggest_neg_bg_to_plot.query(
+                    "is_background == True"
+                    ).sort_values(by='abs_genomic_dist', ascending=False).drop_duplicates()
+                biggest_pos_bg_to_plot_sorted_dist = biggest_pos_bg_to_plot.query(
+                    "is_background == True"
+                    ).sort_values(by='abs_genomic_dist', ascending=False).drop_duplicates()
+                bg_biggest_neg_to_plot_smoothed_dist = (
+                    biggest_neg_bg_to_plot_sorted_dist.set_index('abs_genomic_dist')
+                    .rolling(smoothing_window_size_dist, center=True, min_periods=0)
+                    ['delta_mf_median'].agg([custom_agg1, custom_agg2, custom_agg3]).reset_index()
+                    .rename(columns={'custom_agg1': '5th', 'custom_agg2': 'median', 'custom_agg3': '95th'})
+                    )
+                bg_biggest_pos_to_plot_smoothed_dist = (
+                    biggest_pos_bg_to_plot_sorted_dist.set_index('abs_genomic_dist')
+                    .rolling(smoothing_window_size_dist, center=True, min_periods=0)
+                    ['delta_mf_median'].agg([custom_agg1, custom_agg2, custom_agg3]).reset_index()
+                    .rename(columns={'custom_agg1': '5th', 'custom_agg2': 'median', 'custom_agg3': '95th'})
+                    )
+                            # positive corr
+                axes[0].plot(
+                    bg_biggest_pos_to_plot_smoothed_corr['measured_site_dist'],
+                    bg_biggest_pos_to_plot_smoothed_corr['median'],
+                    color='steelblue'
+                    )
+                axes[0].fill_between(
+                    bg_biggest_pos_to_plot_smoothed_corr['measured_site_dist'],
+                    bg_biggest_pos_to_plot_smoothed_corr['5th'],
+                    bg_biggest_pos_to_plot_smoothed_corr['95th'],
+                    color='steelblue', alpha=0.2, rasterized=True
+                    )
+                # negative corr
+                axes[2].plot(
+                    bg_biggest_neg_to_plot_smoothed_corr['measured_site_dist'],
+                    bg_biggest_neg_to_plot_smoothed_corr['median'],
+                    color='steelblue'
+                    )
+                axes[2].fill_between(
+                    bg_biggest_neg_to_plot_smoothed_corr['measured_site_dist'],
+                    bg_biggest_neg_to_plot_smoothed_corr['5th'],
+                    bg_biggest_neg_to_plot_smoothed_corr['95th'],
+                    color='steelblue', alpha=0.2, rasterized=True
+                    )
+                # positive dist  
+                axes[1].plot(
+                    bg_biggest_pos_to_plot_smoothed_dist['abs_genomic_dist']/1000,
+                    bg_biggest_pos_to_plot_smoothed_dist['median'],
+                    color='steelblue'
+                    )
+                axes[1].fill_between(
+                    bg_biggest_pos_to_plot_smoothed_dist['abs_genomic_dist']/1000,
+                    bg_biggest_pos_to_plot_smoothed_dist['5th'],
+                    bg_biggest_pos_to_plot_smoothed_dist['95th'],
+                    color='steelblue', alpha=0.2, rasterized=True
+                    )
+                # negative dist
+                axes[3].plot(
+                    bg_biggest_neg_to_plot_smoothed_dist['abs_genomic_dist']/1000,
+                    bg_biggest_neg_to_plot_smoothed_dist['median'],
+                    color='steelblue'
+                    )
+                axes[3].fill_between(
+                    bg_biggest_neg_to_plot_smoothed_dist['abs_genomic_dist']/1000,
+                    bg_biggest_neg_to_plot_smoothed_dist['5th'],
+                    bg_biggest_neg_to_plot_smoothed_dist['95th'],
+                    color='steelblue', alpha=0.2, rasterized=True
+                    )
+            plt.savefig(fname=out_fn, format='svg', dpi = 300, bbox_inches='tight') 
+            
+        else:
+            # sort the DataFrames by measured_site_dist and drop duplicates
+            biggest_neg_to_plot_sorted = biggest_neg_to_plot.query(
+                "is_background == False"
+                ).sort_values(by='measured_site_dist', ascending=False).drop_duplicates()
+            biggest_pos_to_plot_sorted = biggest_pos_to_plot.query(
+                "is_background == False"
+                ).sort_values(by='measured_site_dist', ascending=False).drop_duplicates()
+            # within each rolling window, calculate the median, 40th and 60th percentile
+            biggest_neg_to_plot_smoothed = (
+                biggest_neg_to_plot_sorted.set_index('measured_site_dist')
+                .rolling(smoothing_window_size_dist, center=True, min_periods=0)
+                ['delta_mf_median'].agg([custom_agg1, custom_agg2, custom_agg3]).reset_index()
+                .rename(columns={'custom_agg1': '5th', 'custom_agg2': 'median', 'custom_agg3': '95th'})
+                #.agg(['mean',  'std', 'count']).reset_index()
+                )
+            biggest_pos_to_plot_smoothed = (
+                biggest_pos_to_plot_sorted.set_index('measured_site_dist')
+                .rolling(smoothing_window_size_dist, center=True, min_periods=0)
+                ['delta_mf_median'].agg([custom_agg1, custom_agg2, custom_agg3]).reset_index()
+                .rename(columns={'custom_agg1': '5th', 'custom_agg2': 'median', 'custom_agg3': '95th'})
+                #.agg(['mean',  'std', 'count']).reset_index()
+                )
+            #return biggest_neg_to_plot_sorted, biggest_neg_to_plot_smoothed
+            # plot as lineplots
+            # 1kb, 1k smoothing all pos/neg
+            fig, axes = plt.subplots(2, 1, figsize=(6, 5), dpi = 100, sharex=False)
+            # increase text size
+            sns.set_context("paper")
+            axes[0].plot(
+                biggest_pos_to_plot_smoothed['measured_site_dist']/1000,
+                biggest_pos_to_plot_smoothed['median'],
+                color='maroon'
+                )
+            axes[0].fill_between(
+                biggest_pos_to_plot_smoothed['measured_site_dist']/1000,
+                biggest_pos_to_plot_smoothed['5th'],
+                biggest_pos_to_plot_smoothed['95th'],
+                color='maroon', alpha=0.2, rasterized=True
+                )
+            axes[0].set_xlabel('')
+            axes[0].set_ylabel('$\Delta$MF')
+            
+            axes[1].plot(
+                biggest_neg_to_plot_smoothed['measured_site_dist']/1000,
+                biggest_neg_to_plot_smoothed['median'],
+                color='maroon'
+                )
+            axes[1].fill_between(
+                biggest_neg_to_plot_smoothed['measured_site_dist']/1000,
+                biggest_neg_to_plot_smoothed['5th'],
+                biggest_neg_to_plot_smoothed['95th'],
+                color='maroon', alpha=0.2, rasterized=True
+                )
+            axes[1].set_xlabel('Distance from mutated site (kb)')
+            axes[1].set_ylabel('$\Delta$MF')
+            
+            axes[0].set_xlim(-40, 40)
+            axes[1].set_xlim(-40, 40)
+            
+            # plot background too
+            if plot_bg:
+                # and get background sorted too
+                bg_biggest_neg_to_plot_sorted = biggest_neg_to_plot.query(
+                    "is_background == True"
+                    ).head(50000).sort_values(by='measured_site_dist', ascending=False).drop_duplicates()
+                bg_biggest_pos_to_plot_sorted = biggest_pos_to_plot.query(
+                    "is_background == True"
+                    ).head(50000).sort_values(by='measured_site_dist', ascending=False).drop_duplicates()
+                
+                bg_biggest_neg_to_plot_smoothed = (
+                    bg_biggest_neg_to_plot_sorted.set_index('measured_site_dist')
+                    .rolling(smoothing_window_size_dist, center=True, min_periods=0)
+                    ['delta_mf_median'].agg([custom_agg1, custom_agg2, custom_agg3]).reset_index()
+                    .rename(columns={'custom_agg1': '5th', 'custom_agg2': 'median', 'custom_agg3': '95th'})
+                    )
+                bg_biggest_pos_to_plot_smoothed = (
+                    bg_biggest_pos_to_plot_sorted.set_index('measured_site_dist')
+                    .rolling(smoothing_window_size_dist, center=True, min_periods=0)
+                    ['delta_mf_median'].agg([custom_agg1, custom_agg2, custom_agg3]).reset_index()
+                    .rename(columns={'custom_agg1': '5th', 'custom_agg2': 'median', 'custom_agg3': '95th'})
+                    )
+                axes[0].plot(
+                    bg_biggest_pos_to_plot_smoothed['measured_site_dist']/1000,
+                    bg_biggest_pos_to_plot_smoothed['median'],
+                    color='steelblue'
+                    )
+                axes[0].fill_between(
+                    bg_biggest_pos_to_plot_smoothed['measured_site_dist']/1000,
+                    bg_biggest_pos_to_plot_smoothed['5th'],
+                    bg_biggest_pos_to_plot_smoothed['95th'],
+                    color='steelblue', alpha=0.2, rasterized=True
+                    )
+                axes[1].plot(
+                    bg_biggest_neg_to_plot_smoothed['measured_site_dist']/1000,
+                    bg_biggest_neg_to_plot_smoothed['median'],
+                    color='steelblue'
+                    )
+                axes[1].fill_between(
+                    bg_biggest_neg_to_plot_smoothed['measured_site_dist']/1000,
+                    bg_biggest_neg_to_plot_smoothed['5th'],
+                    bg_biggest_neg_to_plot_smoothed['95th'],
+                    color='steelblue', alpha=0.2, rasterized=True
+                    )
+            
+            plt.savefig(fname=out_fn, format='svg', dpi = 300, bbox_inches='tight')
+        return fig, axes
+
+        
+    def plot_distance_of_effect_boxplot(
         self, 
         mut_events,
         num_bins,
@@ -302,7 +756,7 @@ class analyzeComethylation:
         method = 'dist',
         log_scale = False
         ):
-        sns.set_context('notebook', font_scale=1.1)
+        sns.set_context('paper')
         # make bigger figure
         plt.figure(figsize=(6,4), dpi=100)
         # subset
@@ -444,9 +898,12 @@ class analyzeComethylation:
              utils.half(matched_samples[:int(max_matched_samples)], 'second'))
             )
         
+        """
+        For TCGA dist example
         comparison_sites = comparison_sites[10:-37]
         print(distances[10])
         print(distances[-37])
+        """
         # get mf of the comparison sites
         all_samples_comp_sites = all_methyl_age_df_t.loc[samples_to_plot, comparison_sites]
         if rolling_window_size > 1:
@@ -491,27 +948,11 @@ class analyzeComethylation:
         #axes.tick_params(axis='x', which='major', labelsize=)
         # make the mutated site label red
         axes.xaxis.get_majorticklabels()[1].set_color('red')
-
-        from matplotlib.colors import LinearSegmentedColormap
-        import matplotlib
         
-        """cmap_segments = [
-            (0.0, matplotlib.colors.to_rgba("blue", alpha=0.0)),
-            (0.1, matplotlib.colors.to_rgba("blue", alpha=0.1)),
-            (0.2, matplotlib.colors.to_rgba("blue", alpha=0.2)),
-            (0.3, matplotlib.colors.to_rgba("blue", alpha=0.4)),
-            
-            (0.4, matplotlib.colors.to_rgba("blue", alpha=0.45)),
-            (0.5, matplotlib.colors.to_rgba("blue", alpha=0.5)),
-            (0.6, matplotlib.colors.to_rgba("blue", alpha=0.55)),
-            (0.7, matplotlib.colors.to_rgba("blue", alpha=0.6)),
-            
-            (0.8, matplotlib.colors.to_rgba("blue", alpha=0.7)),
-            (0.9, matplotlib.colors.to_rgba("blue", alpha=0.8)),
-            (1.0, matplotlib.colors.to_rgba("blue", alpha=1.0)),
-        ]
-
-        cmap = LinearSegmentedColormap.from_list("white_midnightblue_alpha", cmap_segments)"""
+        #plt.savefig('/cellar/users/zkoch/methylation_and_mutation/output_dirs/final_figures/figure2/heatmap_DMF.svg', format='svg', dpi = 300, bbox_inches='tight')
+        plt.savefig('/cellar/users/zkoch/methylation_and_mutation/output_dirs/final_figures/figure4/figure4C_heatmap_DMF.svg', format='svg', dpi = 300, bbox_inches='tight')
+        
+        from matplotlib.colors import LinearSegmentedColormap
 
         cmap_segments = [
             (0.0, "white"),
@@ -526,13 +967,11 @@ class analyzeComethylation:
         # Create the colormap
         cmap = LinearSegmentedColormap.from_list("white_blue_very_dark_blue", cmap_segments, N =256)
 
-
-
         # plot MF
         _, axes = plt.subplots(figsize=(9,6), dpi=100)
         ax = sns.heatmap(
             data = all_samples_comp_sites, annot=False, xticklabels=False, yticklabels=True, 
-            cmap=cmap, vmin=0, vmax=1, center=0.5,
+            cmap='Blues', vmin=0, vmax=1, center=0.5,
             cbar_kws={'label': r'Methylation fraction'}, ax=axes
             )
         # label axes
@@ -560,6 +999,9 @@ class analyzeComethylation:
         # plot distances as a lineplot
         if method == 'corr':
             distances = comparison_site_and_distances['actual_distances'].to_list()
+        #plt.savefig('/cellar/users/zkoch/methylation_and_mutation/output_dirs/final_figures/figure2/heatmap_methylFrac.svg', format='svg', dpi = 300, bbox_inches='tight')
+        plt.savefig('/cellar/users/zkoch/methylation_and_mutation/output_dirs/final_figures/figure4/Figure4C_heatmap_methylFrac.svg', format='svg', dpi = 300, bbox_inches='tight')
+        
         _, axes = plt.subplots(figsize=(8, 2), dpi=100)
         ax = sns.scatterplot(
             y=[np.abs(x) for x in distances], 
@@ -580,7 +1022,7 @@ class analyzeComethylation:
                 )
             #ax2.legend(loc='upper left')
             # added these three lines
-            ax2.set_ylabel('Correlation distance')
+            ax2.set_ylabel('Correlation\ndistance')
             
             
         # plot y = 0 line on axes
@@ -593,6 +1035,9 @@ class analyzeComethylation:
         axes.set_xticks([])
         axes.set_xticklabels([])
         axes.set_xlabel('Comparison sites')
+        #plt.savefig('/cellar/users/zkoch/methylation_and_mutation/output_dirs/final_figures/figure2/dist_of_heatmap_sites.svg', format='svg', dpi = 300, bbox_inches='tight')
+        plt.savefig('/cellar/users/zkoch/methylation_and_mutation/output_dirs/final_figures/figure4/Figure4C_dist_of_heatmap_sites.svg', format='svg', dpi = 300, bbox_inches='tight')
+        
         return all_samples_comp_sites, all_samples_comp_sites_dmf, comparison_site_and_distances
         
     def plot_heatmap(
@@ -783,7 +1228,8 @@ class mutationScan:
         self.num_background_events = num_background_events
         self.matched_sample_num = matched_sample_num
         self.mut_collision_dist = mut_collision_dist
-        # Preprocessing: subset to only mutations that are C>T, non X and Y chromosomes, and that occured in samples with measured methylation
+        # Preprocessing: subset to only mutations that are
+        # non X and Y chromosomes and that occured in samples with measured methylation
         self.all_mut_w_age_df['mut_loc'] = self.all_mut_w_age_df['chr'] + ':' + self.all_mut_w_age_df['start'].astype(str)
         self.all_mut_w_age_df = self.all_mut_w_age_df.loc[
             # (self.all_mut_w_age_df['mutation'] == 'C>T') &
@@ -795,11 +1241,17 @@ class mutationScan:
         all_mut_w_age_illum_df = self.all_mut_w_age_df.copy(deep=True)
         all_mut_w_age_illum_df['start'] = pd.to_numeric(self.all_mut_w_age_df['start'])
         self.all_mut_w_age_illum_df = all_mut_w_age_illum_df.merge(
-                                        self.illumina_cpg_locs_df, on=['chr', 'start'], how='left')
+                                        self.illumina_cpg_locs_df, on=['chr', 'start'], how='left'
+                                        )
         # subset illumina_cpg_locs_df to only the CpGs that are measured
-        self.illumina_cpg_locs_df = self.illumina_cpg_locs_df.loc[self.illumina_cpg_locs_df['#id'].isin(self.all_methyl_age_df_t.columns)]
+        self.illumina_cpg_locs_df = self.illumina_cpg_locs_df.loc[
+            self.illumina_cpg_locs_df['#id'].isin(self.all_methyl_age_df_t.columns)
+            ]
         # and remove chr X and Y
-        self.illumina_cpg_locs_df = self.illumina_cpg_locs_df.loc[(self.illumina_cpg_locs_df['chr'] != 'X') & (self.illumina_cpg_locs_df['chr'] != 'Y')]
+        self.illumina_cpg_locs_df = self.illumina_cpg_locs_df.loc[
+            (self.illumina_cpg_locs_df['chr'] != 'X')
+            & (self.illumina_cpg_locs_df['chr'] != 'Y')
+            ]
 
     def correct_pvals(
         self, 
@@ -1277,7 +1729,8 @@ class mutationScan:
         num_mut_events = len(comparison_sites_df)
         # ranomly choose num_background_events from the keys of CHROM_LENGTHS
         rand_chrs = np.random.choice(
-            list(CHROM_LENGTHS.keys()), size= self.num_background_events * num_mut_events, replace=True
+            list(CHROM_LENGTHS.keys()), 
+            size= self.num_background_events * num_mut_events, replace=True
             )
         background_events = pd.DataFrame({'chr': rand_chrs})
         # randomly choose a location near a CpG on this chr by applying _random_site_near_cpg to each row 
@@ -1297,12 +1750,13 @@ class mutationScan:
         background_events['index_event'] = repeated_comp_sites_df['mut_event']
         # mut event is the background site
         background_events['mut_event'] = background_events['case_submitter_id'] + '_' + background_events['mut_loc']
-        
+    
         # now get the comparison sites and dists for these background sites
         background_events = self._get_nearby_measured_cpgs(background_events)
         # drop those without any nearby CpGs
         background_events = background_events[background_events['comparison_sites'].apply(len) > 0]
-        # check if we now have too many or too few background sites, we want self.num_background_events for each index event
+        # check if we now have too many or too few background sites
+        # we want self.num_background_events for each index event
         index_value_counts = background_events['index_event'].value_counts().to_frame()
         index_value_counts.columns = ['num_background_events']
         index_value_counts['diff_from_target'] = index_value_counts['num_background_events'] - self.num_background_events
@@ -1329,14 +1783,17 @@ class mutationScan:
         rand_cpgs = np.random.choice(
             cpgs_to_choose_from, size= self.num_background_events * num_mut_events, replace=True
             )
-        # create dataframe of background events based on the chosen cpgs, mapping chr and start from illumina cpg locs
+        # create dataframe of background events based on the chosen cpgs
+        # mapping chr and start from illumina cpg locs
         background_events = pd.DataFrame({'#id': rand_cpgs})
         background_events = background_events.merge(
             self.illumina_cpg_locs_df[['#id', 'chr', 'start']], on='#id', how='left'
             )
         background_events['mut_loc'] = background_events['chr'] + ':' + background_events['start'].astype(str)
         # concat the comparison sites df to itself to populate background_events columns
-        repeated_comp_sites_df = pd.concat([comparison_sites_df] * self.num_background_events, ignore_index=True)
+        repeated_comp_sites_df = pd.concat(
+            [comparison_sites_df] * self.num_background_events, ignore_index=True
+            )
         repeated_comp_sites_df.reset_index(drop=True, inplace=True)
         background_events['dataset'] = repeated_comp_sites_df['dataset']
         background_events['case_submitter_id'] = repeated_comp_sites_df['case_submitter_id']
@@ -1349,8 +1806,10 @@ class mutationScan:
         background_events['mut_event'] = background_events['case_submitter_id'] + '_' + background_events['mut_loc']
         
         # choose the most correlated sites from the preprocessed data
-        background_events['comparison_sites'] = background_events.apply(
-            lambda mut_event: self._select_correl_sites_preproc(mut_event, corr_direction), axis = 1
+        tqdm.pandas(desc="Getting background comp sites", miniters=len(background_events)/10)
+        background_events['comparison_sites'] = background_events.progress_apply(
+            lambda mut_event: self._select_correl_sites_preproc(mut_event, corr_direction),
+            axis = 1
             )
         background_events['comparison_dists'] = [
             [i for i in range(self.num_correl_sites)] 
@@ -1477,14 +1936,17 @@ class mutationScan:
             #ascending=[True, False]
             )
         # select top mutations for further processing
-        valid_muts_w_illum = valid_muts_w_illum.iloc[start_num_mut_to_process:end_num_mut_to_process, :]
+        valid_muts_w_illum = valid_muts_w_illum.iloc[
+            start_num_mut_to_process : end_num_mut_to_process,
+            :]
         print(
             "Number mutation events being processed after filtering for matched sample number: {}".format(len(valid_muts_w_illum)), flush=True
             )
         # choose comparison sites
         tqdm.pandas(desc="Getting comparison sites", miniters=len(valid_muts_w_illum)/10)
+        # changed from _select_correl_sites to match BG and FG methods
         valid_muts_w_illum['comparison_sites'] = valid_muts_w_illum.progress_apply(
-            lambda mut_event: self._select_correl_sites(mut_event, corr_direction), axis = 1
+            lambda mut_event: self._select_correl_sites_preproc(mut_event, corr_direction), axis = 1
             )
         valid_muts_w_illum['comparison_dists'] = [
             [i for i in range(self.num_correl_sites)] 
@@ -1539,13 +2001,13 @@ class mutationScan:
         @ end_num_mut_to_process: the number of mutations to end processing at
         @ returns: valid_muts_w_illum, a df of mutations that have at least one measured CpG within max_dist of the mutation. 'comparison_sites' column is a list of the measured cpgs within max_dist of the mutation.
         """
-        pd.options.mode.chained_assignment = None  # default='warn'
+        pd.options.mode.chained_assignment = None  # default='warn'q
         # get df of all mutations
         valid_muts_w_illum = self.all_mut_w_age_illum_df
         # sort mutations high to low by DNA_VAF
         valid_muts_w_illum = valid_muts_w_illum.sort_values(by='DNA_VAF', ascending=False)
         # choose the 100,000 top VAF, which is >.6 VAF 
-        valid_muts_w_illum = valid_muts_w_illum.iloc[:100000, :]
+        valid_muts_w_illum = valid_muts_w_illum.iloc[:15000, :]
         print(f"First subsetting to 100,000 mutations with highest VAF, processing {len(valid_muts_w_illum)} for comparison sites and matched samples")
         # initialize empty cols
         valid_muts_w_illum['comparison_sites'] = [[] for _ in range(len(valid_muts_w_illum))]

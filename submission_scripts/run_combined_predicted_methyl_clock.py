@@ -121,6 +121,10 @@ def main():
         '--out_dir', type=str, 
         help='output directory'
         )
+    parser.add_argument(
+        '--consortium', type=str,
+        help='consortium to use, TCGA or ICGC'
+    )
     # parse arguments
     args = parser.parse_args()
     somage_path = args.somage_path
@@ -129,13 +133,18 @@ def main():
     cv_num = args.cross_val
     do = args.do
     out_dir = args.out_dir
-    # read in data
-    all_mut_w_age_df, illumina_cpg_locs_df, all_methyl_age_df_t, matrix_qtl_dir, covariate_fn  = get_data.read_tcga_data()
+    consortium = args.consortium
+    if consortium == "ICGC":
+        all_mut_w_age_df, illumina_cpg_locs_df, all_methyl_age_df_t, matrix_qtl_dir, covariate_fn = get_data.read_icgc_data()
+    elif consortium == "TCGA":
+        all_mut_w_age_df, illumina_cpg_locs_df, all_methyl_age_df_t, matrix_qtl_dir, covariate_fn = get_data.read_tcga_data()
+    else:
+        raise ValueError("consortium must be TCGA or ICGC")
     # create mut_feat object
     mut_feat = mutation_features.mutationFeatures(
         all_mut_w_age_df = all_mut_w_age_df, illumina_cpg_locs_df = illumina_cpg_locs_df, 
         all_methyl_age_df_t = all_methyl_age_df_t, out_dir = "", 
-        consortium = 'TCGA', dataset = '', cross_val_num = cv_num,
+        consortium = consortium, dataset = '', cross_val_num = cv_num,
         matrix_qtl_dir = matrix_qtl_dir,
         covariate_fn = covariate_fn
         )

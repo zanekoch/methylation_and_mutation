@@ -1,25 +1,12 @@
 import sys
 sys.path.append('/cellar/users/zkoch/methylation_and_mutation/source_files')
-import compute_comethylation, get_data, utils
+import compute_comethylation, get_data
 import os
 import pandas as pd
 import sys
 import dask.dataframe as dd
 import argparse
 
-
-
-
-
-if linkage_method == 'corr':
-    c_path = f"/cellar/users/zkoch/methylation_and_mutation/output_dirs/032423_comethyl_output/correl_based_1000Top_no_mutMF/comparison_sites_{start_num_mut_to_process}-{end_num_mut_to_process}Muts_corr-linked_qnorm3SD_100background"
-    all_comparison_site_dd = dd.read_parquet(c_path)
-    all_comparison_site_df = all_comparison_site_dd.compute()
-else:
-    c_path = f"/cellar/users/zkoch/methylation_and_mutation/output_dirs/032423_comethyl_output/distance_based_100kbMax/comparison_sites_{start_num_mut_to_process}-{end_num_mut_to_process}Muts_dist-linked_qnorm3SD_100background"
-    all_comparison_site_dd = dd.read_parquet(c_path)
-    all_comparison_site_df = all_comparison_site_dd.compute()
-print("read in comparison sites", flush=True)
 
 def do_comethylation_disturbance_analysis(
     out_dir: str,
@@ -37,7 +24,7 @@ def do_comethylation_disturbance_analysis(
     matched_sample_num: int = 20,
     mut_collision_dist: int = 1000,
     all_comparison_site_df: pd.DataFrame = None
-    ) -> set(pd.DataFrame, pd.DataFrame):
+    ):
     # create mut_scan object
     mut_scan = compute_comethylation.mutationScan(
         all_mut_w_age_df, illumina_cpg_locs_df, 
@@ -65,7 +52,7 @@ def main():
     parser.add_argument('--out_dir', type=str, help='output directory')
     parser.add_argument('--consortium', type=str, help='TCGA or ICGC')
     # add a flag for each argument in do_comethylation_disturbance_analysis
-    parser.add_argument('--corr_dir', type=int, help='path to correlation directory')
+    parser.add_argument('--corr_dir', type=str, help='path to correlation directory')
     parser.add_argument('--start_num_mut_to_process', type=int, help='start number of mutations to process')
     parser.add_argument('--end_num_mut_to_process', type=int, help='end number of mutations to process')
     parser.add_argument('--linkage_method', type=str, help='linkage method')
@@ -75,7 +62,10 @@ def main():
     parser.add_argument('--num_background_events', type=int, help='number of background events')
     parser.add_argument('--matched_sample_num', type=int, help='number of matched samples')
     parser.add_argument('--mut_collision_dist', type=int, help='mutation collision distance')
-    parser.add_argument('--all_comparison_site_dir', type=str, help='path to directory of comparison sites', default=None)
+    parser.add_argument(
+        '--all_comparison_site_dir', type=str,
+        help='path to directory of comparison sites', default=None
+        )
     
     # parse
     args = parser.parse_args()

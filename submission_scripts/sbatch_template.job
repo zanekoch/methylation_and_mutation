@@ -1,9 +1,9 @@
 #!/bin/bash
-#SBATCH --array=0-9%5
+#SBATCH --array=3
 #SBATCH --partition=nrnb-compute
-#SBATCH --mem=70GB
-#SBATCH --time=8:00:00
-#SBATCH --job-name=icgc_somAge
+#SBATCH --mem=156GB
+#SBATCH --time=8:10:00
+#SBATCH --job-name=tcComb
 ##/SBA/TCH --cpus-per-task=32
 ##/SBA/TCH --ntasks=1
 eval "$(conda shell.bash hook)"
@@ -11,9 +11,12 @@ conda activate /cellar/users/zkoch/miniconda3/envs/tf_env
 
 ############################################
 # ICGC run_somatic_mut_clock.py
-start_top_cpgs_values=(0 1000 2000 3000 4000 0 1000 2000 3000 4000)
-end_top_cpgs_values=(1000 2000 3000 4000 5000 1000 2000 3000 4000 5000)
-cv_num_values=(0 0 0 0 0 1 1 1 1 1)
+# 4 hours as 46GB max for 1000 mutations on each job
+
+#start_top_cpgs_values=(0 1000 2000 3000 4000 0 1000 2000 3000 4000)
+#end_top_cpgs_values=(1000 2000 3000 4000 5000 1000 2000 3000 4000 5000)
+#cv_num_values=(0 0 0 0 0 1 1 1 1 1)
+: '
 srun python /cellar/users/zkoch/methylation_and_mutation/submission_scripts/run_somatic_mut_clock.py \
 --do Both \
 --consortium ICGC \
@@ -31,19 +34,105 @@ srun python /cellar/users/zkoch/methylation_and_mutation/submission_scripts/run_
 --nearby_window_size 100000 \
 --extend_amount 500 \
 --agg_only_methyl_pred True
+'
 ############################################
+
+
+############################################
+# TCGA run_somatic_mut_clock.py
+# 2:15 hours as 50GB max for 500 mutations on each job
+# => 5 hours and 64GB for 1000 mutations on each job
+: '
+start_top_cpgs_values=()
+for ((i = 0; i < 100000; i += 1000)); do
+    start_top_cpgs_values+=($i)
+done
+end_top_cpgs_values=()
+for ((i = 1000; i < 101000; i += 1000)); do
+    end_top_cpgs_values+=($i)
+done
+srun python /cellar/users/zkoch/methylation_and_mutation/submission_scripts/run_somatic_mut_clock.py \
+--do Both \
+--consortium TCGA \
+--cross_val 0 \
+--out_dir /cellar/users/zkoch/methylation_and_mutation/output_dirs/051723_tcga_somage_output \
+--start_top_cpgs ${start_top_cpgs_values[$SLURM_ARRAY_TASK_ID]} \
+--end_top_cpgs ${end_top_cpgs_values[$SLURM_ARRAY_TASK_ID]} \
+--aggregate Both \
+--train_baseline scramble \
+--train_actual_model True \
+--model xgboost \
+--burden_bin_size 25000 \
+--num_correl_sites 500 \
+--max_meqtl_sites 200 \
+--nearby_window_size 100000 \
+--extend_amount 500 \
+--agg_only_methyl_pred True
+'
+############################################
+
 
 ############################################
 # run calculate all correlations
 # srun python /cellar/users/zkoch/methylation_and_mutation/submission_scripts/calc_all_chrDset_corrs.py --out_dir /cellar/users/zkoch/methylation_and_mutation/data/final_tcga_data/chr_dset_corrs_qnorm --consortium TCGA
 ############################################
 
+
 ############################################
-# run_somatic_mut_clock.py: creates features and/or predicts methylaiton
-#srun python /cellar/users/zkoch/methylation_and_mutation/submission_scripts/run_somatic_mut_clock.py --Both
+# ICGC run_combined_predicted_methyl_clock.py: reads in predicted methylation and does something
+#srun python /cellar/users/zkoch/methylation_and_mutation/submission_scripts/run_combined_predicted_methyl_clock.py --somage_path /cellar/users/zkoch/methylation_and_mutation/output_dirs/051723_icgc_somage_output --directory_glob ICGC__500correl_200meqtl_100000nearby_Bothagg_1000numCpGs_\*startTopCpGs_500extendAmount_0crossValNum --file_suffix xgboost_scramblebaseline_agg_only --cross_val 0 --do output_methyl_and_dset_perf --out_dir /cellar/users/zkoch/methylation_and_mutation/output_dirs/051723_icgc_somage_output/scrambled_pred_methyl_and_perf_by_dset/ --consortium ICGC
+############################################
+
+
+############################################
+# TCGA run_combined_predicted_methyl_clock.py: reads in predicted methylation and does something
+srun python /cellar/users/zkoch/methylation_and_mutation/submission_scripts/run_combined_predicted_methyl_clock.py --somage_path /cellar/users/zkoch/methylation_and_mutation/output_dirs/051723_tcga_somage_output --directory_glob TCGA__500correl_200meqtl_100000nearby_Bothagg_1000numCpGs_\*startTopCpGs_500extendAmount_${SLURM_ARRAY_TASK_ID}crossValNum --file_suffix xgboost_nonebaseline_agg_only --cross_val ${SLURM_ARRAY_TASK_ID} --do output_methyl_and_dset_perf --out_dir /cellar/users/zkoch/methylation_and_mutation/output_dirs/051723_tcga_somage_output/pred_methyl_and_perf_by_dset --consortium TCGA
+
+srun python /cellar/users/zkoch/methylation_and_mutation/submission_scripts/run_combined_predicted_methyl_clock.py --somage_path /cellar/users/zkoch/methylation_and_mutation/output_dirs/051723_tcga_somage_output --directory_glob TCGA__500correl_200meqtl_100000nearby_Bothagg_1000numCpGs_\*startTopCpGs_500extendAmount_${SLURM_ARRAY_TASK_ID}crossValNum --file_suffix xgboost_scramblebaseline_agg_only --cross_val ${SLURM_ARRAY_TASK_ID} --do output_methyl_and_dset_perf --out_dir /cellar/users/zkoch/methylation_and_mutation/output_dirs/051723_tcga_somage_output/scrambled_pred_methyl_and_perf_by_dset --consortium TCGA
+############################################
+
+
+############################################
+# ICGC run compute comethylation dist
+# 11 hours and 80GB for 1000 ICGC mutations on each job
+#start_num_mut_to_process=(0 1000 2000 3000 4000 5000 6000 7000 8000 9000)
+#end_num_mut_to_process=(1000 2000 3000 4000 5000 6000 7000 8000 9000 10000)
+#srun python /cellar/users/zkoch/methylation_and_mutation/submission_scripts/run_compute_comethylation.py --out_dir /cellar/users/zkoch/methylation_and_mutation/output_dirs/051723_icgc_comethyl_output/distance_based_100kb --consortium ICGC --corr_dir /cellar/users/zkoch/methylation_and_mutation/data/final_icgc_data/chr_dset_corrs_qnorm --start_num_mut_to_process 2000 --end_num_mut_to_process 3000 --linkage_method dist --age_bin_size 10 --max_dist 100000 --num_correl_sites 1000 --num_background_events 100 --matched_sample_num 15 --mut_collision_dist 10000
+############################################
+
+
+############################################
+# ICGC run compute comethylation corr
+# 16 hours and 340GB for 250 ICGC mutations on each job
+#start_num_mut_to_process=(0 250 500 750 1000 1250 1500)
+#end_num_mut_to_process=(250 500 750 1000 1250 1500 1750)
+#srun python /cellar/users/zkoch/methylation_and_mutation/submission_scripts/run_compute_comethylation.py --out_dir /cellar/users/zkoch/methylation_and_mutation/output_dirs/051723_icgc_comethyl_output/corr_based_1000sites --consortium ICGC --corr_dir /cellar/users/zkoch/methylation_and_mutation/data/final_icgc_data/chr_dset_corrs_qnorm --start_num_mut_to_process ${start_num_mut_to_process[$SLURM_ARRAY_TASK_ID]} --end_num_mut_to_process ${end_num_mut_to_process[$SLURM_ARRAY_TASK_ID]} --linkage_method corr --age_bin_size 10 --max_dist 100000 --num_correl_sites 1000 --num_background_events 100 --matched_sample_num 15 --mut_collision_dist 10000 --all_comparison_site_dir /cellar/users/zkoch/methylation_and_mutation/output_dirs/051723_icgc_comethyl_output/corr_based_1000sites/comparison_sites_${start_num_mut_to_process[$SLURM_ARRAY_TASK_ID]}-*Muts_corr-linked_qnorm3SD_100background
 ############################################
 
 ############################################
-# run_soMage.py: reads in predicted methylation and does something
-# srun python /cellar/users/zkoch/methylation_and_mutation/submission_scripts/run_soMage.py --somage_path /cellar/users/zkoch/methylation_and_mutation/output_dirs/050723_somage_qnorm_output --directory_glob TCGA__500correl_100meqtl_100000nearby_Trueagg_500numCpGs_\*startTopCpGs_500extendAmount_2crossValNum --file_suffix xgboost_nonebaseline --read_scrambled_suffix xgboost_scramblebaseline --cross_val 2 --do output_methyl_and_dset_perf --out_dir /cellar/users/zkoch/methylation_and_mutation/output_dirs/050723_somage_qnorm_output 
+# TCGA run compute comethylation corr
+# 6 hours and 256GB for 100 ICGC mutations on each job
+#start_num_mut_to_process=(0 100 200 300 400 500 600 700 800 900)
+#end_num_mut_to_process=(100 200 300 400 500 600 700 800 900 1000)
+#srun python /cellar/users/zkoch/methylation_and_mutation/submission_scripts/run_compute_comethylation.py --out_dir /cellar/users/zkoch/methylation_and_mutation/output_dirs/051723_tcga_comethyl_output/corr_1000sites --consortium TCGA --corr_dir /cellar/users/zkoch/methylation_and_mutation/data/final_tcga_data/chr_dset_corrs_qnorm --start_num_mut_to_process ${start_num_mut_to_process[$SLURM_ARRAY_TASK_ID]} --end_num_mut_to_process ${end_num_mut_to_process[$SLURM_ARRAY_TASK_ID]} --linkage_method corr --age_bin_size 10 --max_dist 100000 --num_correl_sites 1000 --num_background_events 100 --matched_sample_num 20 --mut_collision_dist 10000
+############################################
+
+
+############################################
+# ICGC run get mean metrics
+# dist: 70GB and 2hours for 1000 ICGC mutations on each job
+# corr: 128
+#metrics_path_index_vals=(0 1 2 3 4)
+#srun python /cellar/users/zkoch/methylation_and_mutation/submission_scripts/run_get_mean_metrics_comethylation.py --out_dir /cellar/users/zkoch/methylation_and_mutation/output_dirs/051723_icgc_comethyl_output/corr_based_1000sites --comp_site_type corr --metrics_path_index ${metrics_path_index_vals[$SLURM_ARRAY_TASK_ID]} --all_metrics_glob_path /cellar/users/zkoch/methylation_and_mutation/output_dirs/051723_icgc_comethyl_output/corr_based_1000sites/all_metrics_\*Muts_corr-linked_qnorm3SD_100background
+############################################
+
+############################################
+# TCGA combien all metrics files
+#srun python /cellar/users/zkoch/methylation_and_mutation/submission_scripts/combine_all_metrics_files.py --all_metrics_glob /cellar/users/zkoch/methylation_and_mutation/output_dirs/051723_tcga_comethyl_output/corr_1000sites/all_metrics_\*Muts_corr-linked_qnorm3SD_100background --output_fn /cellar/users/zkoch/methylation_and_mutation/output_dirs/051723_tcga_comethyl_output/corr_1000sites/all_metrics_combined.parquet
+############################################
+
+
+############################################
+# ICGC combien all metrics files
+#srun python /cellar/users/zkoch/methylation_and_mutation/submission_scripts/combine_all_metrics_files.py --all_metrics_glob /cellar/users/zkoch/methylation_and_mutation/output_dirs/051723_icgc_comethyl_output/corr_based_1000sites/all_metrics_\*Muts_corr-linked_qnorm3SD_100background --output_fn /cellar/users/zkoch/methylation_and_mutation/output_dirs/051723_icgc_comethyl_output/corr_based_1000sites/all_metrics_combined.parquet
 ############################################

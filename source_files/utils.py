@@ -11,7 +11,9 @@ import seaborn as sns
 #from statsmodels.stats.multitest import fdrcorrection
 import math
 import dask.dataframe as dd
-
+plt.rcParams['svg.fonttype'] = 'none'
+plt.rcParams['pdf.fonttype'] = 42
+plt.rcParams['ps.fonttype'] = 42
 
 
 # CONSTANTS
@@ -101,7 +103,11 @@ def join_df_with_illum_cpg(mut_df, illumina_cpg_locs_df, all_methyl_df_t):
     # sbset to only measured CpGs 
     # mutation_in_cpg_df = mutation_in_cpg_df[mutation_in_cpg_df['#id'].isin(cpgs_measured_and_illumina['#id'])]
     mutation_in_cpg_df = mutation_in_cpg_df[mutation_in_cpg_df['#id'].isin(all_methyl_df_t.columns)]
-    mutation_in_cpg_df = mutation_in_cpg_df.loc[mutation_in_cpg_df['sample'].isin(all_methyl_df_t.index)]
+    try:
+        mutation_in_cpg_df = mutation_in_cpg_df.loc[mutation_in_cpg_df['sample'].isin(all_methyl_df_t.index)]
+    except:
+        mutation_in_cpg_df = mutation_in_cpg_df.loc[mutation_in_cpg_df['case_submitter_id'].isin(all_methyl_df_t.index)]
+        
     return mutation_in_cpg_df
 
 def site_characteristics(comparison_sites_df, all_methyl_age_df_t, mut_in_measured_cpg_w_methyl_age_df):
@@ -394,7 +400,7 @@ def get_distances_one_chrom_new(chrom_name, illumina_cpg_locs_df):
     distances_df.columns = illumina_cpg_locs_df_chr['#id']
     return distances_df
 
-def plot_corr_vs_dist(corr_df, dist_df):
+def plot_corr_vs_dist(corr_df, dist_df, out_fn = None):
     """
     Plot boxplots of the correlation values in corr_df for log-spaced distance ranges defined by dist_df.
     """
@@ -415,18 +421,22 @@ def plot_corr_vs_dist(corr_df, dist_df):
         corr_lists.append(corr_list)
 
     # Create boxplots
-    sns.set_context('notebook', font_scale=1.1)
+    sns.set_context('paper', font_scale=1)
     fig, ax = plt.subplots(figsize=(8,6))
     # get red pallete from seaborn in reverse
     reds_reversed = sns.color_palette('Reds', 5)[::-1]
-    #sns.violinplot(data=corr_lists, ax=ax, palette=reds_reversed, cut = 0)
-    sns.boxplot(data=corr_lists, ax=ax, palette=reds_reversed, showfliers=False)
+    sns.violinplot(data=corr_lists, ax=ax, palette=reds_reversed, cut = 0)
+    #sns.boxplot(data=corr_lists, ax=ax, palette=reds_reversed)
+    
+    #sns.boxplot(data=corr_lists, ax=ax, palette=reds_reversed, showfliers=False)
     # make xticklabels use 10^x notation
     labels = ['1-10', '$10-10^3$', '$10^3-10^5$', '$10^5-10^7$', '$10^7-10^9$']
     ax.set_xticklabels(labels)
     
     ax.set_xlabel('Distance between CpG sites (bp)')
     ax.set_ylabel('CpG methylation fraction Pearson r')
+    if out_fn is not None:
+        plt.savefig(out_fn, format = 'svg', dpi = 300)
     plt.show()
     
 def read_in_result_dfs(result_base_path, PERCENTILES=PERCENTILES):

@@ -2,70 +2,77 @@ import sys
 sys.path.append('/cellar/users/zkoch/methylation_and_mutation/source_files')
 import compute_comethylation
 import os
-import pandas as pd
 import sys
 import glob
 import dask.dataframe as dd
+import argparse
 
-### TO SET ###
-
-
-comp_site_type = sys.argv[1]
-if comp_site_type == 'dist':
-    paths = glob.glob("/cellar/users/zkoch/methylation_and_mutation/output_dirs/032423_comethyl_output/distance_based_100kbMax/all_metrics*")
-    c_paths = glob.glob("/cellar/users/zkoch/methylation_and_mutation/output_dirs/032423_comethyl_output/distance_based_100kbMax/comparison_sites*")
-    out_dir = "/cellar/users/zkoch/methylation_and_mutation/output_dirs/032423_comethyl_output/distance_based_100kbMax"
-    all_together = False
-    absolute_distances = [100, 500, 1000, 5000, 10000, 50000, 100000]
-elif comp_site_type == 'corr':
-    paths = glob.glob("/cellar/users/zkoch/methylation_and_mutation/output_dirs/032423_comethyl_output/correl_based_1000Top_no_mutMF/all_metrics*")
-    c_paths = glob.glob("/cellar/users/zkoch/methylation_and_mutation/output_dirs/032423_comethyl_output/correl_based_1000Top_no_mutMF/comparison_sites*")
-    out_dir = "/cellar/users/zkoch/methylation_and_mutation/output_dirs/032423_comethyl_output/correl_based_1000Top_no_mutMF"
-    all_together = False
-    absolute_distances = [5, 10, 50, 100, 500, 1000]
-else:
-    # error
-    print("Error: comp_site_type must be 'dist' or 'corr'", flush=True)
-
-# sort paths in place
-paths.sort(key=lambda x: int(x.split('/')[-1].split('Muts')[0].split('all_metrics_')[1].split('-')[0]))
-
-# initialize analyzeComethylation object
-analyze_comethylation = compute_comethylation.analyzeComethylation()
-
-# iterate across each path, get mean metrics, and combine
-if all_together: 
-    all_mean_metrics_l = []
-    for path in paths:
-        print("reading in", path, flush=True)
-        one_metrics_dd = dd.read_parquet(path)
-        one_metrics_df = one_metrics_dd.compute()
-        print("done reading in", path, flush=True)
-        # get mean metrics for distances 
-        one_mean_metrics = analyze_comethylation.get_mean_metrics_by_dist(
-            one_metrics_df, 
-            absolute_distances = absolute_distances
-        )   
-        print("done with mean methyl", path, flush=True)
-        all_mean_metrics_l.append(one_mean_metrics)
-    all_mean_metrics = pd.concat(all_mean_metrics_l)
-    # write to out_dir
-    all_mean_metrics.to_parquet(os.path.join(out_dir, "mean_metrics_by_dist_w_weighted.parquet"))
-else: # get mean metrics for each path separately
-    # the int of path to the metrics file
-    i = int(sys.argv[2])
-    print("reading in", paths[i], flush=True)
-    one_metrics_dd = dd.read_parquet(paths[i])
+def get_mean_metrics_by_dist(
+    metrics_path_index: int,
+    all_metrics_paths: list,
+    absolute_distances: list,
+    out_dir: str
+    ):
+    # initialize analyzeComethylation object
+    analyze_comethylation = compute_comethylation.analyzeComethylation()
+    # read in one metrics file
+    print("reading in", all_metrics_paths[metrics_path_index], flush=True)
+    one_metrics_dd = dd.read_parquet(all_metrics_paths[metrics_path_index])
     one_metrics_df = one_metrics_dd.compute()
-    print("done reading in", paths[i], flush=True)
+    print("Getting mean metrics", flush=True)
     # get mean metrics for distances 
     one_mean_metrics = analyze_comethylation.get_mean_metrics_by_dist(
         one_metrics_df, 
         absolute_distances = absolute_distances
     )   
-    print("done with mean methyl", paths[i], flush=True)
+    print("done with mean methyl", all_metrics_paths[metrics_path_index], flush=True)
     # get muts number to base name on
-    muts_num = paths[i].split("/")[-1].split("_")[2]
+    muts_num = all_metrics_paths[metrics_path_index].split("/")[-1].split("_")[2]
     # write to out_dir
-    one_mean_metrics.to_parquet(os.path.join(out_dir, f"mean_metrics_by_dist_w_weighted_{muts_num}.parquet"))
-    print(f'Wrote to {os.path.join(out_dir, f"mean_metrics_by_dist_w_weighted_{muts_num}.parquet")}', flush=True)
+    one_mean_metrics.to_parquet(os.path.join(out_dir, f"mean_metrics_by_dist_{muts_num}.parquet"))
+    print(f'Wrote to {os.path.join(out_dir, f"mean_metrics_by_dist_{muts_num}.parquet")}', flush=True)
+    
+def main():
+    # get arguments
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--out_dir', type=str, help='output directory')
+    parser.add_argument('--comp_site_type', type=str, help='comp_site_type', required=True)
+    parser.add_argument(
+        '--metrics_path_index', type=int,
+        help='index of path to metrics file', required=True
+        )
+    parser.add_argument(
+        '--all_metrics_glob_path', type=str,
+        help='glob path to all_metrics files', required=True
+        )
+    # parse
+    args = parser.parse_args()
+    # get arguments
+    out_dir = args.out_dir
+    comp_site_type = args.comp_site_type
+    metrics_path_index = args.metrics_path_index
+    all_metrics_glob_path = args.all_metrics_glob_path
+    # get paths
+    all_metrics_paths = glob.glob(all_metrics_glob_path)
+    # set absolute distances
+    if comp_site_type == 'dist':
+        absolute_distances = [100, 500, 1000, 5000, 10000, 50000, 100000]
+    elif comp_site_type == 'corr':
+        absolute_distances = [5, 10, 50, 100]
+    else:
+        raise ValueError("comp_site_type must be 'dist' or 'corr'")
+    # sort paths in place
+    all_metrics_paths.sort(
+        key=lambda x: 
+            int(x.split('/')[-1].split('Muts')[0].split('all_metrics_')[1].split('-')[0])
+        )
+    # get mean metrics by dist
+    get_mean_metrics_by_dist(
+        metrics_path_index=metrics_path_index,
+        all_metrics_paths=all_metrics_paths,
+        absolute_distances=absolute_distances,
+        out_dir=out_dir
+        )
+    
+if __name__ == '__main__':
+    main()
