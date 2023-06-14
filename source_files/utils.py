@@ -302,7 +302,10 @@ def get_methyl_fractions(ct_mutation_in_measured_cpg_df, all_methyl_df_t):
     methyl_fractions = []
     for _, row in ct_mutation_in_measured_cpg_df.iterrows():
         cpg = row['#id']
-        samp = row['sample']
+        try:
+            samp = row['sample']
+        except:
+            samp = row['case_submitter_id']
         try:
             methyl_fractions.append(all_methyl_df_t.loc[samp,cpg])
         except:

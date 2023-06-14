@@ -441,11 +441,12 @@ class mutationClock:
         for_box_df['actual_bin'] = pd.cut(for_box_df['Actual'].values, bins=bins)
         sns.violinplot(
             x='actual_bin', y='Predicted', data=for_box_df, ax=axes3,
-            palette=['steelblue'], alpha = .5
+            palette=['maroon'], alpha = .5
         )
         axes3.set_ylabel(f'UCEC predicted methylation {cpg}')
         axes3.set_xlabel(f'UCEC actual methylation {cpg}')
-        plt.savefig('/cellar/users/zkoch/methylation_and_mutation/output_dirs/final_figures/figure5/figure5B_methyl_pred_example.svg', dpi=300, format = 'svg')
+        #plt.savefig('/cellar/users/zkoch/methylation_and_mutation/output_dirs/final_figures/figure5/figure5B_methyl_pred_example.svg', dpi=300, format = 'svg')
+        return for_box_df
         # change legend title
         # y = x line based on min and max values
         

@@ -45,7 +45,7 @@ def plot_mutations_distributions(all_mut_df, illumina_cpg_locs_df, all_methyl_df
                     order = ['C>T','C>A', 'C>G', 'T>C', 'T>G', 'T>A']
                     )
     axes.set_ylabel("Pan-cancer frequency of mutation")
-    plt.savefig("/cellar/users/zkoch/methylation_and_mutation/output_dirs/final_figures/supplemental/figure1_TCGA_mutation_type_distr.svg",format='svg', dpi = 300)
+    #plt.savefig("/cellar/users/zkoch/methylation_and_mutation/output_dirs/final_figures/supplemental/figure1_TCGA_mutation_type_distr.svg",format='svg', dpi = 300)
     
     # CpG vs non CpG mutation frequency
     # get all mutations in measured CpG sites
@@ -57,13 +57,16 @@ def plot_mutations_distributions(all_mut_df, illumina_cpg_locs_df, all_methyl_df
     expected_cpg = NUM_CPG/BP_NUM
     expected_non_cpg = 1 - expected_cpg
     cpg_mut_freq = pd.DataFrame({'Mutation class': ['CpG', 'Expected\nCpG', 'non-CpG', 'Expected\nnon-CpG'], 'mut_freq': [cpg_mut_num/all_mut_num,expected_cpg, 1-cpg_mut_num/all_mut_num, expected_non_cpg]})
+    print(cpg_mut_freq)
     p = sns.barplot(x=cpg_mut_freq['Mutation class'], y=cpg_mut_freq['mut_freq'], ax=axes, palette=['white', 'black','white', 'black' ], edgecolor='black', errorbar=None)
     # remove x label 
     axes.set_xlabel("")
     axes.set_ylabel("")
     axes.set_ylim([0,1])
-    
-    plt.savefig("/cellar/users/zkoch/methylation_and_mutation/output_dirs/final_figures/figure1/figure1A_TCGA_expected_cpg_mut.svg",format='svg', dpi = 300)
+    # angle x ticks
+    for tick in axes.get_xticklabels():
+        tick.set_rotation(45)
+    #plt.savefig("/cellar/users/zkoch/methylation_and_mutation/output_dirs/final_figures/figure1/figure1A_TCGA_expected_cpg_mut.svg",format='svg', dpi = 300)
     
     
     # Type of CpG mutation
@@ -85,7 +88,7 @@ def plot_mutations_distributions(all_mut_df, illumina_cpg_locs_df, all_methyl_df
     axes.set_xlabel("")
     axes.set_ylim([0,1])
     
-    plt.savefig("/cellar/users/zkoch/methylation_and_mutation/output_dirs/final_figures/figure1/figure1B_TCGA_cpg_mut_type.svg",format='svg', dpi = 300)
+    #plt.savefig("/cellar/users/zkoch/methylation_and_mutation/output_dirs/final_figures/figure1/figure1B_TCGA_cpg_mut_type.svg",format='svg', dpi = 300)
         
     
     """# plot distribution of just mutations in measured CpG sites
@@ -107,7 +110,11 @@ def compare_mf_mutated_sample_vs_avg(mutation_in_measured_cpg_df, all_methyl_df_
     non_mutated_methyl_df_t = all_methyl_df_t.loc[:, ~all_methyl_df_t.columns.isin(mutation_in_measured_cpg_df['#id'])]
     
     # limit to only big DNA_VAF mutations
-    mutation_in_measured_cpg_df = mutation_in_measured_cpg_df.loc[mutation_in_measured_cpg_df['DNA_VAF'] >.56]
+    print("Number of mutations in measured CpG sites: {}".format(len(mutation_in_measured_cpg_df)))
+    # select the 1000 rows with largest DNA_VAF
+    mutation_in_measured_cpg_df = mutation_in_measured_cpg_df.sort_values(by=['DNA_VAF'], ascending=False).iloc[:500]
+    #mutation_in_measured_cpg_df = mutation_in_measured_cpg_df.loc[mutation_in_measured_cpg_df['DNA_VAF'] >.35]
+    print("selected 500 mtuations events with largest DNA_VAF, minimum DNA_VAF: {}".format(mutation_in_measured_cpg_df['DNA_VAF'].min()))
     # plot distribution of MF at sites of mutation event vs same site with no mutation
     to_plot_df = pd.DataFrame(pd.concat(
         [mutation_in_measured_cpg_df['avg_methyl_frac'],
@@ -124,7 +131,8 @@ def compare_mf_mutated_sample_vs_avg(mutation_in_measured_cpg_df, all_methyl_df_
         common_norm=False, clip=[0,1], palette = ['steelblue', 'maroon', 'grey'], 
         ax=axes, legend=False
         )
-    plt.savefig("/cellar/users/zkoch/methylation_and_mutation/output_dirs/final_figures/figure1/figure1E_kde_methyl_distr.svg",format='svg', dpi = 300)
+    #plt.savefig("/cellar/users/zkoch/methylation_and_mutation/output_dirs/final_figures/figure1/figure1E_kde_methyl_distr.svg",format='svg', dpi = 300)
+    #plt.savefig("/cellar/users/zkoch/methylation_and_mutation/output_dirs/final_figures/supplemental/icgc_figure1E_kde_methyl_distr.svg",format='svg', dpi = 300)
 
     # just Non mutated CpGs vs Site of no CpG mutation
     fig, axes = plt.subplots(dpi=100, figsize=(8,5))
@@ -133,8 +141,8 @@ def compare_mf_mutated_sample_vs_avg(mutation_in_measured_cpg_df, all_methyl_df_
         common_norm=False, clip=[0,1], palette = ['steelblue', 'grey'], 
         ax=axes, legend=False
         )
-    plt.savefig("/cellar/users/zkoch/methylation_and_mutation/output_dirs/final_figures/figure1/figure1E_kde_methyl_distr_only_blueGrey.svg",format='svg', dpi = 300)
-    
+    #plt.savefig("/cellar/users/zkoch/methylation_and_mutation/output_dirs/final_figures/figure1/figure1E_kde_methyl_distr_only_blueGrey.svg",format='svg', dpi = 300)
+    #plt.savefig("/cellar/users/zkoch/methylation_and_mutation/output_dirs/final_figures/supplemental/icgc_figure1E_kde_methyl_distr_only_blueGrey.svg",format='svg', dpi = 300)
     # just Site of no CpG mutation
     fig, axes = plt.subplots(dpi=100, figsize=(8,5))
     p = sns.kdeplot(
@@ -142,7 +150,8 @@ def compare_mf_mutated_sample_vs_avg(mutation_in_measured_cpg_df, all_methyl_df_
         common_norm=False, clip=[0,1], palette = ['grey'], 
         ax=axes, legend=False
         )
-    plt.savefig("/cellar/users/zkoch/methylation_and_mutation/output_dirs/final_figures/figure1/figure1E_kde_methyl_distr_only_grey.svg",format='svg', dpi = 300)
+    #plt.savefig("/cellar/users/zkoch/methylation_and_mutation/output_dirs/final_figures/figure1/figure1E_kde_methyl_distr_only_grey.svg",format='svg', dpi = 300)
+    #plt.savefig("/cellar/users/zkoch/methylation_and_mutation/output_dirs/final_figures/supplemental/icgc_figure1E_kde_methyl_distr_only_grey.svg",format='svg', dpi = 300)
     
     return to_plot_df
 

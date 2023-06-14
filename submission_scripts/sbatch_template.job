@@ -1,11 +1,11 @@
 #!/bin/bash
-#SBATCH --array=3
+#SBATCH --array=4
 #SBATCH --partition=nrnb-compute
-#SBATCH --mem=156GB
-#SBATCH --time=8:10:00
-#SBATCH --job-name=tcComb
-##/SBA/TCH --cpus-per-task=32
-##/SBA/TCH --ntasks=1
+#SBATCH --mem=128GB
+#SBATCH --time=7:00:00
+#SBATCH --job-name=tcCombine
+##SBAT/CH --cpus-per-task=16
+##S/BATCH --ntasks=1
 eval "$(conda shell.bash hook)"
 conda activate /cellar/users/zkoch/miniconda3/envs/tf_env
 
@@ -44,11 +44,11 @@ srun python /cellar/users/zkoch/methylation_and_mutation/submission_scripts/run_
 # => 5 hours and 64GB for 1000 mutations on each job
 : '
 start_top_cpgs_values=()
-for ((i = 0; i < 100000; i += 1000)); do
+for ((i = 80000; i < 150000; i += 1000)); do
     start_top_cpgs_values+=($i)
 done
 end_top_cpgs_values=()
-for ((i = 1000; i < 101000; i += 1000)); do
+for ((i = 81000; i < 151000; i += 1000)); do
     end_top_cpgs_values+=($i)
 done
 srun python /cellar/users/zkoch/methylation_and_mutation/submission_scripts/run_somatic_mut_clock.py \
@@ -85,6 +85,7 @@ srun python /cellar/users/zkoch/methylation_and_mutation/submission_scripts/run_
 
 
 ############################################
+# 7 hours, 128GB 
 # TCGA run_combined_predicted_methyl_clock.py: reads in predicted methylation and does something
 srun python /cellar/users/zkoch/methylation_and_mutation/submission_scripts/run_combined_predicted_methyl_clock.py --somage_path /cellar/users/zkoch/methylation_and_mutation/output_dirs/051723_tcga_somage_output --directory_glob TCGA__500correl_200meqtl_100000nearby_Bothagg_1000numCpGs_\*startTopCpGs_500extendAmount_${SLURM_ARRAY_TASK_ID}crossValNum --file_suffix xgboost_nonebaseline_agg_only --cross_val ${SLURM_ARRAY_TASK_ID} --do output_methyl_and_dset_perf --out_dir /cellar/users/zkoch/methylation_and_mutation/output_dirs/051723_tcga_somage_output/pred_methyl_and_perf_by_dset --consortium TCGA
 
@@ -135,4 +136,20 @@ srun python /cellar/users/zkoch/methylation_and_mutation/submission_scripts/run_
 ############################################
 # ICGC combien all metrics files
 #srun python /cellar/users/zkoch/methylation_and_mutation/submission_scripts/combine_all_metrics_files.py --all_metrics_glob /cellar/users/zkoch/methylation_and_mutation/output_dirs/051723_icgc_comethyl_output/corr_based_1000sites/all_metrics_\*Muts_corr-linked_qnorm3SD_100background --output_fn /cellar/users/zkoch/methylation_and_mutation/output_dirs/051723_icgc_comethyl_output/corr_based_1000sites/all_metrics_combined.parquet
+############################################
+
+
+############################################
+#  ICGC train actual methylation clocks
+# running with 1 hours, 64GB, 8 cpus
+#cv_num_values=(0 1 2 3 4)
+#srun python /cellar/users/zkoch/methylation_and_mutation/submission_scripts/train_actual_methyl_epi_clocks.py --consortium ICGC --cv_num ${cv_num_values[$SLURM_ARRAY_TASK_ID]} --out_dir /cellar/users/zkoch/methylation_and_mutation/data/final_icgc_data/actual_methyl_epi_clocks
+############################################
+
+
+############################################
+#  TCGA train actual methylation clocks
+# running with 4 hours, 224GB, 16 cpus for only all_tissue clocks
+#cv_num_values=(1 2 3 4 0)
+#srun python /cellar/users/zkoch/methylation_and_mutation/submission_scripts/train_actual_methyl_epi_clocks.py --consortium TCGA --cv_num ${cv_num_values[$SLURM_ARRAY_TASK_ID]} --out_dir /cellar/users/zkoch/methylation_and_mutation/data/final_tcga_data/actual_methyl_epi_clocks
 ############################################

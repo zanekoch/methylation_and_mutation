@@ -158,7 +158,7 @@ class analyzeComethylation:
             axes[1].set_yticklabels([0, 1, 2, 3, 4,5])
             #axes[1].set_ylim(0,5)
         elif consortium == 'TCGA':
-            counts.loc[counts[False] < 5, 'ratio'] = np.nan
+            counts.loc[counts[False] < 15, 'ratio'] = np.nan
         else:
             raise ValueError('consortium must be TCGA or ICGC')
         # plot ratio as a lineplot with the same x axis and dots at each observation
@@ -169,17 +169,18 @@ class analyzeComethylation:
             )
         # plot dashed line as y=1
         axes[1].axhline(y=1, color='black', linestyle='--')
-        
+        axes[1].set_ylim(0, 6)
 
         # set xlim
         #axes.set_yscale('log')
         # write delta in geek sybol
         axes[1].set_xlabel(r'Median $\Delta$MF across locus')
-        axes[1].set_ylabel('Ratio of density')
+        axes[1].set_ylabel('Fold enrichment')
         
         # change legend labels
         #axes.legend(['Random', 'Mutated'], loc='upper right', title='Locus')
         # save as an svg
+        
         plt.savefig(fname=out_fn, format='pdf', dpi = 300)
         return counts
         
