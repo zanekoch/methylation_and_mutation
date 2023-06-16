@@ -10,105 +10,13 @@ from sklearn.svm import SVR
 import xgboost as xgb
 import glob
 from scipy.stats import spearmanr, pearsonr
+import shap
 plt.rcParams['svg.fonttype'] = 'none'
 plt.rcParams['pdf.fonttype'] = 42
 plt.rcParams['ps.fonttype'] = 42
 
-class optimizeSomage:
-    """
-    Take in multiple mutationClock objects and compare them to find the best model
-    and hyperparameters
-    """
-    def __init__(
-        self,
-        results_dir: str, 
-        model_dirs: list,
-        all_methyl_age_df_t: pd.DataFrame,
-        illumina_cpg_locs_df: pd.DataFrame,
-        train_samples: list,
-        test_samples: list,
-        tissue_type: str,
-        top_dataset_n: int = 20,
-        ):
-        """
-        @ results_dir: the directory where the trained models are saved
-        @ model_dirs: list of the sub-directories where the trained models are saved
-        @ all_methyl_age_df_t: the dataframe of all the methylation ages
-        @ illumina_cpg_locs_df: the dataframe of the locations of the CpGs
-        @ train_samples: the list of training samples (from mut_feat)
-        @ test_samples: the list of testing samples (from mut_feat)
-        @ tissue_type: the tissue type to use for the analysis
-        @ top_dataset_n: the number of datasets to use for the analysis, by sample num
-        """
-        self.somages = []
-        # iterate through the model directories and create mutationClock objects
-        for model_dir in model_dirs:
-            predicted_methyl_fns =  glob.glob(
-                os.path.join(
-                    results_dir,
-                    model_dir,
-                    "methyl_predictions_xgboost_Falsescramble.parquet")
-                )
-            predicted_perf_fns = glob.glob(
-                os.path.join(
-                    results_dir,
-                    model_dir, 
-                    "prediction_performance_xgboost_Falsescramble.parquet")
-                )
-            trained_models_fns = glob.glob(
-                os.path.join(
-                    results_dir,
-                    model_dir, 
-                    "trained_models_xgboost_Falsescramble.pkl")
-                )
-            feature_mat_fns = glob.glob(
-                os.path.join(
-                    results_dir,
-                    model_dir,
-                    "*features.pkl")
-                )
-            somage = mutationClock(
-                predicted_methyl_fns = predicted_methyl_fns, 
-                predicted_perf_fns = predicted_perf_fns,
-                all_methyl_age_df_t = all_methyl_age_df_t,
-                illumina_cpg_locs_df = illumina_cpg_locs_df,
-                output_dir = "",
-                train_samples = train_samples,
-                test_samples = test_samples,
-                tissue_type = tissue_type,
-                trained_models_fns = trained_models_fns,
-                feature_mat_fns = feature_mat_fns
-                )
-            somage.populate_performance()
-            somage.performance_by_dataset()
-            self.somages.append(somage)
-            print("Finished loading soMage object for {}".format(model_dir))
-        self.all_methyl_age_df_t = all_methyl_age_df_t
-        self.illumina_cpg_locs_df = illumina_cpg_locs_df
-        self.train_samples = train_samples
-        self.test_samples = test_samples
-        self.top_datasets = self.all_methyl_age_df_t['dataset'].value_counts().index[:top_dataset_n]
 
-    def top_corr_by_dataset(
-        self,
-        top_cpg_num: int,
-        metric: str
-        ) -> list:
-        """
-        For each somage object, select the top top_cpg_num cpgs, based on metric, within each dataset and get the mean value of the metric across this CpGs for each dataset
-        @ returns: a df of the mean metric values within each dataset for each somage object, columns indexed in same order as self.somages
-        """
-        mean_metrics = []
-        for somage in self.somages:
-            # get mean metric for the highest top_cpg_num cpgs within each dataset
-            mean_metric_by_dset = somage.performance_by_dataset_df.groupby("dataset").apply(
-                lambda x: x.sort_values(
-                    metric, ascending = False
-                    ).head(top_cpg_num)[metric].mean(axis = 0)
-                )
-            mean_metrics.append(mean_metric_by_dset)
-        mean_metrics_df = pd.concat(mean_metrics, axis = 1)
-        return mean_metrics_df
+
 
 class mutationClock:
     """
@@ -178,6 +86,48 @@ class mutationClock:
                         minor_dicts_to_update = ['feat_mats', 'target_values', 'feat_names']
                         for minor_dict in minor_dicts_to_update:
                             self.feature_mats[minor_dict].update(this_feat_dict[minor_dict])
+    
+    @classmethod
+    def construct_from_paths(
+        cls,
+        somage_path, 
+        directory_glob, 
+        file_suffix, 
+        mut_feat, 
+        illumina_cpg_locs_df, 
+        all_methyl_age_df_t,
+        out_dir
+        ):
+        """
+        Given a somage path, directory glob, and file suffix, create a somage object from all the files in the directory
+        """
+        print("Creating soMage object", flush = True)
+        predicted_methyl_fns = glob.glob(
+            os.path.join(somage_path, directory_glob, f"methyl_predictions_{file_suffix}.parquet")
+            )
+        predicted_perf_fns = glob.glob(
+            os.path.join(somage_path, directory_glob, f"prediction_performance_{file_suffix}.parquet")
+            )
+        trained_model_fns = glob.glob(
+            os.path.join(somage_path, directory_glob, f"trained_models_{file_suffix}.pkl")
+            )
+        feature_mat_fns = glob.glob(
+            os.path.join(somage_path, directory_glob, "*features.pkl")
+            )
+        
+        somage = cls(
+                predicted_methyl_fns = predicted_methyl_fns, 
+                predicted_perf_fns = predicted_perf_fns,
+                all_methyl_age_df_t = all_methyl_age_df_t,
+                illumina_cpg_locs_df = illumina_cpg_locs_df,
+                output_dir = out_dir,
+                train_samples = mut_feat.train_samples,
+                test_samples = mut_feat.test_samples,
+                tissue_type = "",
+                trained_models_fns = trained_model_fns,
+                feature_mat_fns = feature_mat_fns,
+                )
+        return somage           
                             
     def performance_by_dataset(self):
         """
@@ -330,29 +280,96 @@ class mutationClock:
         # and actual testing samples with age
         self.performance_df['testing_real_mf_age_spearmanr'] = self.all_methyl_age_df_t.loc[self.test_samples, self.performance_df.index].corrwith(self.all_methyl_age_df_t.loc[self.test_samples, 'age_at_index'], method='spearman')
     
-    def get_model_and_feat_names(self, cpg_name):
+    def get_model_feat_names_train_test(
+        self, 
+        cpg_name,
+        dataset = ""
+        ):
         """
         For a given CpG name, return the trained model object and the feature names
         """
         model = self.trained_models[cpg_name]
         feat_names = self.feature_mats['feat_names'][cpg_name]
-        return model, feat_names
+        
+        if dataset != "":
+            # subset samples to only those in the dataset
+            dset_samples = self.all_methyl_age_df_t.loc[self.all_methyl_age_df_t['dataset'] == dataset, :].index
+            test_samples = list(set(self.test_samples) & set(dset_samples))
+            train_samples = list(set(self.train_samples) & set(dset_samples))
+        else:
+            test_samples = self.test_samples
+            train_samples = self.train_samples
+        
+        train_idx_num = [
+            self.feature_mats['target_values'][cpg_name].index.get_loc(train_sample)
+            for train_sample in self.train_samples
+            ]
+        test_idx_num = [
+                self.feature_mats['target_values'][cpg_name].index.get_loc(test_sample)
+                for test_sample in self.test_samples
+            ]
+        feat_mat = self.feature_mats['feat_mats'][cpg_name].todense()
+        train_mat = feat_mat[train_idx_num, :]
+        test_mat = feat_mat[test_idx_num, :]
+        return model, feat_names, train_mat, test_mat
     
-    def get_feat_score_by_cat(self, model, feat_names, importance_type = 'gain'):
+    def get_one_cpg_feat_score_by_cat(
+        self,
+        model, 
+        feat_names,
+        train_mat,
+        test_mat, 
+        importance_calculator = 'xgb', # xgb or shap
+        importance_type = 'gain'
+        ):
         """
-        Get the feature importances from model of feat_names and assign each feature to the 
-        category it came from.
+        Get the feature importances from model of feat_names and assign each feature to the category it came from.
         """
         import re
         
-        importances = model.get_booster().get_score(importance_type = importance_type)
+        # calculate feature importances
+        if importance_calculator == 'xgb':
+            importances = (
+                model.get_booster()
+                .get_score(importance_type = importance_type)
+                )
+            # get the feature names
+            index_to_name = {
+                f'f{i}': name for i, name in enumerate(feat_names)
+                }
+            # add the feature names to the importances dictionary
+            importance_with_names = {
+                index_to_name.get(key, key): value 
+                for key, value in importances.items()
+                }
+            # make a dataframe of the feature importances and names
+            feat_imp_df = pd.DataFrame(
+                importance_with_names, index = ['importance']
+                ).T.reset_index()
+            feat_imp_df.rename(
+                columns = {'index':'feat_name'}, inplace = True
+            )
+            # for values in feat_names that are not in feat_imp_df, add them with importance 0
+            not_in_df = list(set(feat_names) - set(feat_imp_df['feat_name']))
+            to_add_df =  pd.DataFrame({
+                'feat_name': not_in_df,
+                'importance': [0]*len(not_in_df)
+                })
+            feat_imp_df = pd.concat([feat_imp_df, to_add_df], axis = 0)
+        elif importance_calculator == 'shap':
+            # calculate shap values
+            explainer = shap.TreeExplainer(model, train_mat)
+            shap_values = explainer.shap_values(test_mat)
+            # get the sum of absolute shap values for each feature
+            shap_sum = np.abs(shap_values).sum(axis=0)
+            # make a dataframe of the feature importances and names
+            feat_imp_df = pd.DataFrame({
+                'feat_name': feat_names,
+                'importance': shap_sum
+                })
+        else:
+            raise ValueError("importance_calculator must be 'xgb' or 'shap'")
         
-        index_to_name = {f'f{i}': name for i, name in enumerate(feat_names)}
-        importance_with_names = {index_to_name.get(key, key): value for key, value in importances.items()}
-        
-        # make a dataframe of the feature importances and names
-        feat_imp_df = pd.DataFrame(importance_with_names, index = ['importance']).T.reset_index()
-        feat_imp_df.rename(columns = {'index':'feat_name'}, inplace = True)
         
         def name_to_cat(feat_name):
             """
@@ -386,10 +403,25 @@ class mutationClock:
     
         # based on the feat_name, set category column
         feat_imp_df['category'] = feat_imp_df['feat_name'].apply(name_to_cat)
+        # get the sum, mean, median, and count of the importances for each category
+        feat_imp_by_cat_df = pd.DataFrame({
+            'sum': feat_imp_df.groupby('category')['importance'].sum(),
+            'mean': feat_imp_df.groupby('category')['importance'].mean(),
+            'median': feat_imp_df.groupby('category')['importance'].median(),
+            'max': feat_imp_df.groupby('category')['importance'].max(),
+            'min': feat_imp_df.groupby('category')['importance'].min(),
+            'count': feat_imp_df.groupby('category')['importance'].count(),
+            # number of non-zero values
+            'num_nonzero': feat_imp_df.groupby('category')['importance'].apply(lambda x: len(x[x > 0]))
+                
+            }).reset_index()
         
-        return feat_imp_df
-        
-    
+        feat_imp_by_cat_df['prop_nonzero'] = (
+            feat_imp_by_cat_df['num_nonzero'] 
+            / feat_imp_by_cat_df['count']
+            )
+        return feat_imp_df, feat_imp_by_cat_df
+            
     def plot_real_vs_predicted_methylation(
         self, 
         cpg: str, 
@@ -819,3 +851,99 @@ class mutationClock:
         sns.heatmap(feat_mat_scaled, cmap = 'rocket', ax = axes, rasterized = True)
         plt.savefig('/cellar/users/zkoch/methylation_and_mutation/output_dirs/final_figures/figure5/figure5A_feat_mat.svg', dpi=300, format = 'svg')
         return feat_mat_scaled
+    
+    
+class optimizeSomage:
+    """
+    Take in multiple mutationClock objects and compare them to find the best model and hyperparameters
+    """
+    def __init__(
+        self,
+        results_dir: str, 
+        model_dirs: list,
+        all_methyl_age_df_t: pd.DataFrame,
+        illumina_cpg_locs_df: pd.DataFrame,
+        train_samples: list,
+        test_samples: list,
+        tissue_type: str,
+        top_dataset_n: int = 20,
+        ):
+        """
+        @ results_dir: the directory where the trained models are saved
+        @ model_dirs: list of the sub-directories where the trained models are saved
+        @ all_methyl_age_df_t: the dataframe of all the methylation ages
+        @ illumina_cpg_locs_df: the dataframe of the locations of the CpGs
+        @ train_samples: the list of training samples (from mut_feat)
+        @ test_samples: the list of testing samples (from mut_feat)
+        @ tissue_type: the tissue type to use for the analysis
+        @ top_dataset_n: the number of datasets to use for the analysis, by sample num
+        """
+        self.somages = []
+        # iterate through the model directories and create mutationClock objects
+        for model_dir in model_dirs:
+            predicted_methyl_fns =  glob.glob(
+                os.path.join(
+                    results_dir,
+                    model_dir,
+                    "methyl_predictions_xgboost_Falsescramble.parquet")
+                )
+            predicted_perf_fns = glob.glob(
+                os.path.join(
+                    results_dir,
+                    model_dir, 
+                    "prediction_performance_xgboost_Falsescramble.parquet")
+                )
+            trained_models_fns = glob.glob(
+                os.path.join(
+                    results_dir,
+                    model_dir, 
+                    "trained_models_xgboost_Falsescramble.pkl")
+                )
+            feature_mat_fns = glob.glob(
+                os.path.join(
+                    results_dir,
+                    model_dir,
+                    "*features.pkl")
+                )
+            somage = mutationClock(
+                predicted_methyl_fns = predicted_methyl_fns, 
+                predicted_perf_fns = predicted_perf_fns,
+                all_methyl_age_df_t = all_methyl_age_df_t,
+                illumina_cpg_locs_df = illumina_cpg_locs_df,
+                output_dir = "",
+                train_samples = train_samples,
+                test_samples = test_samples,
+                tissue_type = tissue_type,
+                trained_models_fns = trained_models_fns,
+                feature_mat_fns = feature_mat_fns
+                )
+            somage.populate_performance()
+            somage.performance_by_dataset()
+            self.somages.append(somage)
+            print("Finished loading soMage object for {}".format(model_dir))
+        self.all_methyl_age_df_t = all_methyl_age_df_t
+        self.illumina_cpg_locs_df = illumina_cpg_locs_df
+        self.train_samples = train_samples
+        self.test_samples = test_samples
+        self.top_datasets = self.all_methyl_age_df_t['dataset'].value_counts().index[:top_dataset_n]
+
+    def top_corr_by_dataset(
+        self,
+        top_cpg_num: int,
+        metric: str
+        ) -> list:
+        """
+        For each somage object, select the top top_cpg_num cpgs, based on metric, within each dataset and get the mean value of the metric across this CpGs for each dataset
+        @ returns: a df of the mean metric values within each dataset for each somage object, columns indexed in same order as self.somages
+        """
+        mean_metrics = []
+        for somage in self.somages:
+            # get mean metric for the highest top_cpg_num cpgs within each dataset
+            mean_metric_by_dset = somage.performance_by_dataset_df.groupby("dataset").apply(
+                lambda x: x.sort_values(
+                    metric, ascending = False
+                    ).head(top_cpg_num)[metric].mean(axis = 0)
+                )
+            mean_metrics.append(mean_metric_by_dset)
+        mean_metrics_df = pd.concat(mean_metrics, axis = 1)
+        return mean_metrics_df

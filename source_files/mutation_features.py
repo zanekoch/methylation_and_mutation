@@ -159,8 +159,11 @@ class mutationFeatures:
         cpg_mf = self.all_methyl_age_df_t.loc[self.train_samples, cpg_id]
         # get the MF of all same chrom CpGs
         same_chrom_cpgs = self.illumina_cpg_locs_df.loc[
-            self.illumina_cpg_locs_df['chr'] == cpg_chr, '#id'].values
-        same_chrom_cpgs_mf = self.all_methyl_age_df_t.loc[self.train_samples, same_chrom_cpgs]
+            self.illumina_cpg_locs_df['chr'] == cpg_chr, '#id'
+            ].values
+        same_chrom_cpgs_mf = self.all_methyl_age_df_t.loc[
+            self.train_samples, same_chrom_cpgs
+            ]
         # get correlation between mut_cpg and all same chrom CpGs
         corrs = same_chrom_cpgs_mf.corrwith(cpg_mf, axis=0)
         corrs.sort_values(ascending=True, inplace=True)
@@ -290,28 +293,30 @@ class mutationFeatures:
             for i in range(-int(nearby_window_size/20), int(nearby_window_size/20) + 1)
             ]
         # get sites from matrixQTL 
-        predictor_site_groups['matrixqtl_neg_beta'], predictor_site_groups['matrixqtl_neg_beta_close'],  predictor_site_groups['matrixqtl_pos_beta'],  predictor_site_groups['matrixqtl_pos_beta_close'] = self._get_matrixQTL_sites(cpg_id, chrom, max_meqtl_sites=max_meqtl_sites)
-        # extend matrixQTL sites
-        predictor_site_groups['matrixqtl_neg_beta_ext'] = extend_clump_matrixQTL_sites(
-            predictor_site_groups['matrixqtl_neg_beta'], extend_amount=1000
+        if max_meqtl_sites > 0:
+            predictor_site_groups['matrixqtl_neg_beta'], predictor_site_groups['matrixqtl_neg_beta_close'],  predictor_site_groups['matrixqtl_pos_beta'],  predictor_site_groups['matrixqtl_pos_beta_close'] = self._get_matrixQTL_sites(cpg_id, chrom, max_meqtl_sites=max_meqtl_sites)
+            # extend matrixQTL sites
+            predictor_site_groups['matrixqtl_neg_beta_ext'] = extend_clump_matrixQTL_sites(
+                predictor_site_groups['matrixqtl_neg_beta'], extend_amount=1000
+                )
+            predictor_site_groups['matrixqtl_neg_beta_close_ext'] = extend_clump_matrixQTL_sites(
+                predictor_site_groups['matrixqtl_neg_beta_close'], extend_amount=1000
+                )
+            predictor_site_groups['matrixqtl_pos_beta_ext'] = extend_clump_matrixQTL_sites(
+                predictor_site_groups['matrixqtl_pos_beta'], extend_amount=1000
             )
-        predictor_site_groups['matrixqtl_neg_beta_close_ext'] = extend_clump_matrixQTL_sites(
-            predictor_site_groups['matrixqtl_neg_beta_close'], extend_amount=1000
+            predictor_site_groups['matrixqtl_pos_beta_close_ext'] = extend_clump_matrixQTL_sites(
+                predictor_site_groups['matrixqtl_pos_beta_close'], extend_amount=1000
             )
-        predictor_site_groups['matrixqtl_pos_beta_ext'] = extend_clump_matrixQTL_sites(
-            predictor_site_groups['matrixqtl_pos_beta'], extend_amount=1000
-        )
-        predictor_site_groups['matrixqtl_pos_beta_close_ext'] = extend_clump_matrixQTL_sites(
-            predictor_site_groups['matrixqtl_pos_beta_close'], extend_amount=1000
-        )
-        # get database meQtls
-        """predictor_site_groups['db_neg_beta'], predictor_site_groups['db_pos_beta'] = self._select_db_sites(cpg_id, num_db_sites)
-        predictor_site_groups['db_neg_beta_ext'] = extend(
-            predictor_site_groups['db_neg_beta'], extend_amount=extend_amount
-            )
-        predictor_site_groups['db_pos_beta_ext'] = extend(
-            predictor_site_groups['db_pos_beta'], extend_amount=extend_amount
-            )"""
+        else:
+            predictor_site_groups['matrixqtl_neg_beta'] = []
+            predictor_site_groups['matrixqtl_neg_beta_close'] = []
+            predictor_site_groups['matrixqtl_pos_beta'] = []
+            predictor_site_groups['matrixqtl_pos_beta_close'] = []
+            predictor_site_groups['matrixqtl_neg_beta_ext'] = []
+            predictor_site_groups['matrixqtl_neg_beta_close_ext'] = []
+            predictor_site_groups['matrixqtl_pos_beta_ext'] = []
+            predictor_site_groups['matrixqtl_pos_beta_close_ext'] = []
         return predictor_site_groups
     
     def _create_feature_mat(
@@ -521,21 +526,21 @@ class mutationFeatures:
         if aggregate == "Both":
             feat_mat = noAgg()
             agg_feat_mat = agg()
-            tesselated_nearby_feats = get_tesselated_nearby_feats()
-            nested_nearby_feats = get_nested_nearby_feats()
             feat_mat = pd.merge(feat_mat, agg_feat_mat, left_index=True, right_index=True)
+            """tesselated_nearby_feats = get_tesselated_nearby_feats()
+            nested_nearby_feats = get_nested_nearby_feats()
             feat_mat = pd.merge(feat_mat, tesselated_nearby_feats, left_index=True, right_index=True)
             if nested_nearby_feats is not None:
-                feat_mat = pd.merge(feat_mat, nested_nearby_feats, left_index=True, right_index=True)
+                feat_mat = pd.merge(feat_mat, nested_nearby_feats, left_index=True, right_index=True)"""
         elif aggregate == "False":
             feat_mat = noAgg()
         elif aggregate == "True":
             agg_feat_mat = agg()
-            tesselated_nearby_feats = get_tesselated_nearby_feats()
+            """tesselated_nearby_feats = get_tesselated_nearby_feats()
             nested_nearby_feats = get_nested_nearby_feats()
             feat_mat = pd.merge(agg_feat_mat, tesselated_nearby_feats, left_index=True, right_index=True)
             if nested_nearby_feats is not None:
-                feat_mat = pd.merge(feat_mat, nested_nearby_feats, left_index=True, right_index=True)
+                feat_mat = pd.merge(feat_mat, nested_nearby_feats, left_index=True, right_index=True)"""
         else:
             sys.exit("Aggregate must be either 'True', 'False', or Both")
         # add covariate columns to X
