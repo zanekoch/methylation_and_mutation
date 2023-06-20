@@ -121,11 +121,45 @@ def transpose_methylation(all_methyl_df):
     return all_methyl_df_t
 
 def get_illum_locs(illum_cpg_locs_fn):
-    illumina_cpg_locs_df = pd.read_csv(illum_cpg_locs_fn, sep=',', dtype={'CHR': str}, low_memory=False)
-    illumina_cpg_locs_df = illumina_cpg_locs_df.rename({"CHR": "chr", "MAPINFO":"start", "IlmnID": "#id"}, axis=1)
+    illumina_cpg_locs_df = pd.read_csv(
+        illum_cpg_locs_fn, sep=',', dtype={'CHR': str}, low_memory=False
+        )
+    illumina_cpg_locs_df = illumina_cpg_locs_df.rename({
+        "CHR": "chr", "MAPINFO":"start", "IlmnID": "#id"
+        }, axis=1)
     illumina_cpg_locs_df = illumina_cpg_locs_df[['#id','chr', 'start', 'Strand']]
     return illumina_cpg_locs_df
 
+"""
+processing save 
+illumina_cpg_locs_df2 = illumina_cpg_locs_df = pd.read_csv(
+        "/cellar/users/zkoch/methylation_and_mutation/dependency_files/illumina_cpg_450k_locations.csv", sep=',', dtype={'CHR': str}, low_memory=False
+        )
+illumina_cpg_locs_df2 = illumina_cpg_locs_df2.rename({
+        "CHR": "chr", "MAPINFO":"start", "IlmnID": "#id"
+        }, axis=1)
+refgene_lists = illumina_cpg_locs_df2['UCSC_RefGene_Group'].str.split(';')
+# get unique values
+unique_vals = refgene_lists.explode().unique()
+# drop na from numpy array
+unique_vals = unique_vals[~pd.isna(unique_vals)]
+# Create one-hot-encoded DataFrame
+illumina_cpg_locs_df2['UCSC_RefGene_Group'] = illumina_cpg_locs_df2['UCSC_RefGene_Group'].astype(str)
+
+one_hot_encoded = illumina_cpg_locs_df2['UCSC_RefGene_Group'].apply(
+    lambda x: {val: 1 for val in x.split(';') if val in unique_vals}
+    ).apply(pd.Series).fillna(0)
+one_hot_encoded_refgene_df = one_hot_encoded
+one_hot_encoded_cpg_island = pd.get_dummies(illumina_cpg_locs_df2['Relation_to_UCSC_CpG_Island'])
+one_hot_encoded_cpg_enhancer = pd.get_dummies(illumina_cpg_locs_df2['Enhancer'])
+one_hot_encoded_cpg_enhancer.columns = ["Enhancer"]
+one_hot_encoded_cpg_reg_feat_group = pd.get_dummies(illumina_cpg_locs_df2['Regulatory_Feature_Group'])
+one_hot_encoded_dhs = pd.get_dummies(illumina_cpg_locs_df2['DHS'])
+one_hot_encoded_dhs.columns = ["DHS"]
+# combine 
+illumina_cpg_locs_df2 = pd.concat([illumina_cpg_locs_df2[['#id','chr', 'start', 'Strand']], one_hot_encoded_refgene_df, one_hot_encoded_cpg_island, one_hot_encoded_cpg_enhancer, one_hot_encoded_cpg_reg_feat_group, one_hot_encoded_dhs], axis=1)
+illumina_cpg_locs_df2.to_csv("/cellar/users/zkoch/methylation_and_mutation/dependency_files/illumina_cpg_450k_locations_one_hot_encoded.csv", index=False)
+"""
 
 def read_icgc_data() -> tuple:
     print("reading in data")
