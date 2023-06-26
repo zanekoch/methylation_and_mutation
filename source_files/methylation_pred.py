@@ -171,15 +171,15 @@ class methylationPrediction:
             elif self.baseline == 'scramble':
                 # get the feature matrix for the cpg
                 X = self.mut_feat_store['feat_mats'][cpg_id]
-                X = X.todense()
+                #X = X.todense()
                 # subset to only training samples and scramble
-                X_train = pd.DataFrame(X[train_idx_num, :])
-                X_train_scrambled = self.do_scramble(X_train, cpg_id)
+                #X_train = pd.DataFrame(X[train_idx_num, :])
+                #X_train_scrambled = self.do_scramble(X_train, cpg_id)
                 # subset to only testing samples and scramble
-                X_test = pd.DataFrame(X[test_idx_num, :])
-                X_test_scrambled = self.do_scramble(X_test, cpg_id)
+                #X_test = pd.DataFrame(X[test_idx_num, :])
+                #X_test_scrambled = self.do_scramble(X_test, cpg_id)
                 # recombine the training and testing samples into one matrix, they are in order of train then test
-                X = np.concatenate((X_train_scrambled, X_test_scrambled), axis=0)
+                #X = np.concatenate((X_train_scrambled, X_test_scrambled), axis=0)
                 X = csr_matrix(X)
             else:
                 # get the feature matrix for the cpg, sparse
