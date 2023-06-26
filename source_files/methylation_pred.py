@@ -68,7 +68,6 @@ class methylationPrediction:
                 with open(trained_models_fn, 'rb') as f:
                     self.trained_models = pickle.load(f)
         self.predictions = {}
-        self.prediction_performance = {}
 
     def combine_feat_stores(
         self
@@ -137,37 +136,7 @@ class methylationPrediction:
         model = self.trained_models[cpg_id]
         y_pred = model.predict(X)
         self.predictions[cpg_id] = y_pred
-        # get the number rows that corresponds to the test samples in y
-        y_test_index = y.index.get_indexer(self.test_samples)
-        # get predictions for test samples
-        y_pred_test = y_pred[y_test_index]
-        y_test = y.loc[self.test_samples]
-        # measure performance on test samples
-        mae = np.mean(np.abs(y_test - y_pred_test))
-        # check if y_pred_test is constant
-        if np.var(y_pred_test) == 0:
-            pearsonr = 0
-            spearman = 0
-        # if not, calc pearson and spearman corr coef
-        else:
-            pearsonr = np.corrcoef(y_test, y_pred_test)[0,1]
-            # get spearman corr coef also
-            spearman = spearmanr(y_test, y_pred_test)[0]
-        # if spearman is nan, set it to 0
-        if np.isnan(spearman):
-            spearman = 0
-        if np.isnan(pearsonr):
-            pearsonr = 0
-        # robust linear regression and F-test
-        """model = sm.robust.robust_linear_model.RLM(y_test, y_pred_test).fit()
-        f_test = model.f_test(np.array([0, 1]))
-        robust_f_test_pval = f_test.pvalue
-        robust_f_test_fstat = f_test.F"""
-        self.prediction_performance[cpg_id] = {
-            'testing_methyl_pearsonr': pearsonr, 
-            'testing_methyl_mae': mae,
-            'testing_methyl_spearmanr': spearman
-            }
+        
 
     def apply_all_models(
         self,
@@ -219,7 +188,6 @@ class methylationPrediction:
             # subset to only aggregate features
             if self.agg_only:
                 X = self.subset_matrix_to_agg_only_feats(X, cpg_id)
-            print(X.shape)
             # do prediction
             self.apply_one_model(
                 cpg_id = cpg_id,
@@ -231,7 +199,6 @@ class methylationPrediction:
             if just_one:
                 break
         self.pred_df = pd.DataFrame(self.predictions, index = self.train_samples + self.test_samples)
-        self.perf_df = pd.DataFrame(self.prediction_performance).T
         return
 
     def train_one_model(
@@ -366,7 +333,6 @@ class methylationPrediction:
             
             if self.agg_only:
                 X = self.subset_matrix_to_agg_only_feats(X, cpg_id)
-            print(X.shape, flush=True)
             # for each feature set in the store train a model
             self.train_one_model(
                 cpg_id = cpg_id,
@@ -413,24 +379,42 @@ class methylationPrediction:
         # save covariate columns and sample order
         save_covariate_cols = X_train.iloc[:, covariate_cols].copy(deep = True)
         save_X_train_idx = X_train.index.copy(deep = True)
-        
         # drop covariate columns
         X_train_scrambled = X_train.drop(covariate_cols, axis = 1).copy(deep = True)
         # randomly select values from 
         def scramble_dataframe(df):
+            # scramble values within each sample, seperately 
+            # (setting random_seed makes them all scramble the same)
+            scrambled = df.apply(
+                lambda x: x.sample(frac=1, replace=False).values,
+                axis = 1
+                )
+            # convert back to dataframe, keeping index and col order
+            scrambled_df = pd.DataFrame(
+                scrambled.values.tolist(),
+                index = df.index,
+                columns = df.columns
+                )
+            """
+            Old way
             vals = df.values
             # shuffle vals and every sub array
             np.random.shuffle(vals)
             for i in range(vals.shape[0]):
                 np.random.shuffle(vals[i])
-            scrambled_df = pd.DataFrame(vals, index = df.index, columns = df.columns)
+            scrambled_df = pd.DataFrame(vals, index = df.index, columns = df.columns)"""
             return scrambled_df
+        
+        """
+        really old way
+        X_train_scrambled = X_train_scrambled.sample(frac=1, axis=1, random_state=42, replace = False).sample(frac=1, axis=0, random_state=42, replace = False)
+        """
+        
+        
+        # scramble values within each sample
         X_train_scrambled = scramble_dataframe(X_train_scrambled)
-        
-        """X_train_scrambled = X_train_scrambled.sample(frac=1, axis=1, random_state=42, replace = False).sample(frac=1, axis=0, random_state=42, replace = False)"""
-        
         # reset columns
-        X_train_scrambled.columns = np.arange(X_train_scrambled.shape[1])
+        #X_train_scrambled.columns = np.arange(X_train_scrambled.shape[1])
         # convert index back to original
         X_train_scrambled.index = save_X_train_idx
         # and add covariates back
@@ -442,7 +426,7 @@ class methylationPrediction:
         out_dir: str = ""
         ) -> None:
         """
-        Write out the trained models, predictions, and performances to files
+        Write out the trained models and predictions to files
         """
         # default output directory is where the feature store came from
         if out_dir == "":
@@ -457,6 +441,5 @@ class methylationPrediction:
             pickle.dump(self.trained_models, f)
         # write to parquet files
         self.pred_df.to_parquet(f"{out_dir}/methyl_predictions_{self.model_type}_{self.baseline}baseline{agg_only_str}.parquet")
-        self.perf_df.to_parquet(f"{out_dir}/prediction_performance_{self.model_type}_{self.baseline}baseline{agg_only_str}.parquet")
-        print(f"wrote out trained models, predictions, and performances to {out_dir}", flush=True)
+        print(f"wrote out trained models and predictions to {out_dir}", flush=True)
         

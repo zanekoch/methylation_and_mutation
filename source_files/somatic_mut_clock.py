@@ -25,7 +25,6 @@ class mutationClock:
     def __init__(
         self,
         predicted_methyl_fns: list,
-        predicted_perf_fns: list,
         all_methyl_age_df_t: pd.DataFrame,
         illumina_cpg_locs_df: pd.DataFrame, 
         output_dir: str,
@@ -38,7 +37,6 @@ class mutationClock:
         ) -> None:
         """
         @ predicted_methyl_fns: a list of paths to the predicted methylation files
-        @ predicted_perf_fns: a list of paths to the performance files
         @ scrambled_predicted_methyl_fns: a list of paths to the scrambled predicted methylation files
         @ all_methyl_age_df_t: a dataframe of all the methylation data, with age as the index
         @ illumina_cpg_locs_df: a dataframe of the locations of the CpGs in the methylation data
@@ -48,9 +46,6 @@ class mutationClock:
         @ tissue_type: the tissue type to use for the analysis
         """
         self.predicted_methyl_df = self._combine_fns(predicted_methyl_fns, axis = 1)
-        self.performance_df = self._combine_fns(predicted_perf_fns, axis=0)
-        if len(scrambled_predicted_methyl_fns) > 0:
-            self.scrambled_predicted_methyl_df = self._combine_fns(scrambled_predicted_methyl_fns, axis = 1)
         self.all_methyl_age_df_t = all_methyl_age_df_t
         self.illumina_cpg_locs_df = illumina_cpg_locs_df
         self.output_dir = output_dir
@@ -255,30 +250,6 @@ class mutationClock:
         all_dataset_perf_df.rename(columns = {'index':'cpg'}, inplace = True)
         self.performance_by_dataset_df = all_dataset_perf_df
     
-    def populate_performance(self):
-        """
-        Add interesting column to self.performance_df
-        """
-        # add training CpG real age correlation
-        self.performance_df['training_real_mf_age_pearsonr'] = self.all_methyl_age_df_t.loc[self.train_samples, self.performance_df.index ].corrwith(self.all_methyl_age_df_t.loc[self.train_samples, 'age_at_index'])
-        # add training CpG predicted age correlation
-        self.performance_df['training_pred_mf_age_pearsonr'] = self.predicted_methyl_df.loc[self.train_samples, :].corrwith(self.all_methyl_age_df_t.loc[self.train_samples, 'age_at_index'])
-        self.performance_df['training_real_mf_age_spearmanr'] = self.all_methyl_age_df_t.loc[self.train_samples, self.performance_df.index ].corrwith(self.all_methyl_age_df_t.loc[self.train_samples, 'age_at_index'], method='spearman')
-        # add training CpG predicted age correlation
-        self.performance_df['training_pred_mf_age_spearmanr'] = self.predicted_methyl_df.loc[self.train_samples, :].corrwith(self.all_methyl_age_df_t.loc[self.train_samples, 'age_at_index'], method='spearman')
-        # add correlation between training predicted methylation and training actual methylation
-        self.performance_df['training_pred_real_mf_r'] = self.predicted_methyl_df.loc[self.train_samples, :].corrwith(self.all_methyl_age_df_t.loc[self.train_samples, self.performance_df.index])
-        # same but spearman
-        self.performance_df['training_pred_real_mf_spearmanr'] = self.predicted_methyl_df.loc[self.train_samples, :].corrwith(self.all_methyl_age_df_t.loc[self.train_samples, self.performance_df.index], method='spearman')
-        # get correlation between testing scrambled predicted methylation and testing actual methylation
-        #self.performance_df['testing_scrambled_real_mf_r'] = self.scrambled_predicted_methyl_df.loc[self.test_samples, :].corrwith(self.all_methyl_age_df_t.loc[self.test_samples, self.performance_df.index])
-        # add correlation of predicted testing samples with age
-        self.performance_df['testing_pred_mf_age_pearsonr'] = self.predicted_methyl_df.loc[self.test_samples, :].corrwith(self.all_methyl_age_df_t.loc[self.test_samples, 'age_at_index'])
-        # and actual testing samples with age
-        self.performance_df['testing_real_mf_age_pearsonr'] = self.all_methyl_age_df_t.loc[self.test_samples, self.performance_df.index].corrwith(self.all_methyl_age_df_t.loc[self.test_samples, 'age_at_index'])
-        self.performance_df['testing_pred_mf_age_spearmanr'] = self.predicted_methyl_df.loc[self.test_samples, :].corrwith(self.all_methyl_age_df_t.loc[self.test_samples, 'age_at_index'], method='spearman')
-        # and actual testing samples with age
-        self.performance_df['testing_real_mf_age_spearmanr'] = self.all_methyl_age_df_t.loc[self.test_samples, self.performance_df.index].corrwith(self.all_methyl_age_df_t.loc[self.test_samples, 'age_at_index'], method='spearman')
     
     def get_model_feat_names_train_test(
         self, 
