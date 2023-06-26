@@ -3,6 +3,8 @@ import numpy as np
 import pickle
 import sklearn
 from sklearn.linear_model import LinearRegression, ElasticNetCV, ElasticNet
+from sklearn.model_selection import RandomizedSearchCV, GridSearchCV
+
 import sklearn.preprocessing
 import xgboost as xgb
 import sys
@@ -180,7 +182,7 @@ class methylationPrediction:
                 #X_test_scrambled = self.do_scramble(X_test, cpg_id)
                 # recombine the training and testing samples into one matrix, they are in order of train then test
                 #X = np.concatenate((X_train_scrambled, X_test_scrambled), axis=0)
-                X = csr_matrix(X)
+                #X = csr_matrix(X)
             else:
                 # get the feature matrix for the cpg, sparse
                 X = self.mut_feat_store['feat_mats'][cpg_id]
@@ -236,8 +238,8 @@ class methylationPrediction:
         elif self.model_type == 'xgboost':
             # keep as sparse bc xgboost faster this way
             # Create the XGBRegressor model
-            model = xgb.XGBRegressor(n_jobs=-1)
-            model.fit(X, y)
+            """model = xgb.XGBRegressor(n_jobs=-1)
+            model.fit(X, y)"""
             
             # Create a parameter grid for the XGBoost model
             """
@@ -248,26 +250,36 @@ class methylationPrediction:
             max_depth=3
             max_features=“log2”
             """
-            """from sklearn.model_selection import RandomizedSearchCV
-            model = xgb.XGBRegressor()
+            model = xgb.XGBRegressor(learning_rate = .1, loss = 'reg:squarederror')
             param_grid = {
-                'learning_rate': np.logspace(-4, 0, 50),
-                'n_estimators': range(10, 150, 10),
-                'max_depth': range(2, 10),
-                'min_child_weight': range(1, 6),
-                'gamma': np.linspace(0, 0.5, 50),
-                'subsample': np.linspace(0.5, 1, 50),
-                'colsample_bytree': np.linspace(0.5, 1, 50),
-                'reg_alpha': np.logspace(-4, 0, 50),
-                'reg_lambda': np.logspace(-4, 0, 50)
+                'n_estimators': range(50, 750, 100), # 10
+                'max_depth': range(2, 10, 2), # 8
+                'min_child_weight': range(1, 6, 2), # 3
+                #'gamma': np.linspace(0, 0.5, 50),
+                #'subsample': np.linspace(0.5, 1, 5),
+                #'colsample_bytree': np.linspace(0.5, 1, 5),
+                'reg_alpha': np.linspace(0, 1, 3), # 5
+                'reg_lambda': np.linspace(0, 1, 3), #5
             }
-            # Initialize the RandomizedSearchCV object
+            # grid search
+            grid_search = GridSearchCV(
+                estimator=model,
+                param_grid=param_grid,
+                scoring='neg_mean_squared_error',
+                n_jobs=-1,
+                cv=5,
+                verbose=0
+            )
+            grid_search.fit(X, y)
+            model = grid_search.best_estimator_
+            
+            """# Initialize the RandomizedSearchCV object
             random_search = RandomizedSearchCV(
                 estimator=model,
                 param_distributions=param_grid,
                 n_iter=100,  # number of parameter settings that are sampled
                 scoring='neg_mean_squared_error',
-                #n_jobs=-1,
+                n_jobs=-1,
                 cv=5,
                 verbose=0,
                 random_state=42
@@ -278,6 +290,8 @@ class methylationPrediction:
             print("Best hyperparameters:", random_search.best_params_)
             # Use the best estimator for predictions or further analysis
             model = random_search.best_estimator_"""
+            
+            
         # fit model to training samples
         # X has already been subsetted to only contain training samples in order
         # add to trained models dictionary
