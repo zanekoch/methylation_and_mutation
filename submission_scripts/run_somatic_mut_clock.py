@@ -44,6 +44,10 @@ def run(
         all_mut_w_age_df, illumina_cpg_locs_df, all_methyl_age_df_t, matrix_qtl_dir, covariate_fn = get_data.read_icgc_data()
     elif consortium == "TCGA":
         all_mut_w_age_df, illumina_cpg_locs_df, all_methyl_age_df_t, matrix_qtl_dir, covariate_fn = get_data.read_tcga_data()
+    motif_occurence_df = pd.read_parquet(
+        "/cellar/users/zkoch/methylation_and_mutation/data/methylation_motifs_weiWang/motif_occurences/motif_occurences_combined_15kb.parquet"
+        )
+    print("read in motif occurence df", flush=True)
     generate_features = False
     train_models = False
     if do == "Feat_gen":
@@ -62,7 +66,7 @@ def run(
             all_methyl_age_df_t = all_methyl_age_df_t, out_dir = out_dir, 
             consortium = consortium, dataset = dataset, cross_val_num = cross_val_num, 
             matrix_qtl_dir = matrix_qtl_dir,
-            covariate_fn = covariate_fn
+            covariate_fn = covariate_fn, motif_occurence_df = motif_occurence_df
             )
         ######## choose CpGs ############
         # choose the top cpgs sorted by nearby mutation count and then absolute age correlation
@@ -74,7 +78,7 @@ def run(
         chosen_cpgs = cpg_pred_priority.iloc[start_top_cpgs: end_top_cpgs]['#id'].to_list()
         
         ######### feature generation ###########
-        # run the 
+        # run the feature generation
         mut_feat.create_all_feat_mats(
             cpg_ids = chosen_cpgs, 
             aggregate = mut_feat_params['aggregate'],
@@ -112,6 +116,7 @@ def run(
             methyl_pred.train_all_models()
             methyl_pred.apply_all_models()
             methyl_pred.save_models_and_preds()
+        # just actual model
         elif train_actual_model == 'True' and train_baseline == 'none':
             print("training actual model and not baseline ", flush=True)
             methyl_pred = methylation_pred.methylationPrediction(
@@ -123,6 +128,7 @@ def run(
             methyl_pred.train_all_models()
             methyl_pred.apply_all_models()
             methyl_pred.save_models_and_preds()
+        # just baseline
         elif train_actual_model == 'False' and train_baseline != 'none':
             print(f"training only {train_baseline} baseline", flush=True)
             # do non-scrambled

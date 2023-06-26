@@ -377,6 +377,14 @@ class mutationClock:
             """
             if feat_name[:7] == 'dataset':
                 return 'dataset'
+            elif 'MM' in feat_name:
+                return 'Specific methylating motif'
+            elif 'UM' in feat_name:
+                return 'Specific unmethylating motif'
+            elif 'mm' in feat_name:
+                return 'Aggregate methylating motifs'
+            elif 'um' in feat_name:
+                return 'Aggregate unmethylating motifs'
             elif feat_name[:6] == 'gender':
                 return 'gender'
             elif re.search(r'ext|corr', feat_name):

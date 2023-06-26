@@ -7,6 +7,10 @@ from pyfaidx import Fasta
 import pandas as pd
 import os
 import argparse
+import glob
+import dask.dataframe as dd
+import get_data
+
 
 def extract_motifs(meme_file: str, out_dir: str):
     """
@@ -56,14 +60,12 @@ def extract_surrounding_seq_each_cpg(
     with open(out_fname, 'w') as file:
         file.write(sequences)
         
-        
-        
-        
 def search_motifs_in_surrounding_seqs(
     surrounding_seq_fasta_fn: str = "",
     motif_dir: str = "",
-    out_fn: str = "",
+    out_dir: str = "",
     partition_num: int = 0,
+    num_partitions: int = 20
     ):
     """
     Search for motifs in the surrounding sequences of each cpg
@@ -74,16 +76,17 @@ def search_motifs_in_surrounding_seqs(
         Sequence(str(record.seq), name=record.id.encode())
         for record in Bio.SeqIO.parse(surrounding_seq_fasta_fn, "fasta")
     ]
-    num_paritions = 20
-    num_seq = len(sequences)
     
     print("read sequences", flush=True)
     # for each motif file in motif_dir
     motif_fns = [fn for fn in os.listdir(motif_dir) if fn.endswith('.meme')]
     print(f"read {len(motif_fns)} motif files", flush=True)
     
-    all_motif_occurence_dfs = []
-    for motif_fn in motif_fns:
+    number_motifs = len(motif_fns)
+    motifs_per_partition = (number_motifs // num_partitions) + 1
+    start_index = partition_num * motifs_per_partition
+    print(f"starting motif search at motif number {start_index}", flush=True)
+    for motif_fn in motif_fns[start_index:start_index+motifs_per_partition]:
         # read in 
         with MotifFile(os.path.join(motif_dir, motif_fn)) as motif_file:
             motif = motif_file.read()
@@ -100,23 +103,95 @@ def search_motifs_in_surrounding_seqs(
                 'score': m.score, 'pvalue': m.pvalue, 'qvalue': m.qvalue
                 }
             i += 1
-        motif_occurence_df = pd.DataFrame.from_dict(motif_occurence_dict, orient = 'index')
-        all_motif_occurence_dfs.append(motif_occurence_df)
+        motif_occurence_df = pd.DataFrame.from_dict(motif_occurence_dict, orient = 'index')        
+        motif_occurence_df.to_parquet(os.path.join(out_dir, f"{motif.name.decode()}_motif_occurence_df.parquet"))
         print(f"done with motif {motif.name.decode()}", flush=True)
-    all_motif_occurence_df = pd.concat(all_motif_occurence_dfs)
-    all_motif_occurence_df['start_distance_to_cpg'] = motif_occurence_df.apply(
-            lambda x: x['motif_start'] - 15000, axis = 1
-            )
-    all_motif_occurence_df.to_parquet(out_fn)
-    print(f"wrote to {out_fn}", flush=True)
-    return all_motif_occurence_df
+    
+    return 
 
+def combine_and_proc_motif_occurence_files(
+    glob_path: str,
+    out_dir: str,
+    illumina_cpg_locs_df: pd.DataFrame,
+    bp_num: int = 15000
+    ):
+    """
+    Read in all motif occurence files matching glob_path, combine into one df, join with illumina_cpg_locs_df
+    """
+    dfs = []
+    for fn in glob.glob(glob_path):
+        df = pd.read_parquet(fn, engine="pyarrow", use_threads=True)
+        dfs.append(df)
+        print(f"read in {fn}", flush=True)
+    # read in all motif occurence files
+    all_motif_occurence_df = pd.concat(dfs)
+    
+    print(f"read in all motif occurence files for a total of {all_motif_occurence_df.shape[0]} motifs", flush=True)
+    # filter out motifs with large p values
+    all_motif_occurence_df = all_motif_occurence_df.loc[
+        all_motif_occurence_df['qvalue'] < 0.05
+        ]
+    print(
+        f"filtered out motifs with large p values, leaving {all_motif_occurence_df.shape[0]} motifs",
+        flush=True
+        )
+    all_motif_occurence_df.rename(columns = {'cpg_name': '#id'}, inplace = True)
+    # join with illumina_cpg_locs_df
+    all_motif_occurence_w_illum = all_motif_occurence_df.merge(
+        illumina_cpg_locs_df, on = '#id', how = 'left'
+        )
+    print("joined with illumina_cpg_locs_df", flush=True)
+    # get distance of motif start and stop to cpg
+    all_motif_occurence_w_illum['start_distance_to_cpg'] = all_motif_occurence_w_illum['motif_start'] - bp_num
+    all_motif_occurence_w_illum['end_distance_to_cpg'] = all_motif_occurence_w_illum['motif_stop'] - bp_num
+    # get genomic start and end of motif
+    all_motif_occurence_w_illum['motif_genomic_start'] = all_motif_occurence_w_illum['start'] \
+        + all_motif_occurence_w_illum['start_distance_to_cpg']
+    all_motif_occurence_w_illum['motif_genomic_end'] = all_motif_occurence_w_illum['start'] \
+        + all_motif_occurence_w_illum['end_distance_to_cpg']
+    print("got distance of motif start and stop to cpg", flush=True)
+    # create a column of if MM or UM
+    all_motif_occurence_w_illum['MM_or_UM'] = all_motif_occurence_w_illum.apply(
+        lambda x: 'MM' if x['motif_name'].startswith('M') else 'UM', axis = 1
+        )
+    print("created MM_or_UM column", flush=True)
+    # convert to dask df and write to parquet
+    if out_dir != "":
+        all_motif_occurence_w_illum_dd = dd.from_pandas(all_motif_occurence_w_illum, npartitions = 100)
+        all_motif_occurence_w_illum_dd.to_parquet(out_dir)
+        print("wrote to parquet directory", flush=True)
+    return all_motif_occurence_w_illum
     
     
 def main():
     # parse arguments
     parser = argparse.ArgumentParser()
     parser.add_argument(
+        "--glob_path", type=str, default="",
+    )
+    parser.add_argument(
+        "--out_fn", type=str, default="",
+    )
+    parser.add_argument(
+        "--out_dir", type=str, default="",
+    )
+    # prase
+    args = parser.parse_args()
+    glob_path = args.glob_path
+    out_fn = args.out_fn
+    out_dir = args.out_dir
+    # get illum
+    # qnorm 
+    _, illumina_cpg_locs_df, _, _, _ = get_data.read_icgc_data()
+    all_motif_occurence_w_illum = combine_and_proc_motif_occurence_files(
+        glob_path=glob_path,
+        out_dir=out_dir,
+        illumina_cpg_locs_df=illumina_cpg_locs_df
+        )
+    all_motif_occurence_w_illum.to_parquet(out_fn)
+    print(f"wrote to {out_fn}", flush=True)
+    
+    """parser.add_argument(
         "--meme_dir", type=str, default="",
         help="path to wei wang motif dir"
     )
@@ -125,19 +200,31 @@ def main():
         help="path to surrounding_seq_fasta_fn"
     )
     parser.add_argument(
-        "--out_fn", type=str, default="",
+        "--out_dir", type=str, default="",
         help="path to output directory"
+    )
+    parser.add_argument(
+        "--partition_num", type=int,
+        help="partition number"
+    )
+    parser.add_argument(
+        "--num_partitions", type=int,
+        help=" number"
     )
     args = parser.parse_args()
     meme_dir = args.meme_dir
     surrounding_seq_fasta_fn = args.surrounding_seq_fasta_fn
-    out_fn = args.out_fn
+    out_dir = args.out_dir
+    partition_num = args.partition_num
+    num_partitions = args.num_partitions
     
     search_motifs_in_surrounding_seqs(
         surrounding_seq_fasta_fn=surrounding_seq_fasta_fn,
         motif_dir=meme_dir,
-        out_fn=out_fn,
-        )
+        out_dir=out_dir,
+        partition_num=partition_num,
+        num_partitions=num_partitions
+        )"""
     
 if __name__ == "__main__":
     main()

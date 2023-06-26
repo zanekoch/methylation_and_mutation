@@ -23,6 +23,7 @@ class mutationFeatures:
         cross_val_num: int,
         matrix_qtl_dir: str,
         covariate_fn: str,
+        motif_occurence_df: pd.DataFrame,
         #meqtl_db: pd.DataFrame = None
         ):
         self.all_mut_w_age_df = all_mut_w_age_df
@@ -42,6 +43,8 @@ class mutationFeatures:
         # create empty cache
         self.matrixQTL_store = {}
         self.all_samples = self.all_methyl_age_df_t.index.to_list()
+        # location of methylation motifs
+        self.motif_occurence_df = motif_occurence_df
         # create empty feature store
         self.mutation_features_store = {}
     
@@ -186,6 +189,52 @@ class mutationFeatures:
             )
         return pos_corr_locs, neg_corr_locs
     
+    def _get_motif_counts(
+        self,
+        cpg_id: str,
+        chrom: str
+        ):
+        """
+        Given a CpG, get the counts of each mutaitons in motif occurences in the nearby window
+        @ returns multiple lists of loci each in format chr:start
+        """
+        from collections import defaultdict
+
+        # create default dict keyed by motif name and values of lists of loci
+        specific_motif_loci_dict = defaultdict(list)
+        def create_list_from_start_ends(starts, ends, motif_names):
+            l = []
+            for start, end, motif_name in zip(starts, ends, motif_names):
+                actual_start = min(start, end)
+                actual_end = max(start, end)
+                to_add = [chrom + ':' + str(i) for i in range(actual_start, actual_end)]
+                l.extend(to_add)
+                specific_motif_loci_dict[motif_name].extend(to_add)
+            return l
+        
+        # subset to only motifs near this cpg
+        this_cpg_nearby_motifs_df = self.motif_occurence_df.loc[
+            self.motif_occurence_df['#id'] == cpg_id,
+            :]
+        # if there are none 
+        if this_cpg_nearby_motifs_df.shape[0] == 0:
+            return [], [], specific_motif_loci_dict
+        # split by UM and MM
+        mm_motifs = this_cpg_nearby_motifs_df.query("MM_or_UM == 'MM'")
+        um_motifs = this_cpg_nearby_motifs_df.query("MM_or_UM == 'UM'")
+        # get lists of all motif positions and names
+        mm_starts = mm_motifs['motif_genomic_start'].values
+        mm_ends = mm_motifs['motif_genomic_end'].values
+        mm_motif_names = mm_motifs['motif_name'].values
+        um_starts = um_motifs['motif_genomic_start'].values
+        um_ends = um_motifs['motif_genomic_end'].values
+        um_motif_names = um_motifs['motif_name'].values
+        # for each pair if start and end, create a list of all positions in between and add to a list
+        # this also updates the specific_motif_loci_dict
+        mm_loci = create_list_from_start_ends(mm_starts, mm_ends, mm_motif_names)
+        um_loci = create_list_from_start_ends(um_starts, um_ends, um_motif_names)
+        return mm_loci, um_loci, specific_motif_loci_dict
+    
     def _get_matrixQTL_sites(
         self,
         cpg_id: str,
@@ -293,6 +342,11 @@ class mutationFeatures:
             chrom + ':' + str(start + i)
             for i in range(-int(nearby_window_size/20), int(nearby_window_size/20) + 1)
             ]
+        get_motif_counts = True
+        
+        if get_motif_counts:
+            predictor_site_groups['mm_motif'], predictor_site_groups['um_motif'], predictor_site_groups['specific_motif_loci_dict'] = self._get_motif_counts(cpg_id, chrom)
+            
         # get sites from matrixQTL 
         if max_meqtl_sites > 0:
             predictor_site_groups['matrixqtl_neg_beta'], predictor_site_groups['matrixqtl_neg_beta_close'],  predictor_site_groups['matrixqtl_pos_beta'],  predictor_site_groups['matrixqtl_pos_beta_close'] = self._get_matrixQTL_sites(cpg_id, chrom, max_meqtl_sites=max_meqtl_sites)
@@ -309,15 +363,7 @@ class mutationFeatures:
             predictor_site_groups['matrixqtl_pos_beta_close_ext'] = extend_clump_matrixQTL_sites(
                 predictor_site_groups['matrixqtl_pos_beta_close'], extend_amount=1000
             )
-        else:
-            predictor_site_groups['matrixqtl_neg_beta'] = []
-            predictor_site_groups['matrixqtl_neg_beta_close'] = []
-            predictor_site_groups['matrixqtl_pos_beta'] = []
-            predictor_site_groups['matrixqtl_pos_beta_close'] = []
-            predictor_site_groups['matrixqtl_neg_beta_ext'] = []
-            predictor_site_groups['matrixqtl_neg_beta_close_ext'] = []
-            predictor_site_groups['matrixqtl_pos_beta_ext'] = []
-            predictor_site_groups['matrixqtl_pos_beta_close_ext'] = []
+        
         return predictor_site_groups
     
     def _create_feature_mat(
@@ -331,11 +377,23 @@ class mutationFeatures:
         """
         Create the training matrix for the given cpg_id and predictor_sites
         @ cpg_id: the id of the CpG
-        @ predictor_groups: dict of lists of sites to be used as predictors of cpg_id's methylation
+        @ predictor_groups: dict of lists of sites to be used as predictors of cpg_id's methylation, groups:
+            - nearby: nearby_window_size bp on either side of cpg_id
+            - very_nearby: nearby_window_size/20 bp on either side of cpg_id
+            - pos_corr: num_correl_sites most positively correlated sites to cpg_id
+            - neg_corr: num_correl_sites most negatively correlated sites to cpg_id
+            - pos_corr_ext: num_correl_sites most positively correlated sites to cpg_id, extended by extend_amount
+            - neg_corr_ext: num_correl_sites most negatively correlated sites to cpg_id, extended by extend_amount
+            - mm_motifs: loci inside motifs that are associated with hypermethylation
+            - um_motifs: loci inside motifs that are associated with hypomethylation
+            - mm_motifs_ext: loci inside motifs that are associated with hypermethylation, extended by extend_amount
+            - um_motifs_ext: loci inside motifs that are associated with hypomethylation, extended by extend_amount
         @ aggregate: whether to aggregate the mutation status by predictor group
+            - results in each of the above groups turning into one feature
+            - *and* each extended feature being its own aggregate feature (e.g. chr1:500-750)
         @ extend_amount: the amount the predictor sites were extended by
         @ returns:
-            - feature_mat: a feature matrix where each column is a predictor site from predictor_groups, sparse matrix
+            - feature_mat: a feature matrix where each column is a predictor site, or aggregate, from predictor_groups, sparse matrix
             - predictor_sites: the list of predictor sites in the feature matrix (columns)
             - target_values: the target values for the feature matrix (methylation values)
         """
@@ -344,11 +402,19 @@ class mutationFeatures:
         
         def _create_feat_mat(
             site_list: list, 
-            binarize: bool = False
+            binarize: bool = False,
             ) -> pd.DataFrame:
-            mut_status = self.all_mut_w_age_df.loc[
-                self.all_mut_w_age_df['mut_loc'].isin(site_list),
-                ['DNA_VAF', 'case_submitter_id', 'mut_loc']
+            """
+            Create a feature matrix where each column is a predictor site from site_list
+            @ site_list: list of sites to be used as predictors of cpg_id's methylation
+            @ binarize: whether to binarize the feature matrix
+            @ returns: a feature matrix where each column is a predictor site from site_list, 
+            """
+            mutated_sites_from_list_df = self.all_mut_w_age_df.loc[
+                self.all_mut_w_age_df['mut_loc'].isin(site_list)
+                ]
+            mut_status = mutated_sites_from_list_df.loc[
+                :, ['DNA_VAF', 'case_submitter_id', 'mut_loc']
                 ]
             feat_mat = pd.pivot_table(
                 mut_status, index='case_submitter_id', columns='mut_loc',
@@ -366,12 +432,16 @@ class mutationFeatures:
             and values are the variant allele frequencies of the mutations at that site in the sample
             """
             # get list of unique predictor sites
-            predictor_sites = set()
-            for key in predictor_groups:
-                predictor_sites.update(predictor_groups[key])
-            predictor_sites = list(predictor_sites)
-            # get mutation status of all predictor sites
-            feat_mat = _create_feat_mat(predictor_sites, binarize=binarize)
+            predictor_sites = []
+            predictor_site_names = []
+            # these are the groups only groups that have features added without first being aggregated
+            specific_feature_pred_groups = ['nearby', 'pos_corr', 'neg_corr']
+            feat_mats = []
+            for group_name in specific_feature_pred_groups:
+                feat_mat = _create_feat_mat(predictor_groups[group_name], binarize=binarize)
+                feat_mat.columns =  [group_name + '+' + x for x in feat_mat.columns]
+                feat_mats.append(feat_mat)
+            feat_mat = pd.concat(feat_mats, axis=1)
             return feat_mat
         
         def agg(
@@ -387,14 +457,17 @@ class mutationFeatures:
             # list of dataframes containing aggregated features
             aggregated_muts = []
             extended_feat_agg_muts = []
+            specific_motif_agg_muts = []
+
             # for each predictor group, e.g. pos_corr, neg_corr, etc.
             for group_name, group_sites in predictor_groups.items():
                 # create feature matrix for this group
-                feat_mat = _create_feat_mat(group_sites, binarize=binarize)
-                # sum across loci within each sample to get samples x aggregate feature matrix
-                agg_feat_mat = feat_mat.sum(axis=1)
-                aggregated_muts.append(agg_feat_mat)
-                
+                if group_name != 'specific_motif_loci_dict':
+                    feat_mat = _create_feat_mat(group_sites, binarize=binarize)
+                    # sum across loci within each sample to get samples x aggregate feature matrix
+                    agg_feat_mat = feat_mat.sum(axis=1)
+                    aggregated_muts.append(agg_feat_mat)
+                    
                 ### Aggregation across each extended site for each sample ###
                 # if we want to add, the group name ends with '_ext', 
                 # and there are more than 0 mutated sites in the group 
@@ -404,27 +477,44 @@ class mutationFeatures:
                     sums, col_names = [], []
                     for i in range(number_ext_features - 1):
                         # sum the features in the ith extended feature that are in feat_mat
-                        to_sum = list(set(group_sites[i*extend_amount:(i+1)*extend_amount]).intersection(feat_mat.columns))
+                        to_sum = list(set(
+                            group_sites[i*extend_amount:(i+1)*extend_amount]
+                            ).intersection(feat_mat.columns))
                         sums.append(feat_mat.loc[:, to_sum].sum(axis=1))
                         # create the name of the ith extended feature
-                        name = group_sites[i*extend_amount] \
+                        name = group_name + '+' + group_sites[i*extend_amount] \
                                             + '-' \
-                                            + group_sites[(i+1)*extend_amount].split(':')[1] \
-                                            + '-' + group_name
+                                            + group_sites[(i+1)*extend_amount].split(':')[1]
                         col_names.append(name)
                     extended_feats = pd.concat(sums, axis=1)
                     # rename features 
                     extended_feats.columns = col_names
                     # add extended features to extended_feat_agg_muts
                     extended_feat_agg_muts.append(extended_feats)
-                
+                # for the motif features, we want to aggregate across each motif
+                elif group_name == 'specific_motif_loci_dict':
+                    # for each motif and its loci
+                    for motif_name, motif_loci in group_sites.items():
+                        # sum the columns of feat_mat that are in this motif's loci
+                        this_motif_feat_mat = _create_feat_mat(motif_loci, binarize=binarize)
+                        this_motif_sum = this_motif_feat_mat.sum(axis=1)
+                        specific_motif_agg_muts.append(this_motif_sum)
+            
             # create dataframe from aggreated mutations with columns named after pred_type
             agg_feat_mat = pd.concat(aggregated_muts, axis=1)
-            agg_feat_mat.columns = predictor_groups.keys()
+            agg_cols = ['agg_' + x + '+' for x in list(predictor_groups.keys()) if x != 'specific_motif_loci_dict']
+            agg_feat_mat.columns = agg_cols
             # create df from extended features
             extended_feat_agg_muts = pd.concat(extended_feat_agg_muts, axis=1)
-            # add extended features to agg_feat_mat
-            agg_feat_mat = pd.concat([agg_feat_mat, extended_feat_agg_muts], axis=1)
+            # create df from aggregated motifs
+            specific_motif_agg_muts_df = pd.concat(specific_motif_agg_muts, axis=1)
+            specific_motif_agg_muts_df.columns =  [
+                'UM+' + x if x.startswith('UM') else 'MM+' + x for x in list(predictor_groups['specific_motif_loci_dict'].keys())
+                ]
+            # add extended features and motif_sums to agg_feat_mat
+            agg_feat_mat = pd.concat(
+                [agg_feat_mat, extended_feat_agg_muts, specific_motif_agg_muts_df],
+                axis=1)
             return agg_feat_mat
         
         def get_tesselated_nearby_feats(
@@ -550,6 +640,8 @@ class mutationFeatures:
             if col.startswith('dataset_') or col.startswith('gender_')
             ]
         covariate_df = self.all_methyl_age_df_t.loc[all_samples, coviariate_col_names]
+        # replace _ in column names with '+'
+        covariate_df.columns = [col.replace('_', '+') for col in covariate_df.columns]
         # right merge to make sure all samples are included
         feat_mat = pd.merge(
             feat_mat, covariate_df, 
@@ -565,6 +657,7 @@ class mutationFeatures:
             print(set(all_samples) - set(feat_mat.index))
             print(len(set(all_samples) - set(feat_mat.index)))
             print(len(feat_mat.index))
+            sys.exit(1)
         # convert feat_mat to sparse matrix
         feature_names = feat_mat.columns.to_list()
         feat_mat = csr_matrix(feat_mat)
@@ -597,7 +690,6 @@ class mutationFeatures:
                 cpg_id, num_correl_sites, max_meqtl_sites,
                 nearby_window_size, extend_amount
                 )
-            
             feat_mats[cpg_id], feat_names[cpg_id], target_values[cpg_id] = self._create_feature_mat(
                 cpg_id, predictor_groups, aggregate, extend_amount, binarize
                 )
@@ -630,9 +722,10 @@ class mutationFeatures:
             self.mutation_features_store['feat_mats'].update(feat_mats)
             self.mutation_features_store['feat_names'].update(feat_names)
             self.mutation_features_store['target_values'].update(target_values)
-            # append to cpg_ids numpy.ndarray
-            self.mutation_features_store['cpg_ids'] = np.append(self.mutation_features_store['cpg_ids'], cpg_ids)
-      
+            # add cpg_ids to mutation_features_store, if they are not already there
+            self.mutation_features_store['cpg_ids'] = np.unique(
+                np.concatenate((self.mutation_features_store['cpg_ids'], cpg_ids))
+                )
       
     def choose_cpgs_to_train(
         self,

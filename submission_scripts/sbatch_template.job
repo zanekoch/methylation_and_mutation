@@ -1,30 +1,37 @@
 #!/bin/bash
-#SBATCH --array=0
+#SBATCH --array=0-8%5
 #SBATCH --partition=nrnb-compute
-#SBATCH --mem=200GB
-#SBATCH --time=12:00:00
-#SBATCH --job-name=motif
-##SBAT/CH --cpus-per-task=16
-##S/BATCH --ntasks=1
+#SBATCH --mem=96GB
+#SBATCH --time=8:00:00
+#SBATCH --job-name=icgcSoMage
+##SB/ATCH --cpus-per-task=8
+##SB/ATCH --ntasks=1
 eval "$(conda shell.bash hook)"
 conda activate /cellar/users/zkoch/miniconda3/envs/tf_env 
 
+############################################
+# create motif occurences
+#srun python /cellar/users/zkoch/methylation_and_mutation/source_files/methylation_motifs.py --meme_dir /cellar/users/zkoch/methylation_and_mutation/data/methylation_motifs_weiWang/wang_methyl_motifs_313 --surrounding_seq_fasta_fn /cellar/users/zkoch/methylation_and_mutation/data/methylation_motifs_weiWang/15kb_seq_each_side_each_illum_cpg.fasta --out_dir /cellar/users/zkoch/methylation_and_mutation/data/methylation_motifs_weiWang/motif_occurences --partition_num ${SLURM_ARRAY_TASK_ID} --num_partitions 20
+#srun python /cellar/users/zkoch/methylation_and_mutation/source_files/methylation_motifs.py --glob_path /cellar/users/zkoch/methylation_and_mutation/data/methylation_motifs_weiWang/motif_occurences/\*parquet --out_dir /cellar/users/zkoch/methylation_and_mutation/data/methylation_motifs_weiWang/motif_occurences/motif_occurences_combined_15kb  --out_fn /cellar/users/zkoch/methylation_and_mutation/data/methylation_motifs_weiWang/motif_occurences/motif_occurences_combined_15kb.parquet
+############################################
 
-srun python /cellar/users/zkoch/methylation_and_mutation/source_files/methylation_motifs.py --meme_dir /cellar/users/zkoch/methylation_and_mutation/data/methylation_motifs_weiWang/wang_methyl_motifs_313 --surrounding_seq_fasta_fn /cellar/users/zkoch/methylation_and_mutation/data/methylation_motifs_weiWang/15kb_seq_each_side_each_illum_cpg.fasta --out_fn /cellar/users/zkoch/methylation_and_mutation/data/methylation_motifs_weiWang/motif_occurences/motif_occurences_near_cpg_15kb.parquet 
 
 ############################################
 # ICGC run_somatic_mut_clock.py
-# 4 hours as 46GB max for 1000 mutations on each job
-
+# 30min hours at 72GB max for 50 mutations on each job
 #start_top_cpgs_values=(0 1000 2000 3000 4000 0 1000 2000 3000 4000)
+start_top_cpgs_values=(250 500 1000 2000 2500 3000 3500 4000 4500)
 #end_top_cpgs_values=(1000 2000 3000 4000 5000 1000 2000 3000 4000 5000)
+end_top_cpgs_values=(500 1000 2000 2500 3000 3500 4000 4500 5000)
 #cv_num_values=(0 0 0 0 0 1 1 1 1 1)
-: '
+cv_num_values=(0 0 0 0 0 0 0 0 0)
+
+
 srun python /cellar/users/zkoch/methylation_and_mutation/submission_scripts/run_somatic_mut_clock.py \
 --do Both \
 --consortium ICGC \
 --cross_val ${cv_num_values[$SLURM_ARRAY_TASK_ID]} \
---out_dir /cellar/users/zkoch/methylation_and_mutation/output_dirs/051723_icgc_somage_output \
+--out_dir /cellar/users/zkoch/methylation_and_mutation/output_dirs/062123_icgc_somage_output \
 --start_top_cpgs ${start_top_cpgs_values[$SLURM_ARRAY_TASK_ID]} \
 --end_top_cpgs ${end_top_cpgs_values[$SLURM_ARRAY_TASK_ID]} \
 --aggregate Both \
@@ -33,11 +40,11 @@ srun python /cellar/users/zkoch/methylation_and_mutation/submission_scripts/run_
 --model xgboost \
 --burden_bin_size 25000 \
 --num_correl_sites 500 \
---max_meqtl_sites 200 \
+--max_meqtl_sites 0 \
 --nearby_window_size 100000 \
 --extend_amount 500 \
---agg_only_methyl_pred True
-'
+--agg_only_methyl_pred False
+
 ############################################
 
 

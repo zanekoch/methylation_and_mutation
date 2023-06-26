@@ -29,8 +29,13 @@ class methylationPrediction:
         ) -> None:
         """
         Constructor for methylationPrediction object
-        @ mut_feat_store_fns: list of path(s) to the mutation feature store(s)
         @ model_type: str, either "xgboost", "linreg", "lasso", "elasticNet", or "rand_forest"
+        @ baseline: str, either "none", "scramble", or "cov_only"
+        @ mut_feat_store_fns: list of path(s) to the mutation feature store(s)
+        @ mut_feat_store: dict, the mutation feature store
+        @ trained_models_fns: list of path(s) to the trained models
+        @ target_values: str, the key in the mutation feature store which stores the target values
+        @ agg_only: bool, whether to only use aggregate features
         @ returns: None
         """
         # read in mutation features from file or from dictionary
@@ -268,7 +273,14 @@ class methylationPrediction:
             model.fit(X, y)
             
             # Create a parameter grid for the XGBoost model
-            
+            """
+            From paper
+            loss=“deviance”
+            learning_rate=0.1
+            n_estimators=500
+            max_depth=3
+            max_features=“log2”
+            """
             """from sklearn.model_selection import RandomizedSearchCV
             model = xgb.XGBRegressor()
             param_grid = {
@@ -340,11 +352,8 @@ class methylationPrediction:
                 feat_names = pd.Series(self.mut_feat_store['feat_names'][cpg_id])
                 is_covariate = feat_names.str.contains('dataset') | feat_names.str.contains('gender')
                 covariate_cols = feat_names.index[is_covariate].values
-                print(feat_names[is_covariate])
                 # select only the covariate columns from X
                 X = X.iloc[:, covariate_cols]
-                # sum the columns of x
-                print(X.sum(axis=1))
                 # convert back to sparse
                 X = csr_matrix(X)
             elif self.baseline == 'none': # actual model
@@ -379,9 +388,8 @@ class methylationPrediction:
         """
         feat_names = pd.Series(self.mut_feat_store['feat_names'][cpg_id])
         feat_mat = pd.DataFrame(feat_mat.toarray(), columns=feat_names)
-        # select only the features which are aggregate features, 
-        pattern = '^[0-9:]*$'
-        selected_columns = feat_mat.columns[~feat_mat.columns.str.contains(pattern, regex=True)]
+        # select only the features which are aggregate features or covariates (dataset, gender)
+        selected_columns = feat_mat.columns[feat_mat.columns.str.contains('dataset|agg|gender')]
         feat_mat = feat_mat[selected_columns]
         # convert to csr matrix
         feat_mat = csr_matrix(feat_mat)
