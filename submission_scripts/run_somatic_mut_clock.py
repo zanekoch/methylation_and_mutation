@@ -22,7 +22,8 @@ def run(
     model: str,
     mut_feat_store_fns: list,
     agg_only_methyl_pred: bool,
-    scale_counts_within_dataset: bool
+    scale_counts_within_dataset: bool,
+    predict_with_random_feat: int
     ) -> None:
     """
     Driver function for generating features or training models
@@ -41,6 +42,7 @@ def run(
     @ mut_feat_store_fns: list of mutation feature store filenames
     @ agg_only_methyl_pred: whether to train the models on aggregate features only or not
     @ scale_counts_within_dataset: whether to scale the mutation counts within the dataset
+    @ predict_with_random_feat: Nunber of times to predict with random features
     @ returns: None
     """
     if consortium == "ICGC":
@@ -106,7 +108,9 @@ def run(
                 model_type = model,
                 baseline = "none",
                 agg_only = agg_only_methyl_pred,
-                scale_counts_within_dataset = scale_counts_within_dataset
+                scale_counts_within_dataset = scale_counts_within_dataset,
+                predict_with_random_feat = predict_with_random_feat,
+                illumina_cpg_locs_df = illumina_cpg_locs_df
                 )
             methyl_pred.train_all_models()
             methyl_pred.apply_all_models()
@@ -130,7 +134,9 @@ def run(
                 model_type = model,
                 baseline = "none",
                 agg_only = agg_only_methyl_pred,
-                scale_counts_within_dataset = scale_counts_within_dataset
+                scale_counts_within_dataset = scale_counts_within_dataset,
+                predict_with_random_feat = predict_with_random_feat,
+                illumina_cpg_locs_df = illumina_cpg_locs_df
                 )
             methyl_pred.train_all_models()
             methyl_pred.apply_all_models()
@@ -176,7 +182,7 @@ def main():
     parser.add_argument('--extend_amount', type=int, help='extend_amount', default=100)
     parser.add_argument('--agg_only_methyl_pred', type=str, help='to train the models on aggregate features only or not: "True" or "False" ')
     parser.add_argument('--scale_counts_within_dataset', type=str, help='whether to scale the mutation counts within the dataset: "True" or "False" ')
-    
+    parser.add_argument('--predict_with_random_feat', type=int, help='Number of times to predict with random features', default=-1)
     args = parser.parse_args()
     do = args.do
     # assert do has a valid value
@@ -197,6 +203,7 @@ def main():
     train_actual_model = args.train_actual_model
     agg_only_methyl_pred = args.agg_only_methyl_pred
     scale_counts_within_dataset = args.scale_counts_within_dataset
+    predict_with_random_feat = args.predict_with_random_feat
     model = args.model
     if model not in ['xgboost', 'elasticNet']:
         raise ValueError("model must be xgboost or elasticNet")
@@ -224,6 +231,7 @@ def main():
     print(model)
     print(f"agg only {agg_only_methyl_pred}")
     print(f"scale counts within dataset {scale_counts_within_dataset}")
+    print(f"predict with random feat {predict_with_random_feat}")
     run(
         do = do,
         consortium = consortium, dataset = dataset, cross_val_num = cross_val_num,
@@ -231,7 +239,8 @@ def main():
         end_top_cpgs = end_top_cpgs, mut_feat_params = mut_feat_params,
         train_baseline = train_baseline, train_actual_model = train_actual_model, model = model, mut_feat_store_fns = mut_feat_store_fns,
         agg_only_methyl_pred = agg_only_methyl_pred, 
-        scale_counts_within_dataset = scale_counts_within_dataset
+        scale_counts_within_dataset = scale_counts_within_dataset,
+        predict_with_random_feat = predict_with_random_feat
         )
         
 if __name__ == "__main__":

@@ -115,25 +115,24 @@ class methylationPrediction:
 
     def apply_one_model(
         self,
-        cpg_id: str,
+        train_mat_cpg_id: str,
+        target_cpg_id: str,
         X,
-        y: pd.Series
         ):
         """
         Predict the methylation for a given CpG site on self.test_samples
-        @ cpg_id: the id of the CpG site
-        @ X: the mutation feature matrix for the CpG site, csr if model_type is xgboost, otherwise numpy array
-        @ y: the target methylation values for the CpG site
+        @ train_mat_cpg_id: the id of the CpG site whose mat was used to train the model
+        @ target_cpg_id: the id of the CpG site to predict
+        @ X: the mutation feature matrix for the CpG site, csr if model_type is xgboost, otherwise numpy array. Contains all samples, in order of train then test
         """
-        
         if self.model_type == 'elasticNet':
             # scale the features of training and testing samples, seperately
             train_idx_num = [
-                    self.mut_feat_store[self.target_values][cpg_id].index.get_loc(train_sample)
+                    self.mut_feat_store[self.target_values][train_mat_cpg_id].index.get_loc(train_sample)
                     for train_sample in self.train_samples
                     ]
             test_idx_num = [
-                    self.mut_feat_store[self.target_values][cpg_id].index.get_loc(test_sample)
+                    self.mut_feat_store[self.target_values][train_mat_cpg_id].index.get_loc(test_sample)
                     for test_sample in self.test_samples
                 ]
             # Create a MinMaxScaler using the training data
@@ -146,9 +145,14 @@ class methylationPrediction:
             X = np.concatenate((X_train, X_test), axis=0)
         
         # predict methylation for all samples
-        model = self.trained_models[cpg_id]
+        # if predicting with random feat, then use combination as key
+        if self.predict_with_random_feat > 0:
+            dict_key = 'target_' + target_cpg_id + '_train_' + train_mat_cpg_id
+        else:
+            dict_key = target_cpg_id
+        model = self.trained_models[dict_key]
         y_pred = model.predict(X)
-        self.predictions[cpg_id] = y_pred
+        self.predictions[dict_key] = y_pred
         
 
     def apply_all_models(
@@ -160,62 +164,73 @@ class methylationPrediction:
         using the models trained by train_all_models stored in self.trained_models
         @ mut_feat_store: the path to the mutation features store
         """
-        # for each cpg in the store, apply its trained model
-        for i, cpg_id in enumerate(self.mut_feat_store['cpg_ids']):
+        # if predict_with_random_feat is then get the name of cpgs being predicted
+        if self.predict_with_random_feat > 0:
+            cpg_with_trained_model = self.trained_models.keys()
+            # split each on the underscore and take the second part
+            target_cpgs = [cpg.split('_')[1] for cpg in cpg_with_trained_model]
+            # split each on the underscore and take the third part
+            train_mat_cpgs = [cpg.split('_')[3] for cpg in cpg_with_trained_model]
+        # otherwise can just use all cpgs in trained_models
+        else:
+            target_cpgs = self.trained_models.keys()
+            train_mat_cpgs = target_cpgs
+        total_cpgs = len(target_cpgs)
+        # make sure all cpgs in trained_models identical to those in mut_feat_store, if not then error
+        assert set(target_cpgs) == set(self.mut_feat_store['cpg_ids']), \
+            "cpgs in trained_models not identical to those in mut_feat_store"
+        # for each cpg in the store predict its methylation using the appropriate feat mat and model
+        for i, target_cpg_id in enumerate(target_cpgs):
+            # get indices of training and testing samples from target
             train_idx_num = [
-                    self.mut_feat_store[self.target_values][cpg_id].index.get_loc(train_sample)
+                    self.mut_feat_store[self.target_values][target_cpg_id].index.get_loc(train_sample)
                     for train_sample in self.train_samples
                     ]
             test_idx_num = [
-                    self.mut_feat_store[self.target_values][cpg_id].index.get_loc(test_sample)
+                    self.mut_feat_store[self.target_values][target_cpg_id].index.get_loc(test_sample)
                     for test_sample in self.test_samples
                 ]
-                
+            # get the feature matrix for the cpg used to train the model
             if self.baseline == 'cov_only':
-                # get the feature matrix for the cpg
-                X = self.mut_feat_store['feat_mats'][cpg_id]
+                X = self.mut_feat_store['feat_mats'][train_mat_cpgs[i]]
                 X = pd.DataFrame(X.todense())
                 # select only the covariate columns
-                feat_names = pd.Series(self.mut_feat_store['feat_names'][cpg_id])
+                feat_names = pd.Series(self.mut_feat_store['feat_names'][train_mat_cpgs[i]])
                 is_covariate = feat_names.str.contains('dataset') | feat_names.str.contains('gender')
                 covariate_cols = feat_names.index[is_covariate].values
                 # select only the covariate columns from X
                 X = X.iloc[:, covariate_cols]
                 X = csr_matrix(X)
             elif self.baseline == 'scramble':
-                # get the feature matrix for the cpg
-                X = self.mut_feat_store['feat_mats'][cpg_id]
+                X = self.mut_feat_store['feat_mats'][train_mat_cpgs[i]]
             else:
-                # get the feature matrix for the cpg, sparse
-                X = self.mut_feat_store['feat_mats'][cpg_id]
-                
+                X = self.mut_feat_store['feat_mats'][train_mat_cpgs[i]]
             # subset to only aggregate features
             if self.agg_only:
-                X = self.subset_matrix_to_agg_only_feats(X, cpg_id)
+                X = self.subset_matrix_to_agg_only_feats(X, train_mat_cpgs[i])
+            # and/or scale
             if self.scale_counts_within_dataset:
                 # scale counts within each dset separately for training and testing samples
                 scaled_X_train = self.do_scale_counts_within_dataset(
-                    X[train_idx_num, :], cpg_id
+                    X[train_idx_num, :], train_mat_cpgs[i]
                     )
                 scaled_X_test = self.do_scale_counts_within_dataset(
-                    X[test_idx_num, :], cpg_id
+                    X[test_idx_num, :], train_mat_cpgs[i]
                     )
                 # combine the two csr matrices
                 X = vstack([scaled_X_train, scaled_X_test])
                 
             # do prediction
             self.apply_one_model(
-                cpg_id = cpg_id,
-                X = X, 
-                y = self.mut_feat_store[self.target_values][cpg_id],
+                train_mat_cpg_id = train_mat_cpgs[i],
+                target_cpg_id = target_cpg_id,
+                X = X
                 )
             if i % 10 == 0:
-                print(f'Predicted methylation for {i} CpGs of {len(self.mut_feat_store["cpg_ids"])}', flush=True)
+                print(f'Predicted methylation for {i} CpGs of {total_cpgs}', flush=True)
             if just_one:
                 break
-        
-                
-                
+        # combine all predictions into one dataframe
         self.pred_df = pd.DataFrame(self.predictions, index = self.train_samples + self.test_samples)
         return
 
@@ -255,7 +270,11 @@ class methylationPrediction:
         elif self.model_type == 'xgboost':
             # keep as sparse bc xgboost faster this way
             # Create the XGBRegressor model
-            model = xgb.XGBRegressor(n_jobs=-1)
+            model = xgb.XGBRegressor(
+                n_jobs=-1,
+                learning_rate = .1,
+                objective = 'reg:squarederror'
+                )
             model.fit(X, y)
             
             # Create a parameter grid for the XGBoost model
@@ -333,31 +352,31 @@ class methylationPrediction:
                     X = X, # already subset to training samples
                     y = self.mut_feat_store[self.target_values][cpg_id] # gets subset in fxn
                     )
-            # in this case randomly choose feature matrixes to predict with
-            else: 
-                # randomly choose 5*predict_with_random_feat CpGs from the store, without replacement
-                random_cpgs = np.random.choice(
-                    self.mut_feat_store['cpg_ids'],
-                    2 * self.predict_with_random_feat,
-                    replace = False
-                    )
-                # find the chromosome of these cpgs from the illumina cpg locations df
-                random_cpg_chroms = self.illumina_cpg_locs_df.loc[
-                    self.illumina_cpg_locs_df['#id'].isin(random_cpgs), 'chr'
-                    ].values
+            else: # in this case randomly choose feature matrixes to predict with
+                # exclude same chrom CpGs from random selection
                 target_cpg_chrom = self.illumina_cpg_locs_df.loc[
                     self.illumina_cpg_locs_df['#id'] == cpg_id, 'chr'
                     ].values[0]
-                # remove CpGs from random_cpgs that are on same chromosome as target CpG
-                random_cpgs = random_cpgs[random_cpg_chroms != target_cpg_chrom]
+                diff_chrom_cpgs = set(self.illumina_cpg_locs_df.query(
+                    "chr != @target_cpg_chrom"
+                    )['#id'].values)
+                to_choose_from = list(set(self.mut_feat_store['cpg_ids']).intersection(diff_chrom_cpgs))
+                # randomly choose 5*predict_with_random_feat CpGs from the store, without replacement
+                random_cpgs = np.random.choice(
+                    to_choose_from,
+                    size = self.predict_with_random_feat,
+                    replace = False
+                    )
                 # choose the first predict_with_random_feat of these
-                if len(random_cpgs) > self.predict_with_random_feat:
+                if len(random_cpgs) >= self.predict_with_random_feat:
                     random_cpgs = random_cpgs[:self.predict_with_random_feat]
                 else:
                     print(
                         f"WARNING: only {len(random_cpgs)} CpGs on different chromosomes than target CpG, using all of them",
                         flush=True
                         )
+                # append the target cpg to the list of cpgs to predict with, so that it is trained on itself
+                random_cpgs = np.append(random_cpgs, cpg_id)
                 # iterate through these random cpg's feat mats and train a model to predict the target cpg
                 for j, cpg_for_train in enumerate(random_cpgs):
                     X = self.make_training_mat(cpg_for_train, train_idx_num)
@@ -368,7 +387,7 @@ class methylationPrediction:
                         y = self.mut_feat_store[self.target_values][cpg_id], # gets subset in fxn
                         cpg_for_train = cpg_for_train
                         )
-                    if j % 10 == 0:
+                    if j % 50 == 0:
                         print(f"INNER: done training {j} CpGs of {len(random_cpgs)}", flush=True)
             if i % 10 == 0:
                 print(f"OUTER: done training {i} CpGs of {len(self.mut_feat_store['cpg_ids'])}", flush=True)
@@ -544,11 +563,14 @@ class methylationPrediction:
         agg_only_str = ''
         if self.agg_only:
             agg_only_str = '_agg_only'
-        
+        if self.predict_with_random_feat > 0:
+            predict_with_random_feat_str = f"_predict_with_random_feat_{self.predict_with_random_feat}"
         # write out files to there, including the model type in name
-        with open(f"{out_dir}/trained_models_{self.model_type}_{self.baseline}baseline{agg_only_str}.pkl", 'wb') as f:
+        with open(f"{out_dir}/trained_models_{self.model_type}_{self.baseline}baseline{agg_only_str}{predict_with_random_feat_str}.pkl", 'wb') as f:
             pickle.dump(self.trained_models, f)
         # write to parquet files
-        self.pred_df.to_parquet(f"{out_dir}/methyl_predictions_{self.model_type}_{self.baseline}baseline{agg_only_str}.parquet")
+        self.pred_df.to_parquet(
+            f"{out_dir}/methyl_predictions_{self.model_type}_{self.baseline}baseline{agg_only_str}{predict_with_random_feat_str}.parquet"
+            )
         print(f"wrote out trained models and predictions to {out_dir}", flush=True)
         

@@ -1,10 +1,10 @@
 #!/bin/bash
-#SBATCH --array=0-19%4
+#SBATCH --array=0-19%5
 #SBATCH --partition=nrnb-compute
 #SBATCH --mem=128GB
 #SBATCH --time=24:00:00
 #SBATCH --job-name=tcgaSoMage
-#SBATCH --cpus-per-task=16
+#SBATCH --cpus-per-task=8
 ##SB/ATCH --ntasks=1
 eval "$(conda shell.bash hook)"
 conda activate /cellar/users/zkoch/miniconda3/envs/tf_env 
@@ -65,25 +65,25 @@ srun python /cellar/users/zkoch/methylation_and_mutation/submission_scripts/run_
 
 # => with 16 cpus would take 2 min a model => 500 would take 1000min = 16 hours
 start_top_cpgs_values=()
-for ((i = 0; i < 5000; i += 500)); do
+for ((i = 0; i < 500; i += 50)); do
     start_top_cpgs_values+=($i)
 done
 end_top_cpgs_values=()
-for ((i = 500; i < 5500; i += 500)); do
+for ((i = 50; i < 550; i += 50)); do
     end_top_cpgs_values+=($i)
 done
 agg_only_methyl_pred=(True True True True True True True True True True False False False False False False False False False False)
 
 srun python /cellar/users/zkoch/methylation_and_mutation/submission_scripts/run_somatic_mut_clock.py \
 --do Train_models \
---mut_feat_store_fns /cellar/users/zkoch/methylation_and_mutation/output_dirs/062623_tcga_somage_output/TCGA__500correl_0meqtl_50000nearby_Bothagg_500numCpGs_${start_top_cpgs_values[$SLURM_ARRAY_TASK_ID]}\*/TCGA__500correl_0meqtl_50000nearby_Bothagg_500numCpGs_${start_top_cpgs_values[$SLURM_ARRAY_TASK_ID]}\*.features.pkl \
+--mut_feat_store_fns /cellar/users/zkoch/methylation_and_mutation/output_dirs/062623_tcga_somage_output/TCGA__500correl_0meqtl_50000nearby_Bothagg_500numCpGs_0\*/TCGA__500correl_0meqtl_50000nearby_Bothagg_500numCpGs_0\*.features.pkl \
 --consortium TCGA \
 --cross_val 0 \
 --out_dir /cellar/users/zkoch/methylation_and_mutation/output_dirs/062623_tcga_somage_output \
 --start_top_cpgs ${start_top_cpgs_values[$SLURM_ARRAY_TASK_ID]} \
 --end_top_cpgs ${end_top_cpgs_values[$SLURM_ARRAY_TASK_ID]} \
 --aggregate Both \
---train_baseline scramble \
+--train_baseline none \
 --train_actual_model True \
 --model xgboost \
 --burden_bin_size 25000 \
@@ -92,7 +92,8 @@ srun python /cellar/users/zkoch/methylation_and_mutation/submission_scripts/run_
 --nearby_window_size 50000 \
 --extend_amount 500 \
 --agg_only_methyl_pred ${agg_only_methyl_pred[$SLURM_ARRAY_TASK_ID]} \
---scale_counts_within_dataset True
+--scale_counts_within_dataset True \
+--predict_with_random_feat 100
 ############################################
 
 
