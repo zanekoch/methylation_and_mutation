@@ -21,7 +21,8 @@ def run(
     train_actual_model:str,
     model: str,
     mut_feat_store_fns: list,
-    agg_only_methyl_pred: bool
+    agg_only_methyl_pred: bool,
+    scale_counts_within_dataset: bool
     ) -> None:
     """
     Driver function for generating features or training models
@@ -38,12 +39,15 @@ def run(
     @ train_actual_model: whether to train the actual, non-baseline, model
     @ model: model to use
     @ mut_feat_store_fns: list of mutation feature store filenames
+    @ agg_only_methyl_pred: whether to train the models on aggregate features only or not
+    @ scale_counts_within_dataset: whether to scale the mutation counts within the dataset
     @ returns: None
     """
     if consortium == "ICGC":
         all_mut_w_age_df, illumina_cpg_locs_df, all_methyl_age_df_t, matrix_qtl_dir, covariate_fn = get_data.read_icgc_data()
     elif consortium == "TCGA":
         all_mut_w_age_df, illumina_cpg_locs_df, all_methyl_age_df_t, matrix_qtl_dir, covariate_fn = get_data.read_tcga_data()
+    # read in motif occurence df
     motif_occurence_df = pd.read_parquet(
         "/cellar/users/zkoch/methylation_and_mutation/data/methylation_motifs_weiWang/motif_occurences/motif_occurences_combined_15kb.parquet"
         )
@@ -101,7 +105,8 @@ def run(
                 mut_feat_store_fns = mut_feat_store_fns,
                 model_type = model,
                 baseline = "none",
-                agg_only = agg_only_methyl_pred
+                agg_only = agg_only_methyl_pred,
+                scale_counts_within_dataset = scale_counts_within_dataset
                 )
             methyl_pred.train_all_models()
             methyl_pred.apply_all_models()
@@ -111,7 +116,8 @@ def run(
                 mut_feat_store_fns = mut_feat_store_fns,
                 model_type = model,
                 baseline = train_baseline,
-                agg_only = agg_only_methyl_pred
+                agg_only = agg_only_methyl_pred,
+                scale_counts_within_dataset = scale_counts_within_dataset
                 )
             methyl_pred.train_all_models()
             methyl_pred.apply_all_models()
@@ -123,7 +129,8 @@ def run(
                 mut_feat_store_fns = mut_feat_store_fns,
                 model_type = model,
                 baseline = "none",
-                agg_only = agg_only_methyl_pred
+                agg_only = agg_only_methyl_pred,
+                scale_counts_within_dataset = scale_counts_within_dataset
                 )
             methyl_pred.train_all_models()
             methyl_pred.apply_all_models()
@@ -136,7 +143,8 @@ def run(
                 mut_feat_store_fns = mut_feat_store_fns,
                 model_type = model,
                 baseline = train_baseline,
-                agg_only = agg_only_methyl_pred
+                agg_only = agg_only_methyl_pred,
+                scale_counts_within_dataset = scale_counts_within_dataset
                 )
             methyl_pred.train_all_models()
             methyl_pred.apply_all_models()
@@ -167,6 +175,7 @@ def main():
     parser.add_argument('--nearby_window_size', type=int, help='nearby_window_size', default=50000)
     parser.add_argument('--extend_amount', type=int, help='extend_amount', default=100)
     parser.add_argument('--agg_only_methyl_pred', type=str, help='to train the models on aggregate features only or not: "True" or "False" ')
+    parser.add_argument('--scale_counts_within_dataset', type=str, help='whether to scale the mutation counts within the dataset: "True" or "False" ')
     
     args = parser.parse_args()
     do = args.do
@@ -187,15 +196,23 @@ def main():
     train_baseline = args.train_baseline
     train_actual_model = args.train_actual_model
     agg_only_methyl_pred = args.agg_only_methyl_pred
+    scale_counts_within_dataset = args.scale_counts_within_dataset
+    model = args.model
+    if model not in ['xgboost', 'elasticNet']:
+        raise ValueError("model must be xgboost or elasticNet")
     if agg_only_methyl_pred == 'True':
         agg_only_methyl_pred = True
     elif agg_only_methyl_pred == 'False':
         agg_only_methyl_pred = False
     else:
         raise ValueError("agg_only_methyl_pred must be True or False")
-    model = args.model
-    if model not in ['xgboost', 'elasticNet']:
-        raise ValueError("model must be xgboost or elasticNet")
+    if scale_counts_within_dataset == 'True':
+        scale_counts_within_dataset = True
+    elif scale_counts_within_dataset == 'False':
+        scale_counts_within_dataset = False
+    else:
+        raise ValueError("scale_counts_within_dataset must be True or False")
+    
     print(f"cross val {cross_val_num}\n doing {do}\n for {consortium} and {dataset}\n and outputting to {out_dir}")
     
     mut_feat_params = {
@@ -206,13 +223,15 @@ def main():
     print(mut_feat_params)
     print(model)
     print(f"agg only {agg_only_methyl_pred}")
+    print(f"scale counts within dataset {scale_counts_within_dataset}")
     run(
         do = do,
         consortium = consortium, dataset = dataset, cross_val_num = cross_val_num,
         out_dir = out_dir, start_top_cpgs = start_top_cpgs,
         end_top_cpgs = end_top_cpgs, mut_feat_params = mut_feat_params,
         train_baseline = train_baseline, train_actual_model = train_actual_model, model = model, mut_feat_store_fns = mut_feat_store_fns,
-        agg_only_methyl_pred = agg_only_methyl_pred
+        agg_only_methyl_pred = agg_only_methyl_pred, 
+        scale_counts_within_dataset = scale_counts_within_dataset
         )
         
 if __name__ == "__main__":

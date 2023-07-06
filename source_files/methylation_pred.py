@@ -10,7 +10,7 @@ import xgboost as xgb
 import sys
 #import statsmodels.api as sm
 from scipy.stats import spearmanr
-from scipy.sparse import csr_matrix
+from scipy.sparse import csr_matrix, vstack
 
 
 class methylationPrediction:
@@ -27,7 +27,10 @@ class methylationPrediction:
         mut_feat_store: dict = {},
         trained_models_fns: list = [],
         target_values: str = 'target_values',
-        agg_only: bool = False
+        agg_only: bool = False,
+        scale_counts_within_dataset: bool = False,
+        predict_with_random_feat: int = -1,
+        illumina_cpg_locs_df: pd.DataFrame = pd.DataFrame(), 
         ) -> None:
         """
         Constructor for methylationPrediction object
@@ -38,6 +41,9 @@ class methylationPrediction:
         @ trained_models_fns: list of path(s) to the trained models
         @ target_values: str, the key in the mutation feature store which stores the target values
         @ agg_only: bool, whether to only use aggregate features
+        @ scale_counts_within_dataset: bool, whether to min-max scale feat mutation counts by sample tissue type
+        @ predict_with_random_feat: int, if > 0, randomly choose this many CpGs from the store to predict with
+        @ illumina_cpg_locs_df: pd.DataFrame, the dataframe of illumina cpg locations
         @ returns: None
         """
         # read in mutation features from file or from dictionary
@@ -59,6 +65,11 @@ class methylationPrediction:
         self.model_type = model_type
         self.target_values = target_values
         self.agg_only = agg_only
+        self.scale_counts_within_dataset = scale_counts_within_dataset
+        self.predict_with_random_feat = predict_with_random_feat
+        self.illumina_cpg_locs_df = illumina_cpg_locs_df
+        # if predict_with_random_feat is specified, assert that illumina_cpg_locs_df is not empty
+        assert self.predict_with_random_feat < 0 or not self.illumina_cpg_locs_df.empty
         # assert these agg_only is not True while baseline is cov_only
         if self.agg_only and self.baseline == 'cov_only':
             sys.exit("agg_only cannot be True while baseline is cov_only")
@@ -142,7 +153,7 @@ class methylationPrediction:
 
     def apply_all_models(
         self,
-        just_one: bool = False
+        just_one: bool = False, 
         ) -> None:
         """
         Predict methylation for all CpG in mutation feature store for test_samples
@@ -152,13 +163,14 @@ class methylationPrediction:
         # for each cpg in the store, apply its trained model
         for i, cpg_id in enumerate(self.mut_feat_store['cpg_ids']):
             train_idx_num = [
-                self.mut_feat_store[self.target_values][cpg_id].index.get_loc(train_sample)
-                for train_sample in self.train_samples
-                ]
+                    self.mut_feat_store[self.target_values][cpg_id].index.get_loc(train_sample)
+                    for train_sample in self.train_samples
+                    ]
             test_idx_num = [
                     self.mut_feat_store[self.target_values][cpg_id].index.get_loc(test_sample)
                     for test_sample in self.test_samples
                 ]
+                
             if self.baseline == 'cov_only':
                 # get the feature matrix for the cpg
                 X = self.mut_feat_store['feat_mats'][cpg_id]
@@ -173,16 +185,6 @@ class methylationPrediction:
             elif self.baseline == 'scramble':
                 # get the feature matrix for the cpg
                 X = self.mut_feat_store['feat_mats'][cpg_id]
-                #X = X.todense()
-                # subset to only training samples and scramble
-                #X_train = pd.DataFrame(X[train_idx_num, :])
-                #X_train_scrambled = self.do_scramble(X_train, cpg_id)
-                # subset to only testing samples and scramble
-                #X_test = pd.DataFrame(X[test_idx_num, :])
-                #X_test_scrambled = self.do_scramble(X_test, cpg_id)
-                # recombine the training and testing samples into one matrix, they are in order of train then test
-                #X = np.concatenate((X_train_scrambled, X_test_scrambled), axis=0)
-                #X = csr_matrix(X)
             else:
                 # get the feature matrix for the cpg, sparse
                 X = self.mut_feat_store['feat_mats'][cpg_id]
@@ -190,6 +192,17 @@ class methylationPrediction:
             # subset to only aggregate features
             if self.agg_only:
                 X = self.subset_matrix_to_agg_only_feats(X, cpg_id)
+            if self.scale_counts_within_dataset:
+                # scale counts within each dset separately for training and testing samples
+                scaled_X_train = self.do_scale_counts_within_dataset(
+                    X[train_idx_num, :], cpg_id
+                    )
+                scaled_X_test = self.do_scale_counts_within_dataset(
+                    X[test_idx_num, :], cpg_id
+                    )
+                # combine the two csr matrices
+                X = vstack([scaled_X_train, scaled_X_test])
+                
             # do prediction
             self.apply_one_model(
                 cpg_id = cpg_id,
@@ -200,6 +213,9 @@ class methylationPrediction:
                 print(f'Predicted methylation for {i} CpGs of {len(self.mut_feat_store["cpg_ids"])}', flush=True)
             if just_one:
                 break
+        
+                
+                
         self.pred_df = pd.DataFrame(self.predictions, index = self.train_samples + self.test_samples)
         return
 
@@ -207,17 +223,20 @@ class methylationPrediction:
         self,
         cpg_id: str,
         X: csr_matrix,
-        y: pd.Series
+        y: pd.Series,
+        cpg_for_train: str = ''
         ) -> None:
         """
         Train a model of given type to predict methylation for a certain CpG
         @ cpg_id: the id of the CpG site
         @ X: the mutation feature matrix for the CpG site
         @ y: the target methylation values for the CpG site
-        @ model_type: the type of model to train
+        @ cpg_for_train: the id of the CpG site to use for training, if using random features
         @ returns: None
         """
+        # subset to only training samples
         y = y.loc[self.train_samples]
+        # train a specific model type
         if self.model_type == 'elasticNet':
             # min-max scale the features of sparse matrix X
             scaler = sklearn.preprocessing.MinMaxScaler(feature_range=(0, 1))
@@ -227,8 +246,6 @@ class methylationPrediction:
                 selection = 'random', n_jobs=-1
                 )
             model.fit(X, y) 
-            
-            #model = ElasticNet(selection = 'random')
         elif self.model_type == 'linreg':
             model = sklearn.linear_model.LinearRegression()
         elif self.model_type == 'rand_forest':
@@ -238,8 +255,8 @@ class methylationPrediction:
         elif self.model_type == 'xgboost':
             # keep as sparse bc xgboost faster this way
             # Create the XGBRegressor model
-            """model = xgb.XGBRegressor(n_jobs=-1)
-            model.fit(X, y)"""
+            model = xgb.XGBRegressor(n_jobs=-1)
+            model.fit(X, y)
             
             # Create a parameter grid for the XGBoost model
             """
@@ -250,7 +267,12 @@ class methylationPrediction:
             max_depth=3
             max_features=“log2”
             """
-            model = xgb.XGBRegressor(learning_rate = .1, loss = 'reg:squarederror')
+            """model = xgb.XGBRegressor(
+                learning_rate = .1,
+                objective = 'reg:squarederror',
+                #tree_method = 'gpu_hist'
+                )
+            
             param_grid = {
                 'n_estimators': range(50, 750, 100), # 10
                 'max_depth': range(2, 10, 2), # 8
@@ -271,36 +293,22 @@ class methylationPrediction:
                 verbose=0
             )
             grid_search.fit(X, y)
-            model = grid_search.best_estimator_
-            
-            """# Initialize the RandomizedSearchCV object
-            random_search = RandomizedSearchCV(
-                estimator=model,
-                param_distributions=param_grid,
-                n_iter=100,  # number of parameter settings that are sampled
-                scoring='neg_mean_squared_error',
-                n_jobs=-1,
-                cv=5,
-                verbose=0,
-                random_state=42
-            )
-            # Fit the RandomizedSearchCV object to the training data
-            random_search.fit(X, y)
-            # Print the best hyperparameters
-            print("Best hyperparameters:", random_search.best_params_)
-            # Use the best estimator for predictions or further analysis
-            model = random_search.best_estimator_"""
+            model = grid_search.best_estimator_"""
             
             
         # fit model to training samples
         # X has already been subsetted to only contain training samples in order
         # add to trained models dictionary
-        self.trained_models[cpg_id] = model
+        if cpg_for_train != '':
+            dict_key = 'target_' + cpg_id + '_train_' + cpg_for_train
+        else:
+            dict_key = cpg_id
+        self.trained_models[dict_key] = model
         return
     
     def train_all_models(
         self, 
-        just_one: bool = False
+        just_one: bool = False,
         ) -> None:
         """
         Given a mutation features store, train a model for each
@@ -315,48 +323,135 @@ class methylationPrediction:
                 self.mut_feat_store[self.target_values][cpg_id].index.get_loc(train_sample)
                 for train_sample in self.train_samples
                 ]
-            if self.baseline == 'scramble':
-                # get the feature matrix for the cpg
-                X = self.mut_feat_store['feat_mats'][cpg_id]
-                X = X.todense()
-                # subset to only training samples
-                X_train = pd.DataFrame(X[train_idx_num, :])
-                # scramble the feature matrix
-                X_train_scrambled = self.do_scramble(X_train, cpg_id)
-                X = csr_matrix(X_train_scrambled)   
-            elif self.baseline == 'cov_only':
-                # get the feature matrix for the cpg
-                X = self.mut_feat_store['feat_mats'][cpg_id]
-                X = X.todense()
-                X = pd.DataFrame(X[train_idx_num, :])
-                # select only the covariate columns
-                feat_names = pd.Series(self.mut_feat_store['feat_names'][cpg_id])
-                is_covariate = feat_names.str.contains('dataset') | feat_names.str.contains('gender')
-                covariate_cols = feat_names.index[is_covariate].values
-                # select only the covariate columns from X
-                X = X.iloc[:, covariate_cols]
-                # convert back to sparse
-                X = csr_matrix(X)
-            elif self.baseline == 'none': # actual model
-                # get the feature matrix for the cpg, sparse
-                X = self.mut_feat_store['feat_mats'][cpg_id] 
-                # subset to only training samples
-                X = X[train_idx_num, :]
-            else:
-                raise ValueError(f"baseline {self.baseline} not supported")
-            
-            if self.agg_only:
-                X = self.subset_matrix_to_agg_only_feats(X, cpg_id)
-            # for each feature set in the store train a model
-            self.train_one_model(
-                cpg_id = cpg_id,
-                X = X, #subset to training samples
-                y = self.mut_feat_store[self.target_values][cpg_id] # gets subset in fxn
-                )
+            if self.predict_with_random_feat < 0:
+                # get the feature matrix for this cpg
+                # based on specified baseline, scaling, and agg 
+                X = self.make_training_mat(cpg_id, train_idx_num)
+                # train a model
+                self.train_one_model(
+                    cpg_id = cpg_id,
+                    X = X, # already subset to training samples
+                    y = self.mut_feat_store[self.target_values][cpg_id] # gets subset in fxn
+                    )
+            # in this case randomly choose feature matrixes to predict with
+            else: 
+                # randomly choose 5*predict_with_random_feat CpGs from the store, without replacement
+                random_cpgs = np.random.choice(
+                    self.mut_feat_store['cpg_ids'],
+                    2 * self.predict_with_random_feat,
+                    replace = False
+                    )
+                # find the chromosome of these cpgs from the illumina cpg locations df
+                random_cpg_chroms = self.illumina_cpg_locs_df.loc[
+                    self.illumina_cpg_locs_df['#id'].isin(random_cpgs), 'chr'
+                    ].values
+                target_cpg_chrom = self.illumina_cpg_locs_df.loc[
+                    self.illumina_cpg_locs_df['#id'] == cpg_id, 'chr'
+                    ].values[0]
+                # remove CpGs from random_cpgs that are on same chromosome as target CpG
+                random_cpgs = random_cpgs[random_cpg_chroms != target_cpg_chrom]
+                # choose the first predict_with_random_feat of these
+                if len(random_cpgs) > self.predict_with_random_feat:
+                    random_cpgs = random_cpgs[:self.predict_with_random_feat]
+                else:
+                    print(
+                        f"WARNING: only {len(random_cpgs)} CpGs on different chromosomes than target CpG, using all of them",
+                        flush=True
+                        )
+                # iterate through these random cpg's feat mats and train a model to predict the target cpg
+                for j, cpg_for_train in enumerate(random_cpgs):
+                    X = self.make_training_mat(cpg_for_train, train_idx_num)
+                    # train a model
+                    self.train_one_model(
+                        cpg_id = cpg_id, # train a model to predict target cpg
+                        X = X, # already subset to training samples
+                        y = self.mut_feat_store[self.target_values][cpg_id], # gets subset in fxn
+                        cpg_for_train = cpg_for_train
+                        )
+                    if j % 10 == 0:
+                        print(f"INNER: done training {j} CpGs of {len(random_cpgs)}", flush=True)
             if i % 10 == 0:
-                print(f"done {i} CpGs of {len(self.mut_feat_store['cpg_ids'])}", flush=True)
+                print(f"OUTER: done training {i} CpGs of {len(self.mut_feat_store['cpg_ids'])}", flush=True)
             if just_one:
                 break
+
+    def make_training_mat(self, cpg_id, train_idx_num):
+        if self.baseline == 'scramble':
+            # get the feature matrix for the cpg
+            X = self.mut_feat_store['feat_mats'][cpg_id]
+            X = X.todense()
+            # subset to only training samples
+            X_train = pd.DataFrame(X[train_idx_num, :])
+            # scramble the feature matrix
+            X_train_scrambled = self.do_scramble(X_train, cpg_id)
+            X = csr_matrix(X_train_scrambled)   
+        elif self.baseline == 'cov_only':
+            # get the feature matrix for the cpg
+            X = self.mut_feat_store['feat_mats'][cpg_id]
+            X = X.todense()
+            X = pd.DataFrame(X[train_idx_num, :])
+            # select only the covariate columns
+            feat_names = pd.Series(self.mut_feat_store['feat_names'][cpg_id])
+            is_covariate = feat_names.str.contains('dataset') | feat_names.str.contains('gender')
+            covariate_cols = feat_names.index[is_covariate].values
+            # select only the covariate columns from X
+            X = X.iloc[:, covariate_cols]
+            # convert back to sparse
+            X = csr_matrix(X)
+        elif self.baseline == 'none': # actual model
+            # get the feature matrix for the cpg, sparse
+            X = self.mut_feat_store['feat_mats'][cpg_id] 
+            # subset to only training samples
+            X = X[train_idx_num, :]
+        else:
+            raise ValueError(f"baseline {self.baseline} not supported")
+        # subset to only aggregate features and scale if specified
+        if self.agg_only:
+            X = self.subset_matrix_to_agg_only_feats(X, cpg_id)
+        if self.scale_counts_within_dataset:
+            # only given train samples because X is already subsetted to train samples
+            X = self.do_scale_counts_within_dataset(X, cpg_id)
+        return X
+    
+    def do_scale_counts_within_dataset(
+        self, 
+        feat_mat: csr_matrix,
+        cpg_id: str
+        ) -> csr_matrix:
+        """
+        Given a matrix, scale the mutation counts within each dataset group
+        !!! Must pass in training and testing seperately !!!
+        """
+        feat_names = pd.Series(self.mut_feat_store['feat_names'][cpg_id])
+        # if agg_only, only select the aggregate features
+        if self.agg_only:
+            feat_names = feat_names[feat_names.str.contains('agg|dataset|gender')]
+        feat_df = pd.DataFrame(feat_mat.toarray(), columns=feat_names)
+        
+        # select only the features which are dataset
+        dset_columns = feat_df.columns[feat_df.columns.str.contains('dataset')]
+        dset_feat_df = feat_df[dset_columns].copy(deep = True)
+        # select only the features which are gender
+        gender_columns = feat_df.columns[feat_df.columns.str.contains('gender')]
+        gender_feat_df = feat_df[gender_columns]
+        # turn back into one column
+        dset_col = dset_feat_df.idxmax(axis = 1)
+        # drop covariate columns
+        non_cov_df = feat_df.drop(dset_columns, axis = 1).drop(gender_columns, axis = 1)
+        non_cov_df['dataset'] = dset_col
+        # scale the counts within each dataset
+        cols_to_scale = non_cov_df.columns[:-1]
+        non_cov_df = non_cov_df.groupby('dataset')[cols_to_scale].transform(
+            lambda x: (x - x.min()) / (x.max() - x.min())
+            )
+        # fill na with 0
+        non_cov_df.fillna(0, inplace = True)
+        # add back dataset columns
+        non_cov_df = pd.concat([non_cov_df, gender_feat_df, dset_feat_df], axis = 1)
+        # convert to csr matrix
+        scaled_feat_mat = csr_matrix(non_cov_df)
+        return scaled_feat_mat
+        
     
     def subset_matrix_to_agg_only_feats(
         self, 

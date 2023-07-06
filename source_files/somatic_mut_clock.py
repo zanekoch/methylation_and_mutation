@@ -112,7 +112,6 @@ class mutationClock:
         
         somage = cls(
                 predicted_methyl_fns = predicted_methyl_fns, 
-                predicted_perf_fns = predicted_perf_fns,
                 all_methyl_age_df_t = all_methyl_age_df_t,
                 illumina_cpg_locs_df = illumina_cpg_locs_df,
                 output_dir = out_dir,
