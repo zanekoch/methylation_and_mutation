@@ -19,6 +19,7 @@ matplotlib.rcParams['svg.fonttype'] = 'none'
 matplotlib.rcParams['pdf.fonttype'] = 42
 matplotlib.rcParams['ps.fonttype'] = 42
 matplotlib.rcParams['text.usetex'] = False
+from scipy.stats import spearmanr, pearsonr
 
 
 CHROM_LENGTHS = {
@@ -149,13 +150,13 @@ class analyzeComethylation:
         counts['mut_prop'] = counts[False] / counts[False].sum()
         counts['bg_prop'] = counts[True] / counts[True].sum()
         counts['ratio'] = counts['mut_prop'] / counts['bg_prop']
-        # for rows with False and/or true < 10, set ration to np.nan
+
         if consortium == 'ICGC':
-            counts.loc[counts[False] < 5, 'ratio'] = np.nan
+            counts.loc[counts[False] < 4, 'ratio'] = np.nan
             # set y ticks tp be 0, 1, 2,3,4
-            axes[1].set_yticks([0, 1, 2, 3, 4, 5])
+            axes[1].set_yticks([0, 2, 4, 6, 8])
             # set y tick labels to be 0, 1, 2, 3, 4
-            axes[1].set_yticklabels([0, 1, 2, 3, 4,5])
+            axes[1].set_yticklabels([0, 2, 4, 6, 8])
             #axes[1].set_ylim(0,5)
         elif consortium == 'TCGA':
             counts.loc[counts[False] < 15, 'ratio'] = np.nan
@@ -169,7 +170,7 @@ class analyzeComethylation:
             )
         # plot dashed line as y=1
         axes[1].axhline(y=1, color='black', linestyle='--')
-        axes[1].set_ylim(0, 6)
+        #axes[1].set_ylim(0, 6)
 
         # set xlim
         #axes.set_yscale('log')
@@ -450,6 +451,7 @@ class analyzeComethylation:
                 .rename(columns={'custom_agg1': '5th', 'custom_agg2': 'median', 'custom_agg3': '95th'})
                 #.agg(['mean',  'std', 'count']).reset_index()
                 ).iloc[::num_top_muts, :]
+            print(biggest_neg_to_plot_smoothed_corr)
             # keep only every 1000th row
             biggest_pos_to_plot_smoothed_corr = (
                 biggest_pos_to_plot_sorted_corr.set_index('measured_site_dist')
@@ -485,7 +487,8 @@ class analyzeComethylation:
             for i in range(len(axes)):
                 axes[i].xaxis.set_tick_params(labelbottom=True)
                 axes[i].yaxis.set_tick_params(labelleft=True)
-                
+            
+            
             sns.set_context("paper")
             # positive corr
             axes[0].plot(
@@ -493,12 +496,23 @@ class analyzeComethylation:
                 biggest_pos_to_plot_smoothed_corr['median'],
                 color='maroon'
                 )
-            axes[0].fill_between(
+            """axes[0].fill_between(
                 biggest_pos_to_plot_smoothed_corr['measured_site_dist'],
                 biggest_pos_to_plot_smoothed_corr['5th'],
                 biggest_pos_to_plot_smoothed_corr['95th'],
                 color='maroon', alpha=0.2, rasterized=True
-                )
+                )"""
+            # print the pearson and spearman correlations for the smoothed data
+            print("+DMF corr")
+            print(
+                pearsonr(biggest_pos_to_plot_smoothed_corr['measured_site_dist'], biggest_pos_to_plot_smoothed_corr['median']),
+            )
+            print("+DMF corr")
+            print(
+                spearmanr(biggest_pos_to_plot_smoothed_corr['measured_site_dist'], biggest_pos_to_plot_smoothed_corr['median']),
+            )
+            
+            
             axes[0].set_xlabel('Correlation distance (rank order)')
             axes[0].set_ylabel('$\Delta$MF')
             # negative corr
@@ -507,43 +521,100 @@ class analyzeComethylation:
                 biggest_neg_to_plot_smoothed_corr['median'],
                 color='maroon'
                 )
-            axes[2].fill_between(
+            """axes[2].fill_between(
                 biggest_neg_to_plot_smoothed_corr['measured_site_dist'],
                 biggest_neg_to_plot_smoothed_corr['5th'],
                 biggest_neg_to_plot_smoothed_corr['95th'],
                 color='maroon', alpha=0.2, rasterized=True
-                )
+                )"""
             axes[2].set_xlabel('Correlation distance (rank order)')
             axes[2].set_ylabel('$\Delta$MF')
+            
+            # print the pearson and spearman correlations for the smoothed data
+            print("-DMF corr")
+            print(
+                pearsonr(biggest_neg_to_plot_smoothed_corr['measured_site_dist'], biggest_neg_to_plot_smoothed_corr['median']),
+            )
+            print("-DMF corr")
+            print(
+                spearmanr(biggest_neg_to_plot_smoothed_corr['measured_site_dist'], biggest_neg_to_plot_smoothed_corr['median']),
+            )
+            
             # positive dist  
             axes[1].plot(
                 biggest_pos_to_plot_smoothed_dist['abs_genomic_dist']/1000,
                 biggest_pos_to_plot_smoothed_dist['median'],
                 color='maroon'
                 )
-            axes[1].fill_between(
+            """axes[1].fill_between(
                 biggest_pos_to_plot_smoothed_dist['abs_genomic_dist']/1000,
                 biggest_pos_to_plot_smoothed_dist['5th'],
                 biggest_pos_to_plot_smoothed_dist['95th'],
                 color='maroon', alpha=0.2, rasterized=True
-                )
+                )"""
             axes[1].set_xlabel('Genomic distance (kb)')
             axes[1].set_ylabel('')
+            
+            
+            # print the pearson and spearman correlations for the smoothed data
+            print("+DMF dist")
+            print(
+                pearsonr(biggest_pos_to_plot_smoothed_dist['abs_genomic_dist'], biggest_pos_to_plot_smoothed_dist['median']),
+            )
+            print("+DMF dist")
+            print(
+                spearmanr(biggest_pos_to_plot_smoothed_dist['abs_genomic_dist'], biggest_pos_to_plot_smoothed_dist['median']),
+            )
+            print("+DMF dist <=20kb")
+            print("number of measurements <20kb", len(biggest_pos_to_plot_smoothed_dist.query("abs_genomic_dist <= 20000")))
+            print(
+                pearsonr(
+                    biggest_pos_to_plot_smoothed_dist.query("abs_genomic_dist <= 20000")['abs_genomic_dist'],
+                    biggest_pos_to_plot_smoothed_dist.query("abs_genomic_dist <= 20000")['median']),
+            )
+            print("+DMF dist <=20kb")
+            print(
+                spearmanr(
+                    biggest_pos_to_plot_smoothed_dist.query("abs_genomic_dist <= 20000")['abs_genomic_dist'],
+                    biggest_pos_to_plot_smoothed_dist.query("abs_genomic_dist <= 20000")['median']),
+            )
             # negative dist
             axes[3].plot(
                 biggest_neg_to_plot_smoothed_dist['abs_genomic_dist']/1000,
                 biggest_neg_to_plot_smoothed_dist['median'],
                 color='maroon'
                 )
-            axes[3].fill_between(
+            """axes[3].fill_between(
                 biggest_neg_to_plot_smoothed_dist['abs_genomic_dist']/1000,
                 biggest_neg_to_plot_smoothed_dist['5th'],
                 biggest_neg_to_plot_smoothed_dist['95th'],
                 color='maroon', alpha=0.2, rasterized=True
-                )
+                )"""
             axes[3].set_xlabel('Genomic distance (kb)')
             axes[3].set_ylabel('')
             
+            
+            # print the pearson and spearman correlations for the smoothed data
+            print("-DMF dist")
+            print(
+                pearsonr(biggest_neg_to_plot_smoothed_dist['abs_genomic_dist'], biggest_neg_to_plot_smoothed_dist['median']),
+            )
+            print("-DMF dist")
+            print(
+                spearmanr(biggest_neg_to_plot_smoothed_dist['abs_genomic_dist'], biggest_neg_to_plot_smoothed_dist['median']),
+            )
+            print("-DMF dist <=20kb")
+            print(
+                pearsonr(
+                    biggest_neg_to_plot_smoothed_dist.query("abs_genomic_dist <= 20000")['abs_genomic_dist'],
+                    biggest_neg_to_plot_smoothed_dist.query("abs_genomic_dist <= 20000")['median']),
+            )
+            print("-DMF dist <=20kb")
+            print(
+                spearmanr(
+                    biggest_neg_to_plot_smoothed_dist.query("abs_genomic_dist <= 20000")['abs_genomic_dist'],
+                    biggest_neg_to_plot_smoothed_dist.query("abs_genomic_dist <= 20000")['median']),
+            )
             if plot_bg:
                 biggest_neg_bg_to_plot = get_genomic_dist_from_corr(
                     biggest_neg_to_plot.query("is_background == True").head(len(biggest_neg_to_plot_sorted_dist)), illumina_cpg_locs_df
@@ -564,6 +635,7 @@ class analyzeComethylation:
                     ['delta_mf_median'].agg([custom_agg1, custom_agg2, custom_agg3]).reset_index()
                     .rename(columns={'custom_agg1': '5th', 'custom_agg2': 'median', 'custom_agg3': '95th'})
                     ).iloc[::num_top_muts, :]
+                print(bg_biggest_neg_to_plot_smoothed_corr)
                 bg_biggest_pos_to_plot_smoothed_corr = (
                     biggest_pos_bg_to_plot_sorted_corr.set_index('measured_site_dist')
                     .rolling(smoothing_window_size_corr, center=True, min_periods=0)
@@ -589,8 +661,8 @@ class analyzeComethylation:
                     ['delta_mf_median'].agg([custom_agg1, custom_agg2, custom_agg3]).reset_index()
                     .rename(columns={'custom_agg1': '5th', 'custom_agg2': 'median', 'custom_agg3': '95th'})
                     )
-                            # positive corr
-                axes[0].plot(
+                # positive corr
+                """axes[0].plot(
                     bg_biggest_pos_to_plot_smoothed_corr['measured_site_dist'],
                     bg_biggest_pos_to_plot_smoothed_corr['median'],
                     color='steelblue'
@@ -600,9 +672,18 @@ class analyzeComethylation:
                     bg_biggest_pos_to_plot_smoothed_corr['5th'],
                     bg_biggest_pos_to_plot_smoothed_corr['95th'],
                     color='steelblue', alpha=0.2, rasterized=True
-                    )
+                    )"""
+                # print the pearson and spearman correlations for the smoothed data
+                print("BG +DMF corr")
+                print(
+                    pearsonr(bg_biggest_pos_to_plot_smoothed_corr['measured_site_dist'], bg_biggest_pos_to_plot_smoothed_corr['median']),
+                )
+                print("BG +DMF corr")
+                print(
+                    spearmanr(bg_biggest_pos_to_plot_smoothed_corr['measured_site_dist'], bg_biggest_pos_to_plot_smoothed_corr['median']),
+                )
                 # negative corr
-                axes[2].plot(
+                """axes[2].plot(
                     bg_biggest_neg_to_plot_smoothed_corr['measured_site_dist'],
                     bg_biggest_neg_to_plot_smoothed_corr['median'],
                     color='steelblue'
@@ -612,9 +693,18 @@ class analyzeComethylation:
                     bg_biggest_neg_to_plot_smoothed_corr['5th'],
                     bg_biggest_neg_to_plot_smoothed_corr['95th'],
                     color='steelblue', alpha=0.2, rasterized=True
-                    )
+                    )"""
+                # print the pearson and spearman correlations for the smoothed data
+                print("BG -DMF corr")
+                print(
+                    pearsonr(bg_biggest_neg_to_plot_smoothed_corr['measured_site_dist'], bg_biggest_neg_to_plot_smoothed_corr['median']),
+                )
+                print("BG -DMF corr")
+                print(
+                    spearmanr(bg_biggest_neg_to_plot_smoothed_corr['measured_site_dist'], bg_biggest_neg_to_plot_smoothed_corr['median']),
+                )
                 # positive dist  
-                axes[1].plot(
+                """axes[1].plot(
                     bg_biggest_pos_to_plot_smoothed_dist['abs_genomic_dist']/1000,
                     bg_biggest_pos_to_plot_smoothed_dist['median'],
                     color='steelblue'
@@ -624,9 +714,31 @@ class analyzeComethylation:
                     bg_biggest_pos_to_plot_smoothed_dist['5th'],
                     bg_biggest_pos_to_plot_smoothed_dist['95th'],
                     color='steelblue', alpha=0.2, rasterized=True
-                    )
+                    )"""
+                # print the pearson and spearman correlations for the smoothed data
+                print("BG +DMF dist")
+                print(
+                    pearsonr(bg_biggest_pos_to_plot_smoothed_dist['abs_genomic_dist'], bg_biggest_pos_to_plot_smoothed_dist['median']),
+                )
+                print("BG +DMF dist")
+                print(
+                    spearmanr(bg_biggest_pos_to_plot_smoothed_dist['abs_genomic_dist'], bg_biggest_pos_to_plot_smoothed_dist['median']),
+                )
+                # also seperately where genomic dist is <20 kb
+                print("BG +DMF dist <=20kb")
+                print(
+                    pearsonr(
+                        bg_biggest_pos_to_plot_smoothed_dist.query("abs_genomic_dist <= 20000")['abs_genomic_dist'],
+                        bg_biggest_pos_to_plot_smoothed_dist.query("abs_genomic_dist <= 20000")['median']),
+                )
+                print("BG +DMF dist <=20kb")
+                print(
+                    spearmanr(
+                        bg_biggest_pos_to_plot_smoothed_dist.query("abs_genomic_dist <= 20000")['abs_genomic_dist'],
+                        bg_biggest_pos_to_plot_smoothed_dist.query("abs_genomic_dist <= 20000")['median']),
+                )
                 # negative dist
-                axes[3].plot(
+                """axes[3].plot(
                     bg_biggest_neg_to_plot_smoothed_dist['abs_genomic_dist']/1000,
                     bg_biggest_neg_to_plot_smoothed_dist['median'],
                     color='steelblue'
@@ -636,8 +748,33 @@ class analyzeComethylation:
                     bg_biggest_neg_to_plot_smoothed_dist['5th'],
                     bg_biggest_neg_to_plot_smoothed_dist['95th'],
                     color='steelblue', alpha=0.2, rasterized=True
-                    )
+                    )"""
+                # print the pearson and spearman correlations for the smoothed data
+                print("BG -DMF dist")
+                print(
+                    pearsonr(bg_biggest_neg_to_plot_smoothed_dist['abs_genomic_dist'], bg_biggest_neg_to_plot_smoothed_dist['median']),
+                )
+                print("BG -DMF dist: spearman corr between measured_site_dist and median delta mf")
+                print(
+                    spearmanr(bg_biggest_neg_to_plot_smoothed_dist['abs_genomic_dist'], bg_biggest_neg_to_plot_smoothed_dist['median']),
+                )
+                # also seperately where genomic dist is <20 kb
+                print("BG -DMF dist <=20kb")
+                print(
+                    pearsonr(
+                        bg_biggest_neg_to_plot_smoothed_dist.query("abs_genomic_dist <= 20000")['abs_genomic_dist'],
+                        bg_biggest_neg_to_plot_smoothed_dist.query("abs_genomic_dist <= 20000")['median']),
+                )
+                print("BG -DMF dist <=20kb")
+                print(
+                    spearmanr(
+                        bg_biggest_neg_to_plot_smoothed_dist.query("abs_genomic_dist <= 20000")['abs_genomic_dist'],
+                        bg_biggest_neg_to_plot_smoothed_dist.query("abs_genomic_dist <= 20000")['median']),
+                )
+                
+            
             plt.savefig(fname=out_fn, format='svg', dpi = 300, bbox_inches='tight') 
+            return biggest_pos_to_plot_smoothed_corr, biggest_neg_to_plot_smoothed_corr, biggest_pos_to_plot_smoothed_dist, biggest_neg_to_plot_smoothed_dist, bg_biggest_pos_to_plot_smoothed_corr, bg_biggest_neg_to_plot_smoothed_corr, bg_biggest_pos_to_plot_smoothed_dist, bg_biggest_neg_to_plot_smoothed_dist
             
         else:
             # sort the DataFrames by measured_site_dist and drop duplicates

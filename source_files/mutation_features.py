@@ -3,9 +3,13 @@ import numpy as np
 import sys
 import os
 import pickle
-from sklearn.model_selection import StratifiedKFold
+from sklearn.model_selection import StratifiedKFold, train_test_split
 from scipy.sparse import csr_matrix
 import time
+from numba import jit
+
+
+
 
 class mutationFeatures:
     """
@@ -38,7 +42,7 @@ class mutationFeatures:
         # pre-process the mutation and methylation data
         self._preproc_mut_and_methyl()
         # choose train and test samples based on cross validation number
-        self.train_samples, self.test_samples = self.cross_val_samples()
+        self.train_samples, self.test_samples, self.validation_samples = self.cross_val_samples()
         self.matrix_qtl_dir = matrix_qtl_dir
         # create empty cache
         self.matrixQTL_store = {}
@@ -122,18 +126,15 @@ class mutationFeatures:
         self.all_mut_w_age_df = self.all_mut_w_age_df.loc[
             self.all_mut_w_age_df['case_submitter_id'].isin(cov_mut_methyl_samples), :]
     
-    def cross_val_samples(self):
-        """
+    """def cross_val_samples(self):
         Choose train and test samples based on cross validation number and dataset
         @ return: train_samples, test_samples
-        """
         # implicitly subsets to only this dataset's samples bc of preproc_mut_and_methyl
-        skf = StratifiedKFold(n_splits=5, random_state=10, shuffle=True)
+        skf = StratifiedKFold(n_splits=5, random_state=10, shuffle=True) # balancing ages
         # select the self.cross_val_num fold
-        for i, (train_index, test_index) in enumerate(
-            skf.split(self.covariate_df, self.covariate_df.loc[:, 'age_at_index'])
-            ):
+        for i, (train_index, test_index) in enumerate(skf.split(self.covariate_df, self.covariate_df.loc[:, 'age_at_index'])):
             if i == self.cross_val_num:
+                # split into train, val, and test
                 train_samples = self.covariate_df.iloc[train_index].index.to_list()
                 test_samples = self.covariate_df.iloc[test_index].index.to_list()
                 # subset to only those in the methyl and mut dfs
@@ -144,21 +145,103 @@ class mutationFeatures:
                     set(self.all_methyl_age_df_t.index)
                     ))
                 break
-        return train_samples, test_samples
+        return train_samples, test_samples"""
 
-    def _select_correl_sites(
+    
+    def cross_val_samples(self):
+        """
+        Choose train, test, and validation samples based on cross-validation number and dataset,
+        while balancing the ages.
+        @return: train_samples, test_samples, validation_samples
+        """
+        # created binned age column, 10 years increments
+        self.covariate_df['rounded_age'] = self.covariate_df['age_at_index'].apply(
+            lambda x: int(x/10)*10
+            )
+        # implicitly subsets to only this dataset's samples because of preproc_mut_and_methyl
+        skf = StratifiedKFold(n_splits=5, random_state=42, shuffle=True)  # Splitting into 10 folds
+        # select the self.cross_val_num fold
+        for i, (train_index, test_index) in enumerate(skf.split(self.covariate_df, self.covariate_df.loc[:, 'rounded_age'])):
+            if i == self.cross_val_num:
+                # split into train and test samples
+                train_samples = self.covariate_df.iloc[train_index].index.to_list() 
+                test_samples = self.covariate_df.iloc[test_index].index.to_list()
+                # subset to only those in the methyl and mut dfs
+                train_samples = list(set(train_samples).intersection(set(self.all_methyl_age_df_t.index)))
+                test_samples = list(set(test_samples).intersection(set(self.all_methyl_age_df_t.index)))
+                # split test samples into train and validation samples (80-10-10 split)
+                test_samples, validation_samples = train_test_split(
+                    test_samples, test_size=0.5, stratify=self.covariate_df.loc[test_samples, 'rounded_age'],
+                    random_state=42
+                    )
+                break
+        return train_samples, test_samples, validation_samples
+    
+
+
+    def _select_correl_sites(self, cpg_id: str, cpg_chr: str, num_correl_sites: int) -> dict:
+        """
+        Just-in-time correlation to find the most correlated sites to the mutation event CpG in matched train_samples.
+        @param cpg_id: The ID of the CpG to correlate with.
+        @param cpg_chr: The chromosome of the CpG.
+        @param num_correl_sites: The number of sites to return, half positive and half negative.
+        @return: Dictionary of {pos_cor: list of positively correlated positions, neg_cor: list of negatively correlated positions}.
+        """
+        # Get cpg_id's MF
+        cpg_mf = self.all_methyl_age_df_t.loc[self.train_samples, cpg_id].to_numpy()
+
+        # Get the MF of all same chrom CpGs
+        same_chrom_cpgs = self.illumina_cpg_locs_df.loc[
+            self.illumina_cpg_locs_df['chr'] == cpg_chr, '#id'
+        ].values
+        same_chrom_cpgs_mf = self.all_methyl_age_df_t.loc[
+            self.train_samples, same_chrom_cpgs
+        ].to_numpy()
+
+        # Calculate correlations using the separate function
+        # start 
+        def calculate_correlation(cpg_mf, same_chrom_cpgs_mf):
+            """
+            Calculate the correlation between cpg_mf and same_chrom_cpgs_mf using only numpy methods.
+            @param cpg_mf: Methyl factor of the target CpG
+            @param same_chrom_cpgs_mf: Methyl factors of CpGs on the same chromosome
+            @return: Correlations between cpg_mf and same_chrom_cpgs_mf
+            """
+            correlations = np.zeros(same_chrom_cpgs_mf.shape[1])
+            for i in range(same_chrom_cpgs_mf.shape[1]):
+                correlations[i] = np.corrcoef(cpg_mf, same_chrom_cpgs_mf[:, i])[0, 1]
+            return correlations
+        
+        corrs = calculate_correlation(cpg_mf, same_chrom_cpgs_mf)
+        # Sort correlations in ascending order
+        sorted_indices = np.argsort(corrs)
+        #sorted_corrs = corrs[sorted_indices]
+
+        # Get positive and negative correlated indices
+        pos_indices = sorted_indices[-int(num_correl_sites/2):]
+        neg_indices = sorted_indices[:int(num_correl_sites/2)]
+
+        # Convert CpG IDs to locations
+        pos_corr_locs = self.illumina_cpg_locs_df.loc[
+            self.illumina_cpg_locs_df['#id'].isin(same_chrom_cpgs[pos_indices])
+            ].assign(location=lambda df: df['chr'] + ':' + df['start'].astype(str))['location'].tolist()
+
+        neg_corr_locs = self.illumina_cpg_locs_df.loc[
+            self.illumina_cpg_locs_df['#id'].isin(same_chrom_cpgs[neg_indices])
+            ].assign(location=lambda df: df['chr'] + ':' + df['start'].astype(str))['location'].tolist()
+        return pos_corr_locs, neg_corr_locs
+    
+    """def _select_correl_sites(
         self,
         cpg_id: str,
         cpg_chr: str,
         num_correl_sites: int,
         ) -> dict:
-        """
         Just in time correlation to find the most correlated sites to the mutation event CpG in matched train_samples
         @ cpg_id: the id cpg to corr with
         @ cpg_chr: the chromosome of the cpg
         @ num_correl_sites: the number of sites to return, half pos half neg
         @ return: dict of {pos_cor: list of pos correlated positions, neg_cor: list of neg correlated positions}
-        """
         # get cpg_id's MF
         cpg_mf = self.all_methyl_age_df_t.loc[self.train_samples, cpg_id]
         # get the MF of all same chrom CpGs
@@ -187,7 +270,7 @@ class mutationFeatures:
                 ].assign(location=lambda df: df['chr'] + ':' + df['start'].astype(str))['location']
             .tolist()
             )
-        return pos_corr_locs, neg_corr_locs
+        return pos_corr_locs, neg_corr_locs"""
     
     def _get_motif_counts(
         self,
@@ -301,14 +384,15 @@ class mutationFeatures:
         @ nearby_window_size: the window size to be used to find nearby sites
         @ returns: dict of types of genomic locations of the sites to be used as predictors in format chr:start
         """
-        def extend(loc_list, extend_amount):
+        def extend_locs(loc_list: list, extend_amount:int):
             """
             Return the list of locations with each original loc extended out extend_amount in each direction
             """
             return [loc.split(':')[0] + ':' + str(int(loc.split(':')[1]) + i) 
                     for loc in loc_list 
                     for i in range(-extend_amount, extend_amount + 1)]
-            
+                        
+        
         def extend_clump_matrixQTL_sites(loc_list, extend_amount = 1000):
             """For these extend 1000bp out to right, because this is the clumping window"""
             return [loc.split(':')[0] + ':' + str(int(loc.split(':')[1]) + i) 
@@ -327,10 +411,10 @@ class mutationFeatures:
             cpg_id, chrom, num_correl_sites=num_correl_sites
             )
         # get extended versions of the num_correl_ext_sites most positively and negatively correlated CpGs
-        predictor_site_groups['pos_corr_ext'] = extend(
+        predictor_site_groups['pos_corr_ext'] = extend_locs(
             predictor_site_groups['pos_corr'], extend_amount=extend_amount
             )
-        predictor_site_groups['neg_corr_ext'] = extend(
+        predictor_site_groups['neg_corr_ext'] = extend_locs(
             predictor_site_groups['neg_corr'], extend_amount=extend_amount
             )
         # get nearby sites
@@ -372,7 +456,6 @@ class mutationFeatures:
         predictor_groups: dict,
         aggregate: str,
         extend_amount: int,
-        binarize: bool,
         ) -> tuple:
         """
         Create the training matrix for the given cpg_id and predictor_sites
@@ -398,9 +481,10 @@ class mutationFeatures:
             - target_values: the target values for the feature matrix (methylation values)
         """
         # make list of all samples to fill in samples that do not have mutations in predictor sites
-        all_samples = self.train_samples + self.test_samples
+        all_samples = self.train_samples + self.test_samples + self.validation_samples
         
-        def _create_feat_mat(
+        #  the old way
+        def feat_matrix_from_site_list(
             site_list: list, 
             binarize: bool = False,
             ) -> pd.DataFrame:
@@ -426,6 +510,59 @@ class mutationFeatures:
                 feat_mat[feat_mat > 0] = 1
             return feat_mat
         
+        
+        
+        # the new way
+        """def feat_matrix_from_site_list(site_list: list) -> np.ndarray:
+            Create a feature matrix where each column is a predictor site from site_list.
+            @param site_list: List of sites to be used as predictors of cpg_id's methylation.
+            @param binarize: Whether to binarize the feature matrix.
+            @return: A feature matrix where each column is a predictor site from site_list
+            def transform_to_mat(
+                mut_locs: np.ndarray,
+                mut_samples: np.ndarray,
+                vafs: np.ndarray,
+                all_samples: np.ndarray
+                ):
+                Create a feature matrix where each column is a predictor site from site_list.
+                @param mutated_sites: Mutated sites DataFrame containing columns ['mut_loc', 'DNA_VAF', 'case_submitter_id'].
+                @param all_samples: List of all sample IDs.
+                @return: A feature matrix where each column is a predictor site from site_list
+                feat_mat = np.zeros((len(all_samples), len(mut_locs)), dtype=np.float32)
+                
+                mut_loc_indices = {mut_loc: i for i, mut_loc in enumerate(mut_locs)}
+                sample_indices = {sample: i for i, sample in enumerate(all_samples)}
+
+                for i in range(len(mut_locs)):
+                    mut_loc = mut_locs[i]
+                    mut_sample = mut_samples[i]
+                    vaf = vafs[i]
+                    if mut_loc in mut_loc_indices and mut_sample in sample_indices:
+                        mut_loc_index = mut_loc_indices[mut_loc]
+                        mut_sample_index = sample_indices[mut_sample]
+                        feat_mat[mut_sample_index, mut_loc_index] = vaf
+                return feat_mat
+            
+            
+            mutated_sites_from_list_df = self.all_mut_w_age_df.loc[
+                self.all_mut_w_age_df['mut_loc'].isin(site_list)
+            ]
+            mut_locs = mutated_sites_from_list_df['mut_loc'].values
+            mut_samples = mutated_sites_from_list_df['case_submitter_id'].values
+            vafs = mutated_sites_from_list_df['DNA_VAF'].values
+            all_samples = np.array(self.train_samples + self.test_samples + self.validation_samples)
+            # transform to matrix
+            feat_mat = transform_to_mat(mut_locs, mut_samples, vafs, all_samples)
+            # convert to dataframe with correct column names
+            feat_mat = pd.DataFrame(
+                feat_mat, columns=mut_locs
+            )
+            # just in case 
+            feat_mat = feat_mat.reindex(all_samples, fill_value=0)
+
+            return feat_mat"""
+                
+        
         def noAgg() -> pd.DataFrame:
             """
             Create a feature matrix where each column is a predictor site from predictor_groups
@@ -438,7 +575,7 @@ class mutationFeatures:
             specific_feature_pred_groups = ['nearby', 'pos_corr', 'neg_corr']
             feat_mats = []
             for group_name in specific_feature_pred_groups:
-                feat_mat = _create_feat_mat(predictor_groups[group_name], binarize=binarize)
+                feat_mat = feat_matrix_from_site_list(predictor_groups[group_name])
                 feat_mat.columns =  [group_name + '+' + x for x in feat_mat.columns]
                 feat_mats.append(feat_mat)
             feat_mat = pd.concat(feat_mats, axis=1)
@@ -463,7 +600,7 @@ class mutationFeatures:
             for group_name, group_sites in predictor_groups.items():
                 # create feature matrix for this group
                 if group_name != 'specific_motif_loci_dict':
-                    feat_mat = _create_feat_mat(group_sites, binarize=binarize)
+                    feat_mat = feat_matrix_from_site_list(group_sites)
                     # sum across loci within each sample to get samples x aggregate feature matrix
                     agg_feat_mat = feat_mat.sum(axis=1)
                     aggregated_muts.append(agg_feat_mat)
@@ -496,7 +633,7 @@ class mutationFeatures:
                     # for each motif and its loci
                     for motif_name, motif_loci in group_sites.items():
                         # sum the columns of feat_mat that are in this motif's loci
-                        this_motif_feat_mat = _create_feat_mat(motif_loci, binarize=binarize)
+                        this_motif_feat_mat = feat_matrix_from_site_list(motif_loci)
                         this_motif_sum = this_motif_feat_mat.sum(axis=1)
                         specific_motif_agg_muts.append(this_motif_sum)
             
@@ -563,7 +700,7 @@ class mutationFeatures:
             
             nearby_sites = predictor_groups['nearby']
             # create feature matrix for nearby sites
-            feat_mat = _create_feat_mat(nearby_sites, binarize=binarize)
+            feat_mat = feat_matrix_from_site_list(nearby_sites)
             # sum features in tesselate_sizes bp windows
             all_tesse_feat_mats = []
             for tesse_size in tesselate_sizes:
@@ -584,7 +721,7 @@ class mutationFeatures:
                 start = 1, stop = np.log10(nearby_window_size), num = num_nested_feats, base = 10
                 ).astype(int)
             # mutationn statuis
-            feat_mat = _create_feat_mat(nearby_sites, binarize=binarize)
+            feat_mat = feat_matrix_from_site_list(nearby_sites)
             # find middle of window (where mutated site is)
             middle_index = int(len(nearby_sites) / 2)
             all_nested_feat_mats = []
@@ -673,7 +810,6 @@ class mutationFeatures:
         max_meqtl_sites: int = 100,
         nearby_window_size: int = 50000,
         extend_amount: int = 250,
-        binarize: bool = False
         ):
         """
         Create the training matrix for the given cpg_id and predictor_sites
@@ -691,7 +827,7 @@ class mutationFeatures:
                 nearby_window_size, extend_amount
                 )
             feat_mats[cpg_id], feat_names[cpg_id], target_values[cpg_id] = self._create_feature_mat(
-                cpg_id, predictor_groups, aggregate, extend_amount, binarize
+                cpg_id, predictor_groups, aggregate, extend_amount
                 )
             if i % 10 == 0:
                 print(f"Finished {i} of {len(cpg_ids)}", flush=True)
@@ -705,6 +841,7 @@ class mutationFeatures:
                 'dataset': self.dataset, # string
                 'train_samples': self.train_samples, # list
                 'test_samples': self.test_samples, # list
+                'validation_samples': self.validation_samples, # list
                 'aggregate': aggregate, # string
                 'num_correl_sites': num_correl_sites, # int
                 'max_meqtl_sites': max_meqtl_sites, # int
@@ -853,6 +990,7 @@ class mutationFeatures:
         # set the class attributes based on the loaded data
         self.dataset = self.mutation_features_store['dataset']
         self.train_samples = self.mutation_features_store['train_samples']
+        self.validation_samples = self.mutation_features_store['validation_samples']
         self.test_samples = self.mutation_features_store['test_samples']
         self.cpg_ids = self.mutation_features_store['cpg_ids']
         self.aggregate = self.mutation_features_store['aggregate']

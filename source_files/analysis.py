@@ -83,12 +83,15 @@ def plot_mutations_distributions(all_mut_df, illumina_cpg_locs_df, all_methyl_df
         'T>A': 'T>A', 'A>T': 'T>A',
         'T>C': 'T>C', 'A>G': 'T>C',
         'T>G': 'T>G', 'A>C': 'T>G'})
-    p = sns.barplot(x=cpg_mut_freq['Mutation class'], y=cpg_mut_freq['mut_freq'], ax=axes, color='white', edgecolor='black', errorbar=None)
+    _, _, autotexts = axes.pie(cpg_mut_freq.dropna()['mut_freq'], labels = cpg_mut_freq.dropna()['Mutation class'], colors = ['white', 'grey', 'black'], autopct='%1.1f%%', startangle=90,  wedgeprops={"edgecolor":"k",'linewidth': 1, 'antialiased': True})
+    for i, autotext in enumerate(autotexts):
+        if i == 2:
+            autotext.set_color('white')
+    """p = sns.barplot(x=cpg_mut_freq['Mutation class'], y=cpg_mut_freq['mut_freq'], ax=axes, color='white', edgecolor='black', errorbar=None)
     axes.set_ylabel("")
     axes.set_xlabel("")
-    axes.set_ylim([0,1])
-    
-    #plt.savefig("/cellar/users/zkoch/methylation_and_mutation/output_dirs/final_figures/figure1/figure1B_TCGA_cpg_mut_type.svg",format='svg', dpi = 300)
+    axes.set_ylim([0,1])"""
+    plt.savefig("/cellar/users/zkoch/methylation_and_mutation/output_dirs/final_figures/figure1/figure1B_TCGA_cpg_mut_type_piechart.svg",format='svg', dpi = 300)
         
     
     """# plot distribution of just mutations in measured CpG sites

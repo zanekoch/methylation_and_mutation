@@ -4,7 +4,7 @@ import pickle
 import sklearn
 from sklearn.linear_model import LinearRegression, ElasticNetCV, ElasticNet
 from sklearn.model_selection import RandomizedSearchCV, GridSearchCV
-
+import os
 import sklearn.preprocessing
 import xgboost as xgb
 import sys
@@ -31,6 +31,8 @@ class methylationPrediction:
         scale_counts_within_dataset: bool = False,
         predict_with_random_feat: int = -1,
         illumina_cpg_locs_df: pd.DataFrame = pd.DataFrame(), 
+        all_methyl_age_df_t: pd.DataFrame = pd.DataFrame(),
+        use_gpu: bool = False
         ) -> None:
         """
         Constructor for methylationPrediction object
@@ -44,6 +46,8 @@ class methylationPrediction:
         @ scale_counts_within_dataset: bool, whether to min-max scale feat mutation counts by sample tissue type
         @ predict_with_random_feat: int, if > 0, randomly choose this many CpGs from the store to predict with
         @ illumina_cpg_locs_df: pd.DataFrame, the dataframe of illumina cpg locations
+        @ all_methyl_age_df_t: pd.DataFrame, the dataframe of all methyl age samples
+        @ use_gpu: bool, whether to use gpu for xgboost
         @ returns: None
         """
         # read in mutation features from file or from dictionary
@@ -61,13 +65,22 @@ class methylationPrediction:
         # set the train and test samples to be same as those used to generate the mutation feature store
         self.train_samples = self.mut_feat_store['train_samples']
         self.test_samples = self.mut_feat_store['test_samples']
+        self.validation_samples = self.mut_feat_store['validation_samples']
         self.cross_val_num = self.mut_feat_store['cross_val_num']
         self.model_type = model_type
         self.target_values = target_values
         self.agg_only = agg_only
         self.scale_counts_within_dataset = scale_counts_within_dataset
+        if self.scale_counts_within_dataset:
+            sys.exit("scale_counts_within_dataset deprecated")
         self.predict_with_random_feat = predict_with_random_feat
+        # check that is an integer or negative
+        assert isinstance(self.predict_with_random_feat, int), "predict_with_random_feat must be an integer"
+
         self.illumina_cpg_locs_df = illumina_cpg_locs_df
+        self.all_methyl_age_df_t = all_methyl_age_df_t
+        self.performance_by_dataset_df = None
+        self.use_gpu = use_gpu
         # if predict_with_random_feat is specified, assert that illumina_cpg_locs_df is not empty
         assert self.predict_with_random_feat < 0 or not self.illumina_cpg_locs_df.empty
         # assert these agg_only is not True while baseline is cov_only
@@ -95,7 +108,7 @@ class methylationPrediction:
                 next_mut_feat_store = pickle.load(f)
                 for key in next_mut_feat_store.keys():
                     # if key stores a piece of meta data, add it to the combined store just once
-                    if key in ['dataset', 'train_samples', 'test_samples', 'aggregate', 'num_correl_sites', 'num_correl_ext_sites', 'max_meqtl_sites', 'nearby_window_size', 'cross_val_num']:
+                    if key in ['dataset', 'train_samples', 'test_samples', 'validation_samples', 'aggregate', 'num_correl_sites', 'num_correl_ext_sites', 'max_meqtl_sites', 'nearby_window_size', 'cross_val_num']:
                         if key not in mut_feat_store.keys():
                             mut_feat_store[key] = next_mut_feat_store[key]
                     # otherwise if key stores a list of data values, each time add the values to the combined store
@@ -123,10 +136,10 @@ class methylationPrediction:
         Predict the methylation for a given CpG site on self.test_samples
         @ train_mat_cpg_id: the id of the CpG site whose mat was used to train the model
         @ target_cpg_id: the id of the CpG site to predict
-        @ X: the mutation feature matrix for the CpG site, csr if model_type is xgboost, otherwise numpy array. Contains all samples, in order of train then test
+        @ X: the mutation feature matrix for the CpG site, csr if model_type is xgboost, otherwise numpy array. Contains all samples, in order of train then test then validation
         """
         if self.model_type == 'elasticNet':
-            # scale the features of training and testing samples, seperately
+            # scale the features of training samples, and apply this to testing and validation samples
             train_idx_num = [
                     self.mut_feat_store[self.target_values][train_mat_cpg_id].index.get_loc(train_sample)
                     for train_sample in self.train_samples
@@ -135,14 +148,19 @@ class methylationPrediction:
                     self.mut_feat_store[self.target_values][train_mat_cpg_id].index.get_loc(test_sample)
                     for test_sample in self.test_samples
                 ]
+            validation_idx_num = [
+                    self.mut_feat_store[self.target_values][train_mat_cpg_id].index.get_loc(validation_sample)
+                    for validation_sample in self.validation_samples
+                ]
             # Create a MinMaxScaler using the training data
             scaler = sklearn.preprocessing.MinMaxScaler(feature_range=(0, 1))
             X_train = scaler.fit_transform(X[train_idx_num, :])
             # Apply the same scaling factors from the training data to the testing data
             X_test = scaler.transform(X[test_idx_num, :])
+            X_validation = scaler.transform(X[validation_idx_num, :])
             # recombine the training and testing samples into one matrix, they are in order of train then test
             # per mutation_features._create_feature_mat()
-            X = np.concatenate((X_train, X_test), axis=0)
+            X = np.concatenate((X_train, X_test, X_validation), axis=0)
         
         # predict methylation for all samples
         # if predicting with random feat, then use combination as key
@@ -174,14 +192,17 @@ class methylationPrediction:
         # otherwise can just use all cpgs in trained_models
         else:
             target_cpgs = self.trained_models.keys()
-            train_mat_cpgs = target_cpgs
+            train_mat_cpgs = list(target_cpgs) # convert to list 
+        
         total_cpgs = len(target_cpgs)
-        # make sure all cpgs in trained_models identical to those in mut_feat_store, if not then error
-        assert set(target_cpgs) == set(self.mut_feat_store['cpg_ids']), \
-            "cpgs in trained_models not identical to those in mut_feat_store"
-        # for each cpg in the store predict its methylation using the appropriate feat mat and model
+        if not just_one:
+            # make sure all cpgs in trained_models identical to those in mut_feat_store, if not then error
+            assert set(target_cpgs) == set(self.mut_feat_store['cpg_ids']), \
+                "cpgs in trained_models not identical to those in mut_feat_store"
+            
+        # for each cpg in the store, predict its methylation using the appropriate feat mat and model
         for i, target_cpg_id in enumerate(target_cpgs):
-            # get indices of training and testing samples from target
+            # get indices of training, testing, and validation samples from target
             train_idx_num = [
                     self.mut_feat_store[self.target_values][target_cpg_id].index.get_loc(train_sample)
                     for train_sample in self.train_samples
@@ -189,6 +210,10 @@ class methylationPrediction:
             test_idx_num = [
                     self.mut_feat_store[self.target_values][target_cpg_id].index.get_loc(test_sample)
                     for test_sample in self.test_samples
+                ]
+            validation_idx_num = [
+                    self.mut_feat_store[self.target_values][target_cpg_id].index.get_loc(validation_sample)
+                    for validation_sample in self.validation_samples
                 ]
             # get the feature matrix for the cpg used to train the model
             if self.baseline == 'cov_only':
@@ -209,6 +234,7 @@ class methylationPrediction:
             if self.agg_only:
                 X = self.subset_matrix_to_agg_only_feats(X, train_mat_cpgs[i])
             # and/or scale
+            # DEPRECATED: scale counts within each dataset
             if self.scale_counts_within_dataset:
                 # scale counts within each dset separately for training and testing samples
                 scaled_X_train = self.do_scale_counts_within_dataset(
@@ -217,8 +243,11 @@ class methylationPrediction:
                 scaled_X_test = self.do_scale_counts_within_dataset(
                     X[test_idx_num, :], train_mat_cpgs[i]
                     )
-                # combine the two csr matrices
-                X = vstack([scaled_X_train, scaled_X_test])
+                scaled_X_validation = self.do_scale_counts_within_dataset(
+                    X[validation_idx_num, :], train_mat_cpgs[i]
+                    )
+                # combine the three csr matrices
+                X = vstack([scaled_X_train, scaled_X_test, scaled_X_validation])
                 
             # do prediction
             self.apply_one_model(
@@ -231,7 +260,7 @@ class methylationPrediction:
             if just_one:
                 break
         # combine all predictions into one dataframe
-        self.pred_df = pd.DataFrame(self.predictions, index = self.train_samples + self.test_samples)
+        self.pred_df = pd.DataFrame(self.predictions, index = self.train_samples + self.test_samples + self.validation_samples)
         return
 
     def train_one_model(
@@ -270,11 +299,20 @@ class methylationPrediction:
         elif self.model_type == 'xgboost':
             # keep as sparse bc xgboost faster this way
             # Create the XGBRegressor model
-            model = xgb.XGBRegressor(
-                n_jobs=-1,
-                learning_rate = .1,
-                objective = 'reg:squarederror'
-                )
+            if self.use_gpu:
+                model = xgb.XGBRegressor(
+                    #n_jobs=-1,
+                    learning_rate = .1,
+                    objective = 'reg:squarederror',
+                    tree_method = 'gpu_hist'
+                    )
+            else:
+                model = xgb.XGBRegressor(
+                    n_jobs=-1,
+                    learning_rate = .1,
+                    objective = 'reg:squarederror',
+                    #tree_method = 'gpu_hist'
+                    )
             model.fit(X, y)
             
             # Create a parameter grid for the XGBoost model
@@ -289,7 +327,7 @@ class methylationPrediction:
             """model = xgb.XGBRegressor(
                 learning_rate = .1,
                 objective = 'reg:squarederror',
-                #tree_method = 'gpu_hist'
+                tree_method = 'gpu_hist'
                 )
             
             param_grid = {
@@ -396,13 +434,19 @@ class methylationPrediction:
 
     def make_training_mat(self, cpg_id, train_idx_num):
         if self.baseline == 'scramble':
+            print("scrambling")
             # get the feature matrix for the cpg
             X = self.mut_feat_store['feat_mats'][cpg_id]
             X = X.todense()
             # subset to only training samples
             X_train = pd.DataFrame(X[train_idx_num, :])
+            print("before scrambling")
+            print(X_train.sum(axis = 0).sort_values(ascending=False))
             # scramble the feature matrix
             X_train_scrambled = self.do_scramble(X_train, cpg_id)
+            print("after scrambling")
+            
+            print(X_train_scrambled.sum(axis = 0).sort_values(ascending=False))
             X = csr_matrix(X_train_scrambled)   
         elif self.baseline == 'cov_only':
             # get the feature matrix for the cpg
@@ -422,11 +466,21 @@ class methylationPrediction:
             X = self.mut_feat_store['feat_mats'][cpg_id] 
             # subset to only training samples
             X = X[train_idx_num, :]
+            X_train_df = pd.DataFrame(X.todense(), columns = self.mut_feat_store['feat_names'][cpg_id])
+            # select columns that do not contain dataset or gender
+            print("agg feature sums")
+            print(X_train_df.loc[:, X_train_df.columns.str.contains('agg')].sum(axis=0).sort_values(ascending=False))
         else:
             raise ValueError(f"baseline {self.baseline} not supported")
         # subset to only aggregate features and scale if specified
+        #print("before agg only")
+        #print(pd.DataFrame(X.todense()).sum(axis = 0).sort_values(ascending=False))
         if self.agg_only:
             X = self.subset_matrix_to_agg_only_feats(X, cpg_id)
+        #print("after agg onlys")
+        #print(pd.DataFrame(X.todense()).sum(axis = 0).sort_values(ascending=False))
+        
+        # DEPRECATED
         if self.scale_counts_within_dataset:
             # only given train samples because X is already subsetted to train samples
             X = self.do_scale_counts_within_dataset(X, cpg_id)
@@ -435,11 +489,12 @@ class methylationPrediction:
     def do_scale_counts_within_dataset(
         self, 
         feat_mat: csr_matrix,
-        cpg_id: str
+        cpg_id: str,
         ) -> csr_matrix:
         """
         Given a matrix, scale the mutation counts within each dataset group
-        !!! Must pass in training and testing seperately !!!
+        @ feat_mat: the feature matrix to scale, may be training, testing, or validation
+        @ cpg_id: the id of the CpG site
         """
         feat_names = pd.Series(self.mut_feat_store['feat_names'][cpg_id])
         # if agg_only, only select the aggregate features
@@ -458,8 +513,9 @@ class methylationPrediction:
         # drop covariate columns
         non_cov_df = feat_df.drop(dset_columns, axis = 1).drop(gender_columns, axis = 1)
         non_cov_df['dataset'] = dset_col
-        # scale the counts within each dataset
-        cols_to_scale = non_cov_df.columns[:-1]
+        cols_to_scale = non_cov_df.columns[:-1]  
+        
+        # min-max scale the counts within each dataset
         non_cov_df = non_cov_df.groupby('dataset')[cols_to_scale].transform(
             lambda x: (x - x.min()) / (x.max() - x.min())
             )
@@ -503,26 +559,37 @@ class methylationPrediction:
         # get column index of covariates, which are columns containing dataset or gender
         feat_names = pd.Series(self.mut_feat_store['feat_names'][cpg_id])
         is_covariate = feat_names.str.contains('dataset') | feat_names.str.contains('gender')
+        print(feat_names[is_covariate])
         covariate_cols = feat_names.index[is_covariate].values
         # save covariate columns and sample order
         save_covariate_cols = X_train.iloc[:, covariate_cols].copy(deep = True)
         save_X_train_idx = X_train.index.copy(deep = True)
         # drop covariate columns
+        print(X_train.sum(axis = 0).sort_values(ascending=False))
+        
         X_train_scrambled = X_train.drop(covariate_cols, axis = 1).copy(deep = True)
+        print(X_train_scrambled.sum(axis = 0).sort_values(ascending=False))
         # randomly select values from 
         def scramble_dataframe(df):
-            # scramble values within each sample, seperately 
+            # scramble values within each sample, seperately
+            # this preserves the mutation burden within a scrambled sample 
             # (setting random_seed makes them all scramble the same)
+            print("in scrambled fxn")
+            print(df.sum(axis = 0).sort_values(ascending=False))
             scrambled = df.apply(
                 lambda x: x.sample(frac=1, replace=False).values,
                 axis = 1
                 )
+            #print(scrambled.sum(axis = 0).sort_values(ascending=False))
             # convert back to dataframe, keeping index and col order
             scrambled_df = pd.DataFrame(
                 scrambled.values.tolist(),
                 index = df.index,
                 columns = df.columns
                 )
+            print(scrambled_df.sum(axis = 0).sort_values(ascending=False))
+            print("finished scrambled fxn")
+            
             """
             Old way
             vals = df.values
@@ -533,12 +600,6 @@ class methylationPrediction:
             scrambled_df = pd.DataFrame(vals, index = df.index, columns = df.columns)"""
             return scrambled_df
         
-        """
-        really old way
-        X_train_scrambled = X_train_scrambled.sample(frac=1, axis=1, random_state=42, replace = False).sample(frac=1, axis=0, random_state=42, replace = False)
-        """
-        
-        
         # scramble values within each sample
         X_train_scrambled = scramble_dataframe(X_train_scrambled)
         # reset columns
@@ -548,6 +609,104 @@ class methylationPrediction:
         # and add covariates back
         X_train_scrambled = pd.concat([X_train_scrambled, save_covariate_cols], axis = 1)
         return X_train_scrambled
+         
+    def calc_performance_by_dataset(self):
+        """
+        Get the performance of the models by dataset
+        """
+        top_20_datasets = self.all_methyl_age_df_t['dataset'].value_counts().index[:20].to_list()
+        # remove certain vals from top_20_datasets
+        try:
+            for dset in top_20_datasets:
+                if dset == 'BRCA' or dset == 'LGG'  or dset == 'OV' or dset == 'LAML':
+                    top_20_datasets.remove(dset)
+        except:
+            # ICGC data doesn't have these datasets
+            pass
+        # if we predicted with random features
+        if self.predict_with_random_feat > 0:
+            # convert the predicted methyl df columns to the target cpg names
+            # splitting each column name on the underscore and taking the first element
+            target_cpgs = [col.split('_')[1] for col in self.pred_df.columns]
+            target_train_names = self.pred_df.columns
+            pred_for_corr_df = self.pred_df.copy(deep = True)
+            pred_for_corr_df.columns = target_cpgs
+        else:
+            target_cpgs = self.pred_df.columns
+            target_train_names = self.pred_df.columns
+            pred_for_corr_df = self.pred_df
+        
+        print(top_20_datasets)
+        dataset_perf_dfs = []
+        for dataset in top_20_datasets:
+            # get the correlation between actual testing sample methylation
+            # and predicted testing sample methylation from this dataset
+            this_dataset_samples = self.all_methyl_age_df_t.loc[
+                self.all_methyl_age_df_t['dataset'] == dataset, 
+                :].index
+            this_dataset_samples = list(
+                set(this_dataset_samples).intersection(set(pred_for_corr_df.index))
+                )
+            this_dataset_train_samples = list(
+                set(this_dataset_samples).intersection(set(self.train_samples))
+                )
+            this_dataset_test_samples = list(
+                set(this_dataset_samples).intersection(set(self.test_samples))
+                )
+            
+            real_methyl_df = self.all_methyl_age_df_t.loc[
+                this_dataset_test_samples, 
+                target_cpgs
+                ]
+            pred_methyl_df = pred_for_corr_df.loc[
+                this_dataset_test_samples, 
+                :]
+            
+            real_methyl_df_train = self.all_methyl_age_df_t.loc[
+                this_dataset_train_samples, 
+                target_cpgs
+                ]
+            pred_methyl_df_train = pred_for_corr_df.loc[
+                this_dataset_train_samples, 
+                :]
+            # get the correlation 
+            dataset_pearson = real_methyl_df.corrwith(pred_methyl_df, method = 'pearson')
+            this_dataset_test_age_df = self.all_methyl_age_df_t.loc[
+                this_dataset_test_samples, 
+                'age_at_index'
+                ]
+            dataset_age_pearson = pred_methyl_df.corrwith(this_dataset_test_age_df, method = 'pearson').abs()
+            # same for training samples
+            train_dataset_pearson = real_methyl_df_train.corrwith(
+                pred_methyl_df_train, method = 'pearson'
+                ) 
+            this_dataset_train_age_df = self.all_methyl_age_df_t.loc[
+                this_dataset_train_samples, 
+                'age_at_index'
+                ]            
+            train_actual_methyl_age_pearson = real_methyl_df_train.corrwith(
+                this_dataset_train_age_df, method = 'pearson'
+                ).abs()
+            
+            # create dataframe
+            dataset_perf_df = pd.DataFrame({
+                'AvP_methyl_pearson': dataset_pearson,
+                'Pmethyl_v_Age_pearson_abs': dataset_age_pearson,
+                'train_AvP_methyl_pearson': train_dataset_pearson,
+                'train_Amethyl_v_Age_pearson_abs': train_actual_methyl_age_pearson,
+                })
+            dataset_perf_df['dataset'] = dataset
+            dataset_perf_df['cpg'] = target_train_names
+            dataset_perf_dfs.append(dataset_perf_df)
+            print("Done getting performance of dataset: " + dataset, flush = True)
+        all_dataset_perf_df = pd.concat(dataset_perf_dfs)
+        # make cpg a column
+        all_dataset_perf_df.reset_index(inplace = True, drop = True)
+        if self.predict_with_random_feat > 0:
+            all_dataset_perf_df['self_pred'] = all_dataset_perf_df['cpg'].apply(
+                lambda x: True if x.split('_')[1] == x.split('_')[3] else False
+                )
+        self.performance_by_dataset_df = all_dataset_perf_df 
          
     def save_models_and_preds(
         self,
@@ -563,14 +722,24 @@ class methylationPrediction:
         agg_only_str = ''
         if self.agg_only:
             agg_only_str = '_agg_only'
+        else:
+            agg_only_str = '_all_feats'
         if self.predict_with_random_feat > 0:
             predict_with_random_feat_str = f"_predict_with_random_feat_{self.predict_with_random_feat}"
+        else:
+            predict_with_random_feat_str = ''
         # write out files to there, including the model type in name
         with open(f"{out_dir}/trained_models_{self.model_type}_{self.baseline}baseline{agg_only_str}{predict_with_random_feat_str}.pkl", 'wb') as f:
             pickle.dump(self.trained_models, f)
+        
         # write to parquet files
         self.pred_df.to_parquet(
             f"{out_dir}/methyl_predictions_{self.model_type}_{self.baseline}baseline{agg_only_str}{predict_with_random_feat_str}.parquet"
             )
         print(f"wrote out trained models and predictions to {out_dir}", flush=True)
+        if self.performance_by_dataset_df is not None:
+            self.performance_by_dataset_df.to_parquet(
+                f"{out_dir}/performance_by_dataset_{self.model_type}_{self.baseline}baseline{agg_only_str}{predict_with_random_feat_str}.parquet"
+                )
+            print(f"wrote out performance by dataset to {out_dir}", flush=True)
         

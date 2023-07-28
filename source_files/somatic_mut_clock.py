@@ -11,6 +11,7 @@ import xgboost as xgb
 import glob
 from scipy.stats import spearmanr, pearsonr
 import shap
+from tqdm import tqdm
 plt.rcParams['svg.fonttype'] = 'none'
 plt.rcParams['pdf.fonttype'] = 42
 plt.rcParams['ps.fonttype'] = 42
@@ -30,10 +31,11 @@ class mutationClock:
         output_dir: str,
         train_samples: list,
         test_samples: list,
+        validation_samples: list,
         tissue_type: str = "",
-        scrambled_predicted_methyl_fns: list =[],
         trained_models_fns: list = [],
-        feature_mat_fns: list = []
+        feature_mat_fns: list = [],
+        performance_by_dataset_fns: list = []
         ) -> None:
         """
         @ predicted_methyl_fns: a list of paths to the predicted methylation files
@@ -43,7 +45,11 @@ class mutationClock:
         @ output_dir: the path to the output directory where the results will be saved
         @ train_samples: a list of the training samples, from mut_feat
         @ test_samples: a list of the testing samples, from mut_feat
+        @ validation_samples: a list of the validation samples, from mut_feat
         @ tissue_type: the tissue type to use for the analysis
+        @ trained_models_fns: a list of paths to the trained models
+        @ feature_mat_fns: a list of paths to the feature matrices
+        @ performance_by_dataset_fns: a list of paths to the performance by dataset files
         """
         self.predicted_methyl_df = self._combine_fns(predicted_methyl_fns, axis = 1)
         self.all_methyl_age_df_t = all_methyl_age_df_t
@@ -57,20 +63,28 @@ class mutationClock:
                 :]
         self.test_samples = test_samples
         self.train_samples = train_samples
-        
+        self.validation_samples = validation_samples
+        # if there are trained models, read them in and combine them
         self.trained_models = {}
         if len(trained_models_fns) > 0:
-            for fn in trained_models_fns:
+            """for fn in tqdm(trained_models_fns, desc="Loading trained model fns"):
                 # read in dictionary from pickle file
                 with open(fn, 'rb') as f:
                     these_models = pickle.load(f)
                     # add to dictionary
                     self.trained_models.update(these_models)
-                    
+                # read in using xgb method
+                model = xgb.XGBRegressor()
+                model.load_model(fn)
+                # get the cpg name from the model name
+                cpg_name = os.path.basename(fn).split('.')[0]
+                self.trained_models[cpg_name] = model
+                print("loaded model for " + cpg_name, flush = True)"""
+        # if there are feature matrices, read them in and combine them
         self.feature_mats = {}
         if len(feature_mat_fns) > 0:
             first = True
-            for fn in feature_mat_fns:
+            for fn in tqdm(feature_mat_fns, desc="Loading feature matrices"):
                 # read in dictionary from pickle file
                 with open(fn, 'rb') as f:
                     this_feat_dict = pickle.load(f)
@@ -81,6 +95,17 @@ class mutationClock:
                         minor_dicts_to_update = ['feat_mats', 'target_values', 'feat_names']
                         for minor_dict in minor_dicts_to_update:
                             self.feature_mats[minor_dict].update(this_feat_dict[minor_dict])
+                        minor_lists_to_update = ['cpg_ids']
+                        for minor_list in minor_lists_to_update:
+                            self.feature_mats[minor_list] += this_feat_dict[minor_list]
+        # if there are performance_by_dataset files, read them in and combine them
+        performance_by_dataset_l = []
+        if len(performance_by_dataset_fns) > 0:
+            for fn in tqdm(performance_by_dataset_fns, desc="Loading performance data"):
+                # read in dataframe from parquet file
+                this_df = pd.read_parquet(fn)
+                performance_by_dataset_l.append(this_df)
+            self.performance_by_dataset_df = pd.concat(performance_by_dataset_l)
     
     @classmethod
     def construct_from_paths(
@@ -100,16 +125,15 @@ class mutationClock:
         predicted_methyl_fns = glob.glob(
             os.path.join(somage_path, directory_glob, f"methyl_predictions_{file_suffix}.parquet")
             )
-        predicted_perf_fns = glob.glob(
-            os.path.join(somage_path, directory_glob, f"prediction_performance_{file_suffix}.parquet")
-            )
         trained_model_fns = glob.glob(
             os.path.join(somage_path, directory_glob, f"trained_models_{file_suffix}.pkl")
             )
         feature_mat_fns = glob.glob(
             os.path.join(somage_path, directory_glob, "*features.pkl")
             )
-        
+        performance_by_dataset_fns = glob.glob(
+            os.path.join(somage_path, directory_glob, f"performance_by_dataset_{file_suffix}.parquet")
+            )
         somage = cls(
                 predicted_methyl_fns = predicted_methyl_fns, 
                 all_methyl_age_df_t = all_methyl_age_df_t,
@@ -117,13 +141,15 @@ class mutationClock:
                 output_dir = out_dir,
                 train_samples = mut_feat.train_samples,
                 test_samples = mut_feat.test_samples,
+                validation_samples = mut_feat.validation_samples,
                 tissue_type = "",
                 trained_models_fns = trained_model_fns,
                 feature_mat_fns = feature_mat_fns,
+                performance_by_dataset_fns = performance_by_dataset_fns
                 )
         return somage           
                             
-    def performance_by_dataset(self):
+    def performance_by_dataset(self, predicted_with_random_feat = False):
         """
         Get the performance of the models by dataset
         """
@@ -136,6 +162,18 @@ class mutationClock:
         except:
             # ICGC data doesn't have these datasets
             pass
+        # if we predicted with random features
+        if predicted_with_random_feat:
+            # convert the predicted methyl df columns to the target cpg names but splitting each column name on the underscore and taking the first element
+            target_cpgs = [col.split('_')[1] for col in self.predicted_methyl_df.columns]
+            target_train_names = self.predicted_methyl_df.columns
+            pred_for_corr_df = self.predicted_methyl_df.copy(deep = True)
+            pred_for_corr_df.columns = target_cpgs
+        else:
+            target_cpgs = self.predicted_methyl_df.columns
+            target_train_names = self.predicted_methyl_df.columns
+            pred_for_corr_df = self.predicted_methyl_df
+        
         print(top_20_datasets)
         dataset_perf_dfs = []
         for dataset in top_20_datasets:
@@ -146,7 +184,7 @@ class mutationClock:
                 self.all_methyl_age_df_t['dataset'] == dataset, 
                 :].index
             this_dataset_samples = list(
-                set(this_dataset_samples).intersection(set(self.predicted_methyl_df.index))
+                set(this_dataset_samples).intersection(set(pred_for_corr_df.index))
                 )
             this_dataset_train_samples = list(
                 set(this_dataset_samples).intersection(set(self.train_samples))
@@ -157,41 +195,50 @@ class mutationClock:
             
             real_methyl_df = self.all_methyl_age_df_t.loc[
                 this_dataset_test_samples, 
-                self.predicted_methyl_df.columns
+                target_cpgs
                 ]
-            pred_methyl_df = self.predicted_methyl_df.loc[
+            pred_methyl_df = pred_for_corr_df.loc[
                 this_dataset_test_samples, 
                 :]
             
             real_methyl_df_train = self.all_methyl_age_df_t.loc[
                 this_dataset_train_samples, 
-                self.predicted_methyl_df.columns
+                target_cpgs
                 ]
-            pred_methyl_df_train = self.predicted_methyl_df.loc[
+            pred_methyl_df_train = pred_for_corr_df.loc[
                 this_dataset_train_samples, 
                 :]
             # get the correlation and mutual informaiton
             dataset_pearson = real_methyl_df.corrwith(pred_methyl_df, method = 'pearson')
-            dataset_spearman = real_methyl_df.corrwith(pred_methyl_df, method = 'spearman')
+            this_dataset_test_age_df = self.all_methyl_age_df_t.loc[
+                this_dataset_test_samples, 
+                'age_at_index'
+                ]
+            dataset_age_pearson = pred_methyl_df.corrwith(this_dataset_test_age_df, method = 'pearson').abs()
+            # same for training samples
+            train_dataset_pearson = real_methyl_df_train.corrwith(
+                pred_methyl_df_train, method = 'pearson'
+                ) 
+            this_dataset_train_age_df = self.all_methyl_age_df_t.loc[
+                this_dataset_train_samples, 
+                'age_at_index'
+                ]            
+            train_actual_methyl_age_pearson = real_methyl_df_train.corrwith(
+                this_dataset_train_age_df, method = 'pearson'
+                ).abs()
+            """dataset_spearman = real_methyl_df.corrwith(pred_methyl_df, method = 'spearman')
             dataset_mae = np.mean(np.abs(real_methyl_df - pred_methyl_df), axis = 0)
             real_methyl_df_rounded = np.round(real_methyl_df)
             pred_methyl_df_rounded = np.round(pred_methyl_df)
             dataset_mi = real_methyl_df_rounded.apply(
                 lambda col: mutual_info_score(col, pred_methyl_df_rounded[col.name]), axis=0
                 )
-            this_dataset_test_age_df = self.all_methyl_age_df_t.loc[
-                this_dataset_test_samples, 
-                'age_at_index'
-                ]
-            dataset_age_pearson = pred_methyl_df.corrwith(this_dataset_test_age_df, method = 'pearson').abs()
+            
             dataset_age_spearman = pred_methyl_df.corrwith(this_dataset_test_age_df, method = 'spearman').abs()
             methyl_age_mi = pred_methyl_df_rounded.apply(
                 lambda col: mutual_info_score(col, this_dataset_test_age_df), axis=0
                 )
-            # same for training samples
-            train_dataset_pearson = real_methyl_df_train.corrwith(
-                pred_methyl_df_train, method = 'pearson'
-                ) 
+            
             train_dataset_spearman = real_methyl_df_train.corrwith(
                 pred_methyl_df_train, method = 'spearman'
                 )
@@ -200,30 +247,28 @@ class mutationClock:
             train_dataset_mi = real_methyl_df_train_rounded.apply(
                 lambda col: mutual_info_score(col, pred_methyl_df_train_rounded[col.name]), axis=0
                 )  
-            this_dataset_train_age_df = self.all_methyl_age_df_t.loc[
-                this_dataset_train_samples, 
-                'age_at_index'
-                ]
+            
             train_dataset_age_spearman = pred_methyl_df_train.corrwith(
                 this_dataset_train_age_df, method = 'spearman'
                 ).abs()
             train_methyl_age_mi = pred_methyl_df_train_rounded.apply(
                 lambda col: mutual_info_score(col, this_dataset_train_age_df), axis=0
                 )
-            # get pearson, spearman, and mi between methylation and age for training samples
-            train_actual_methyl_age_pearson = real_methyl_df_train.corrwith(
-                this_dataset_train_age_df, method = 'pearson'
-                ).abs()
+            
             train_actual_methyl_age_spearman = real_methyl_df_train.corrwith(
                 this_dataset_train_age_df, method = 'spearman'
                 ).abs()
             train_actual_methyl_age_mi = real_methyl_df_train_rounded.apply(
                 lambda col: mutual_info_score(col, this_dataset_train_age_df), axis=0
-                )
+                )"""
             # create dataframe
             dataset_perf_df = pd.DataFrame({
                 'AvP_methyl_pearson': dataset_pearson,
-                'AvP_methyl_spearman': dataset_spearman,
+                'Pmethyl_v_Age_pearson_abs': dataset_age_pearson,
+                'train_AvP_methyl_pearson': train_dataset_pearson,
+                'train_Amethyl_v_Age_pearson_abs': train_actual_methyl_age_pearson,
+                })#, index = self.predicted_methyl_df.columns)
+            """'AvP_methyl_spearman': dataset_spearman,
                 'AvP_methyl_mi': dataset_mi,
                 'AvP_methyl_mae': dataset_mae,
                 'Pmethyl_v_Age_pearson_abs': dataset_age_pearson,
@@ -238,15 +283,19 @@ class mutationClock:
                 # actual methyl vs age
                 'train_Amethyl_v_Age_pearson_abs': train_actual_methyl_age_pearson,
                 'train_Amethyl_v_Age_spearman_abs': train_actual_methyl_age_spearman,
-                'train_Amethyl_v_Age_mi': train_actual_methyl_age_mi
-                }, index = self.predicted_methyl_df.columns)
+                'train_Amethyl_v_Age_mi': train_actual_methyl_age_mi"""
+                
             dataset_perf_df['dataset'] = dataset
+            dataset_perf_df['cpg'] = target_train_names
             dataset_perf_dfs.append(dataset_perf_df)
             print("done with dataset: " + dataset, flush = True)
         all_dataset_perf_df = pd.concat(dataset_perf_dfs)
         # make cpg a column
-        all_dataset_perf_df.reset_index(inplace = True)
-        all_dataset_perf_df.rename(columns = {'index':'cpg'}, inplace = True)
+        all_dataset_perf_df.reset_index(inplace = True, drop = True)
+        if predicted_with_random_feat:
+            all_dataset_perf_df['self_pred'] = all_dataset_perf_df['cpg'].apply(
+                lambda x: True if x.split('_')[1] == x.split('_')[3] else False
+                )
         self.performance_by_dataset_df = all_dataset_perf_df
     
     
@@ -282,6 +331,19 @@ class mutationClock:
         train_mat = feat_mat[train_idx_num, :]
         test_mat = feat_mat[test_idx_num, :]
         return model, feat_names, train_mat, test_mat
+    
+    def load_model_fn_for_cpg(
+        self,
+        cpg_name,
+        batch_size = 1000
+        ):
+        """
+        Given a CpG, load the corresponding model
+        @ cpg_name: the name of the CpG
+        @ batch_size: the number of models written out together
+        """
+        # figure out which batch this CpG is from
+        
     
     def get_one_cpg_feat_score_by_cat(
         self,
@@ -427,6 +489,7 @@ class mutationClock:
         fig, axes = plt.subplots(figsize=(6, 4))
         fig2, axes2 = plt.subplots(figsize=(6, 4))
         fig3, axes3 = plt.subplots(figsize=(6, 4))
+        fig4, axes4 = plt.subplots(figsize=(6, 4))
         sns.scatterplot(
             y=predicted_values, x=actual_values,
             ax=axes, hue = self.all_methyl_age_df_t.loc[samples, 'age_at_index']
@@ -455,6 +518,13 @@ class mutationClock:
         )
         axes3.set_ylabel(f'UCEC predicted methylation {cpg}')
         axes3.set_xlabel(f'UCEC actual methylation {cpg}')
+        # plot age vs methylation value for both predicted and actual as a violin plot
+        # bin age into 4 equal width bins
+        pred_act_df['bin_age'] = pd.cut(pred_act_df['Age'].values, bins=4)
+        sns.violinplot(
+            x='bin_age', y='Methylation fraction', hue = 'Type', data=pred_act_df, ax=axes4,
+            palette=['maroon', 'steelblue'], alpha = .5
+        )
         #plt.savefig('/cellar/users/zkoch/methylation_and_mutation/output_dirs/final_figures/figure5/figure5B_methyl_pred_example.svg', dpi=300, format = 'svg')
         return for_box_df
         # change legend title
@@ -474,7 +544,7 @@ class mutationClock:
         all_dfs = []
         for fn in fns:
             df = pd.read_parquet(fn)
-            all_dfs.append(df)    
+            all_dfs.append(df)
         combined_df = pd.concat(all_dfs, axis=axis)
         # drop duplicate columns if they exist, may happen when running many jobs
         if axis == 1:
