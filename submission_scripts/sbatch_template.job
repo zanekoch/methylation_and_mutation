@@ -3,7 +3,7 @@
 #SBATCH --partition=nrnb-compute
 ##SBATCH --account=nrnb-gpu
 #SBATCH --mem=128GB
-#SBATCH --time=24:00:00
+#SBATCH --time=12:00:00
 #SBATCH --job-name=tcgaSoMage
 #SBATCH --cpus-per-task=1
 ##SBATCH --gres=gpu:1 
@@ -81,7 +81,7 @@ done
 srun python /cellar/users/zkoch/methylation_and_mutation/submission_scripts/run_somatic_mut_clock.py \
 --do Feat_gen \
 --consortium TCGA \
---cross_val 0 \
+--cross_val 2 \
 --out_dir /cellar/users/zkoch/methylation_and_mutation/output_dirs/071823_tcga_somage_output \
 --start_top_cpgs ${start_top_cpgs_values[$SLURM_ARRAY_TASK_ID]} \
 --end_top_cpgs ${end_top_cpgs_values[$SLURM_ARRAY_TASK_ID]} \
@@ -95,8 +95,8 @@ srun python /cellar/users/zkoch/methylation_and_mutation/submission_scripts/run_
 --nearby_window_size 50000 \
 --extend_amount 500 \
 --agg_only_methyl_pred False \
---scale_counts_within_dataset True \
---predict_with_random_feat 100 \
+--scale_counts_within_dataset False \
+--predict_with_random_feat -1 \
 --use-gpu False
 
 ############################################

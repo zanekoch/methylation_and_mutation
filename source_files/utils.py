@@ -11,6 +11,7 @@ import seaborn as sns
 #from statsmodels.stats.multitest import fdrcorrection
 import math
 import dask.dataframe as dd
+from tqdm import tqdm
 plt.rcParams['svg.fonttype'] = 'none'
 plt.rcParams['pdf.fonttype'] = 42
 plt.rcParams['ps.fonttype'] = 42
@@ -803,3 +804,27 @@ def fdr_correct_split(df, pval_col_name = 'ztest_pval', split_col = 'mutated'):
     # merge on index
     df = pd.concat([df1, df2])
     return df
+
+def mutual_info_one_chrom(
+    methyl_df: pd.DataFrame,
+    illumina_cpg_locs_df: pd.DataFrame,
+    chrom: str
+    ) -> pd.DataFrame:
+    from sklearn.feature_selection import mutual_info_regression
+    import itertools
+    # select this chroms CpGs
+    chrom_cpgs = illumina_cpg_locs_df.query("chr == @chrom")['#id'].values
+    methyl_cpgs = methyl_df.columns.values
+    chrom_methyl_cpgs = np.intersect1d(chrom_cpgs, methyl_cpgs)
+    chrom_methyl_df = methyl_df.loc[:,chrom_methyl_cpgs]
+    mi_results = []
+    for cpg in tqdm(chrom_methyl_cpgs[:1000], desc = "Calculating mutual info ", total = len(chrom_methyl_cpgs[:1000])):
+        mi = mutual_info_regression(
+            X = chrom_methyl_df.values,
+            y = chrom_methyl_df[cpg].ravel(),
+            discrete_features=False,
+            random_state = 42,
+            copy = True
+        )
+        mi_results.append(mi)
+    return pd.DataFrame(mi_results, columns= chrom_methyl_cpgs, index = chrom_methyl_cpgs)

@@ -399,7 +399,7 @@ class methylationPrediction:
                     "chr != @target_cpg_chrom"
                     )['#id'].values)
                 to_choose_from = list(set(self.mut_feat_store['cpg_ids']).intersection(diff_chrom_cpgs))
-                # randomly choose 5*predict_with_random_feat CpGs from the store, without replacement
+                # randomly choose predict_with_random_feat CpGs from the store, without replacement
                 random_cpgs = np.random.choice(
                     to_choose_from,
                     size = self.predict_with_random_feat,
@@ -434,19 +434,13 @@ class methylationPrediction:
 
     def make_training_mat(self, cpg_id, train_idx_num):
         if self.baseline == 'scramble':
-            print("scrambling")
             # get the feature matrix for the cpg
             X = self.mut_feat_store['feat_mats'][cpg_id]
             X = X.todense()
             # subset to only training samples
             X_train = pd.DataFrame(X[train_idx_num, :])
-            print("before scrambling")
-            print(X_train.sum(axis = 0).sort_values(ascending=False))
             # scramble the feature matrix
             X_train_scrambled = self.do_scramble(X_train, cpg_id)
-            print("after scrambling")
-            
-            print(X_train_scrambled.sum(axis = 0).sort_values(ascending=False))
             X = csr_matrix(X_train_scrambled)   
         elif self.baseline == 'cov_only':
             # get the feature matrix for the cpg
@@ -468,8 +462,6 @@ class methylationPrediction:
             X = X[train_idx_num, :]
             X_train_df = pd.DataFrame(X.todense(), columns = self.mut_feat_store['feat_names'][cpg_id])
             # select columns that do not contain dataset or gender
-            print("agg feature sums")
-            print(X_train_df.loc[:, X_train_df.columns.str.contains('agg')].sum(axis=0).sort_values(ascending=False))
         else:
             raise ValueError(f"baseline {self.baseline} not supported")
         # subset to only aggregate features and scale if specified
@@ -650,18 +642,29 @@ class methylationPrediction:
             this_dataset_train_samples = list(
                 set(this_dataset_samples).intersection(set(self.train_samples))
                 )
+            this_dataset_validation_samples = list(
+                set(this_dataset_samples).intersection(set(self.validation_samples))
+                )
             this_dataset_test_samples = list(
                 set(this_dataset_samples).intersection(set(self.test_samples))
                 )
             
-            real_methyl_df = self.all_methyl_age_df_t.loc[
+            real_methyl_df_test = self.all_methyl_age_df_t.loc[
                 this_dataset_test_samples, 
                 target_cpgs
                 ]
-            pred_methyl_df = pred_for_corr_df.loc[
+            pred_methyl_df_test = pred_for_corr_df.loc[
                 this_dataset_test_samples, 
                 :]
-            
+            # same for validation samples
+            real_methyl_df_validation = self.all_methyl_age_df_t.loc[
+                this_dataset_validation_samples,
+                target_cpgs
+                ]
+            pred_methyl_df_validation = pred_for_corr_df.loc[
+                this_dataset_validation_samples,
+                :]
+            # same for training samples
             real_methyl_df_train = self.all_methyl_age_df_t.loc[
                 this_dataset_train_samples, 
                 target_cpgs
@@ -670,30 +673,44 @@ class methylationPrediction:
                 this_dataset_train_samples, 
                 :]
             # get the correlation 
-            dataset_pearson = real_methyl_df.corrwith(pred_methyl_df, method = 'pearson')
+            test_methyl_corr = real_methyl_df_test.corrwith(pred_methyl_df_test, method = 'pearson')
             this_dataset_test_age_df = self.all_methyl_age_df_t.loc[
                 this_dataset_test_samples, 
                 'age_at_index'
                 ]
-            dataset_age_pearson = pred_methyl_df.corrwith(this_dataset_test_age_df, method = 'pearson').abs()
+            test_age_corr = pred_methyl_df_test.corrwith(
+                this_dataset_test_age_df, method = 'pearson'
+                )
+            # same for validation samples
+            validation_methyl_corr = real_methyl_df_validation.corrwith(
+                pred_methyl_df_validation, method = 'pearson'
+                )
+            this_dataset_validation_age_df = self.all_methyl_age_df_t.loc[
+                this_dataset_validation_samples,
+                'age_at_index'
+                ]
+            validation_age_corr = pred_methyl_df_validation.corrwith(
+                this_dataset_validation_age_df, method = 'pearson'
+                )
             # same for training samples
-            train_dataset_pearson = real_methyl_df_train.corrwith(
+            train_methyl_corr = real_methyl_df_train.corrwith(
                 pred_methyl_df_train, method = 'pearson'
                 ) 
             this_dataset_train_age_df = self.all_methyl_age_df_t.loc[
                 this_dataset_train_samples, 
                 'age_at_index'
                 ]            
-            train_actual_methyl_age_pearson = real_methyl_df_train.corrwith(
+            train_age_corr = real_methyl_df_train.corrwith(
                 this_dataset_train_age_df, method = 'pearson'
-                ).abs()
-            
+                )
             # create dataframe
             dataset_perf_df = pd.DataFrame({
-                'AvP_methyl_pearson': dataset_pearson,
-                'Pmethyl_v_Age_pearson_abs': dataset_age_pearson,
-                'train_AvP_methyl_pearson': train_dataset_pearson,
-                'train_Amethyl_v_Age_pearson_abs': train_actual_methyl_age_pearson,
+                'AvP_methyl_pearson_test': test_methyl_corr,
+                'AvP_methyl_pearson_train': train_methyl_corr,
+                'AvP_methyl_pearson_validation': validation_methyl_corr,
+                'PvAge_pearson_test': test_age_corr,
+                'PvAge_pearson_train': train_age_corr,
+                'PvAge_pearson_validation': validation_age_corr
                 })
             dataset_perf_df['dataset'] = dataset
             dataset_perf_df['cpg'] = target_train_names
