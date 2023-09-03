@@ -50,14 +50,14 @@ class analyzeComethylation:
         """
         all_metrics_df['abs_delta_mf_median'] = all_metrics_df['delta_mf_median'].abs()
         # subset to only metrics we need
-        all_metrics_df = all_metrics_df[['mut_event', 'sample', 'delta_mf_median', 'abs_delta_mf_median', 'measured_site_dist', 'is_background', 'index_event', 'mutated_sample']] 
+        all_metrics_df = all_metrics_df[['mut_event', 'delta_mf_median', 'abs_delta_mf_median', 'measured_site_dist', 'is_background', 'index_event', 'mutated_sample']]  #'sample', 
         # for each distance, get the mean and median of the delta_mf_median and abs_delta_mf_median of sites within that distance
         mean_metric_by_dist_dfs = []
         for dist in absolute_distances:
             # subset to only sites within the distance
             subset_df = all_metrics_df.loc[all_metrics_df['measured_site_dist'].abs() <= dist]
             # group by mutation event and sample
-            grouped_subset_df = subset_df.groupby(['mut_event', 'sample'])
+            grouped_subset_df = subset_df.groupby(['mut_event'])#, 'sample'])
             
             # get the mean and median of the delta_mf_median and abs_delta_mf_median
             mean_by_sample = grouped_subset_df[['delta_mf_median', 'abs_delta_mf_median']].mean()
@@ -67,16 +67,16 @@ class analyzeComethylation:
             
             # get weighted means
             # linear
-            weighted_mean_by_sample = grouped_subset_df.apply(
+            """weighted_mean_by_sample = grouped_subset_df.apply(
                 lambda x: np.average(x['delta_mf_median'], weights=(1/x['measured_site_dist'].abs()))
-                ).to_frame().rename(columns={0: 'weighted_mean_dmf'})
+                ).to_frame().rename(columns={0: 'weighted_mean_dmf'})"""
             """abs_weighted_mean_by_sample = grouped_subset_df.apply(
                 lambda x: np.average(x['abs_delta_mf_median'], weights=(1/x['measured_site_dist'].abs()))
                 ).to_frame().rename(columns={0: 'weighted_mean_abs_dmf'})"""
             # log
-            log_weighted_mean_by_sample = grouped_subset_df.apply(
+            """log_weighted_mean_by_sample = grouped_subset_df.apply(
                 lambda x: np.average(x['delta_mf_median'], weights=(1/np.log10(x['measured_site_dist'].abs())))
-                ).to_frame().rename(columns={0: 'log_weighted_mean_dmf'})
+                ).to_frame().rename(columns={0: 'log_weighted_mean_dmf'})"""
             """
             log_abs_weighted_mean_by_sample = grouped_subset_df.apply(
                 lambda x: np.average(x['abs_delta_mf_median'], weights=(1/np.log(x['measured_site_dist'].abs())))
@@ -89,8 +89,8 @@ class analyzeComethylation:
             mean_metrics_df = mean_by_sample.merge(median_by_sample, left_index=True, right_index=True)
             mean_metrics_df['distance'] = dist
             # merge weighted mean and median
-            mean_metrics_df = mean_metrics_df.merge(weighted_mean_by_sample, left_index=True, right_index=True)
-            mean_metrics_df = mean_metrics_df.merge(log_weighted_mean_by_sample, left_index=True, right_index=True)
+            """mean_metrics_df = mean_metrics_df.merge(weighted_mean_by_sample, left_index=True, right_index=True)
+            mean_metrics_df = mean_metrics_df.merge(log_weighted_mean_by_sample, left_index=True, right_index=True)"""
             """mean_metrics_df = mean_metrics_df.merge(abs_weighted_mean_by_sample, left_index=True, right_index=True)
             mean_metrics_df = mean_metrics_df.merge(log_weighted_mean_by_sample, left_index=True, right_index=True)
             mean_metrics_df = mean_metrics_df.merge(log_abs_weighted_mean_by_sample, left_index=True, right_index=True)"""
@@ -99,8 +99,8 @@ class analyzeComethylation:
         # combine all the mean metrics dfs
         mean_metrics_by_dist_df = pd.concat(mean_metric_by_dist_dfs, axis=0)
 
-        mut_event_to_background_map = all_metrics_df.drop_duplicates(subset=['mut_event', 'sample'])
-        mut_event_to_background_map.set_index(['mut_event', 'sample'], inplace=True)
+        mut_event_to_background_map = all_metrics_df.drop_duplicates(subset=['mut_event'])
+        mut_event_to_background_map.set_index(['mut_event'], inplace=True)
         mean_metrics_by_dist_df = mean_metrics_by_dist_df.merge(
             mut_event_to_background_map[['is_background', 'index_event', 'mutated_sample']], 
             left_index=True, right_index=True
@@ -374,6 +374,7 @@ class analyzeComethylation:
         num_top_muts: int = 1000,
         smoothing_window_size_dist: int = 10000,
         smoothing_window_size_corr: int = 300,
+        corr_dist: str = 'measured_site_dist',
         dist: int = 100000,
         plot_bg: bool = True,
         out_fn: str = None,
@@ -399,15 +400,17 @@ class analyzeComethylation:
             neg_indices = sorted_df.index[-num_top_muts:]
             pos_indices = sorted_df.index[:num_top_muts]
         # get the 'mut_event' identifiers for these top events
+        ################# CHANGE indices if want positive #############################
         biggest_neg_effect = sorted_df.loc[neg_indices, 'mut_event'].values
-        biggest_pos_effect = sorted_df.loc[pos_indices, 'mut_event'].values
+        ###########################################################
+        """biggest_pos_effect = sorted_df.loc[pos_indices, 'mut_event'].values"""
         # in all_metrics, select these mut events
         biggest_neg_to_plot = all_metrics_df.loc[
             all_metrics_df['mutated_sample'] == True
             ].query('mut_event in @biggest_neg_effect or index_event in @biggest_neg_effect')
-        biggest_pos_to_plot = all_metrics_df.loc[
+        """biggest_pos_to_plot = all_metrics_df.loc[
             all_metrics_df['mutated_sample'] == True
-            ].query('mut_event in @biggest_pos_effect or index_event in @biggest_pos_effect')
+            ].query('mut_event in @biggest_pos_effect or index_event in @biggest_pos_effect')"""
         
         def custom_agg1(column):
             return column.quantile(0.4)
@@ -437,46 +440,46 @@ class analyzeComethylation:
             biggest_neg_to_plot_fg = biggest_neg_to_plot_fg.groupby('mut_event').apply(
                 lambda x: x.sort_values('abs_genomic_dist', ascending=True).reset_index(drop=True)
                 ).reset_index(names=['mut_event2', 'rank_order_dist'])
-            biggest_neg_to_plot_fg.rename(columns={'measured_site_dist': 'rank_order_corr'}, inplace=True)
+            biggest_neg_to_plot_fg.rename(columns={corr_dist: 'correlation_distance'}, inplace=True)
             # same for pos
-            biggest_pos_to_plot_fg = get_genomic_dist_from_corr(
+            """biggest_pos_to_plot_fg = get_genomic_dist_from_corr(
                 biggest_pos_to_plot.query("is_background == False"), illumina_cpg_locs_df
                 ).drop_duplicates(['measured_site', 'mut_event'])
             biggest_pos_to_plot_fg = biggest_pos_to_plot_fg.groupby('mut_event').apply(
                 lambda x: x.sort_values('abs_genomic_dist', ascending=True).reset_index(drop=True)
                 ).reset_index(names=['mut_event2', 'rank_order_dist'])
-            biggest_pos_to_plot_fg.rename(columns={'measured_site_dist': 'rank_order_corr'}, inplace=True)
+            biggest_pos_to_plot_fg.rename(columns={corr_dist: 'correlation_distance'}, inplace=True)"""
             # sort the DataFrames by rank_order_corr and drop duplicates
             biggest_neg_to_plot_sorted_corr = biggest_neg_to_plot_fg.query(
                 "is_background == False"
-                ).sort_values(by='rank_order_corr', ascending=False).drop_duplicates()
-            biggest_pos_to_plot_sorted_corr = biggest_pos_to_plot_fg.query(
+                ).sort_values(by='correlation_distance', ascending=False).drop_duplicates()
+            """biggest_pos_to_plot_sorted_corr = biggest_pos_to_plot_fg.query(
                 "is_background == False"
-                ).sort_values(by='rank_order_corr', ascending=False).drop_duplicates()
+                ).sort_values(by='correlation_distance', ascending=False).drop_duplicates()"""
             # within each rolling window, calculate the median, 40th and 60th percentile
             biggest_neg_to_plot_smoothed_corr = (
-                biggest_neg_to_plot_sorted_corr.set_index('rank_order_corr')
+                biggest_neg_to_plot_sorted_corr.set_index('correlation_distance')
                 .rolling(smoothing_window_size_corr, center=True, min_periods=0, closed = 'left')
                 ['delta_mf_median'].agg([custom_agg1, custom_agg2, custom_agg3]).reset_index()
                 .rename(columns={'custom_agg1': '5th', 'custom_agg2': 'median', 'custom_agg3': '95th'})
                 #.agg(['mean',  'std', 'count']).reset_index()
                 ).iloc[::num_top_muts, :]
             # keep only every 1000th row
-            biggest_pos_to_plot_smoothed_corr = (
-                biggest_pos_to_plot_sorted_corr.set_index('rank_order_corr')
+            """biggest_pos_to_plot_smoothed_corr = (
+                biggest_pos_to_plot_sorted_corr.set_index('correlation_distance')
                 .rolling(smoothing_window_size_corr, center=True, min_periods=0, closed = 'left')
                 ['delta_mf_median'].agg([custom_agg1, custom_agg2, custom_agg3]).reset_index()
                 .rename(columns={'custom_agg1': '5th', 'custom_agg2': 'median', 'custom_agg3': '95th'})
                 #.agg(['mean',  'std', 'count']).reset_index()
-                ).iloc[::num_top_muts, :]
+                ).iloc[::num_top_muts, :]"""
             # then do the same for distance measure
             dist_measure = 'abs_genomic_dist' if not rank_order_dist else 'rank_order_dist'
             biggest_neg_to_plot_sorted_dist = biggest_neg_to_plot_fg.query(
                 "is_background == False"
                 ).sort_values(by=dist_measure, ascending=False).drop_duplicates()
-            biggest_pos_to_plot_sorted_dist = biggest_pos_to_plot_fg.query(
+            """biggest_pos_to_plot_sorted_dist = biggest_pos_to_plot_fg.query(
                 "is_background == False"
-                ).sort_values(by=dist_measure, ascending=False).drop_duplicates()
+                ).sort_values(by=dist_measure, ascending=False).drop_duplicates()"""
             biggest_neg_to_plot_smoothed_dist = (
                 biggest_neg_to_plot_sorted_dist.set_index(dist_measure)
                 .rolling(smoothing_window_size_dist, center=True, min_periods=0, closed = 'left')
@@ -484,18 +487,17 @@ class analyzeComethylation:
                 .rename(columns={'custom_agg1': '5th', 'custom_agg2': 'median', 'custom_agg3': '95th'})
                 #.agg(['mean',  'std', 'count']).reset_index()
                 ).iloc[::num_top_muts, :]
-            biggest_pos_to_plot_smoothed_dist = (
+            """biggest_pos_to_plot_smoothed_dist = (
                 biggest_pos_to_plot_sorted_dist.set_index(dist_measure)
                 .rolling(smoothing_window_size_dist, center=True, min_periods=0, closed = 'left')
                 ['delta_mf_median'].agg([custom_agg1, custom_agg2, custom_agg3]).reset_index()
                 .rename(columns={'custom_agg1': '5th', 'custom_agg2': 'median', 'custom_agg3': '95th'})
                 #.agg(['mean',  'std', 'count']).reset_index()
-                ).iloc[::num_top_muts, :]
+                ).iloc[::num_top_muts, :]"""
             fig, axes = plt.subplots(figsize=(10, 6), dpi = 100)
             axes_top = axes.twiny()
             #fig2, axes2 = plt.subplots(figsize=(8, 6), dpi = 100, sharex='col', sharey='row')
             # select 4 colors from a color map of maroon
-            mut_colors = sns.color_palette('Reds', n_colors=4)
             sns.set_context("paper")
             """axes = axes.flatten()
             # show y and x tick labels on all subplots
@@ -504,39 +506,40 @@ class analyzeComethylation:
                 axes[i].yaxis.set_tick_params(labelleft=True)"""
             
             # positive corr
-            axes.plot(
-                biggest_pos_to_plot_smoothed_corr['rank_order_corr'],
+            """axes.plot(
+                biggest_pos_to_plot_smoothed_corr['correlation_distance'],
                 biggest_pos_to_plot_smoothed_corr['median'],
                 color=mut_colors[0], label = 'Methylation-coherence Top 25%',
                 linewidth = 1.5
                 )
             
             axes.fill_between(
-                biggest_pos_to_plot_smoothed_corr['rank_order_corr'],
+                biggest_pos_to_plot_smoothed_corr['correlation_distance'],
                 biggest_pos_to_plot_smoothed_corr['5th'],
                 biggest_pos_to_plot_smoothed_corr['95th'],
                 color=mut_colors[0], alpha=0.2, rasterized=True
-                )
+                )"""
             
-            axes.set_xlabel('Methylation-coherence distance (rank order)')
-            axes.set_ylabel('$\Delta$MF')
+            
             # negative corr
             axes.plot(
-                biggest_neg_to_plot_smoothed_corr['rank_order_corr'],
+                biggest_neg_to_plot_smoothed_corr['correlation_distance'],
                 biggest_neg_to_plot_smoothed_corr['median'],
-                color=mut_colors[2], label = 'Methylation-coherence Bottom 25%',
+                color='maroon', label = 'Methylation-coherence Bottom 25%',
                 linewidth = 1.5
                 )
-            axes.fill_between(
-                biggest_neg_to_plot_smoothed_corr['rank_order_corr'],
+            """axes.fill_between(
+                biggest_neg_to_plot_smoothed_corr['correlation_distance'],
                 biggest_neg_to_plot_smoothed_corr['5th'],
                 biggest_neg_to_plot_smoothed_corr['95th'],
                 color=mut_colors[2], alpha=0.2, rasterized=True
-                )
+                )"""
+            axes.set_xlabel('Methylation-coherence distance (rank order)')
+            axes.set_ylabel('$\Delta$MF')
             #axes[2].set_xlabel('Correlation distance (rank order)')
             #axes[2].set_ylabel('$\Delta$MF')            
             # positive dist  
-            axes_top.plot(
+            """axes_top.plot(
                 biggest_pos_to_plot_smoothed_dist[dist_measure] / 1000,
                 biggest_pos_to_plot_smoothed_dist['median'],
                 color=mut_colors[0], label = 'Genomic distance Top 25%',
@@ -547,22 +550,23 @@ class analyzeComethylation:
                 biggest_pos_to_plot_smoothed_dist['5th'],
                 biggest_pos_to_plot_smoothed_dist['95th'],
                 color=mut_colors[0], alpha=0.2, rasterized=True
-                )
-            axes_top.set_xlabel('Genomic distance (kb)')
+                )"""
             #axes[1].set_ylabel('')
             # negative dist
             axes_top.plot(
                 biggest_neg_to_plot_smoothed_dist[dist_measure] / 1000,
                 biggest_neg_to_plot_smoothed_dist['median'],
-                color=mut_colors[2], label = 'Genomic distance Bottom 25%',
+                color='maroon', label = 'Genomic distance Bottom 25%',
                 linewidth = 1.5, linestyle = 'dashed'
                 )
-            axes_top.fill_between(
+            axes_top.set_xlabel('Genomic distance (kb)')
+            
+            """axes_top.fill_between(
                 biggest_neg_to_plot_smoothed_dist[dist_measure] / 1000,
                 biggest_neg_to_plot_smoothed_dist['5th'],
                 biggest_neg_to_plot_smoothed_dist['95th'],
                 color=mut_colors[2], alpha=0.2, rasterized=True
-                )
+                )"""
             # show legend
             axes.legend(loc='upper right', title='Mutation event')
             axes_top.legend(loc='upper left', title='Mutation event')
@@ -570,87 +574,86 @@ class analyzeComethylation:
             #axes[3].set_ylabel('')
             if plot_bg:
                 biggest_neg_bg_to_plot = get_genomic_dist_from_corr(
-                    biggest_neg_to_plot.query("is_background == True").head(len(biggest_neg_to_plot_sorted_dist)), illumina_cpg_locs_df
+                    biggest_neg_to_plot.query("is_background == True").head(len(biggest_neg_to_plot_sorted_dist * 5)), illumina_cpg_locs_df
                     ).drop_duplicates(['measured_site', 'mut_event'])
                 biggest_neg_bg_to_plot = biggest_neg_bg_to_plot.groupby('mut_event').apply(
                     lambda x: x.sort_values('abs_genomic_dist', ascending=True).reset_index(drop=True)
                     ).reset_index(names=['mut_event2', 'rank_order_dist'])
-                biggest_neg_bg_to_plot.rename(columns={'measured_site_dist': 'rank_order_corr'}, inplace=True)
+                biggest_neg_bg_to_plot.rename(columns={corr_dist: 'correlation_distance'}, inplace=True)
                 # pos
-                biggest_pos_bg_to_plot = get_genomic_dist_from_corr(
+                """biggest_pos_bg_to_plot = get_genomic_dist_from_corr(
                     biggest_pos_to_plot.query("is_background == True").head(len(biggest_neg_to_plot_sorted_dist)), illumina_cpg_locs_df
                     ).drop_duplicates(['measured_site', 'mut_event'])
                 biggest_pos_bg_to_plot = biggest_pos_bg_to_plot.groupby('mut_event').apply(
                     lambda x: x.sort_values('abs_genomic_dist', ascending=True).reset_index(drop=True)
                     ).reset_index(names=['mut_event2', 'rank_order_dist'])
-                biggest_pos_bg_to_plot.rename(columns={'measured_site_dist': 'rank_order_corr'}, inplace=True)
+                biggest_pos_bg_to_plot.rename(columns={corr_dist: 'correlation_distance'}, inplace=True)"""
                 # correlation
                 biggest_neg_bg_to_plot_sorted_corr = biggest_neg_bg_to_plot.query(
                     "is_background == True"
-                    ).sort_values(by='rank_order_corr', ascending=False).drop_duplicates()
-                biggest_pos_bg_to_plot_sorted_corr = biggest_pos_bg_to_plot.query(
+                    ).sort_values(by='correlation_distance', ascending=False).drop_duplicates()
+                """biggest_pos_bg_to_plot_sorted_corr = biggest_pos_bg_to_plot.query(
                     "is_background == True"
-                    ).sort_values(by='rank_order_corr', ascending=False).drop_duplicates()
+                    ).sort_values(by='correlation_distance', ascending=False).drop_duplicates()"""
                 bg_biggest_neg_to_plot_smoothed_corr = (
-                    biggest_neg_bg_to_plot_sorted_corr.set_index('rank_order_corr')
+                    biggest_neg_bg_to_plot_sorted_corr.set_index('correlation_distance')
                     .rolling(smoothing_window_size_corr, center=True, min_periods=0, closed = 'left')
                     ['delta_mf_median'].agg([custom_agg1, custom_agg2, custom_agg3]).reset_index()
                     .rename(columns={'custom_agg1': '5th', 'custom_agg2': 'median', 'custom_agg3': '95th'})
                     ).iloc[::num_top_muts, :]
-                bg_biggest_pos_to_plot_smoothed_corr = (
-                    biggest_pos_bg_to_plot_sorted_corr.set_index('rank_order_corr')
+                """bg_biggest_pos_to_plot_smoothed_corr = (
+                    biggest_pos_bg_to_plot_sorted_corr.set_index('correlation_distance')
                     .rolling(smoothing_window_size_corr, center=True, min_periods=0, closed = 'left')
                     ['delta_mf_median'].agg([custom_agg1, custom_agg2, custom_agg3]).reset_index()
                     .rename(columns={'custom_agg1': '5th', 'custom_agg2': 'median', 'custom_agg3': '95th'})
-                    ).iloc[::num_top_muts, :]
+                    ).iloc[::num_top_muts, :]"""
                 # distance
                 biggest_neg_bg_to_plot_sorted_dist = biggest_neg_bg_to_plot.query(
                     "is_background == True"
                     ).sort_values(by=dist_measure, ascending=False).drop_duplicates()
-                biggest_pos_bg_to_plot_sorted_dist = biggest_pos_bg_to_plot.query(
+                """biggest_pos_bg_to_plot_sorted_dist = biggest_pos_bg_to_plot.query(
                     "is_background == True"
-                    ).sort_values(by=dist_measure, ascending=False).drop_duplicates()
+                    ).sort_values(by=dist_measure, ascending=False).drop_duplicates()"""
                 bg_biggest_neg_to_plot_smoothed_dist = (
                     biggest_neg_bg_to_plot_sorted_dist.set_index(dist_measure)
                     .rolling(smoothing_window_size_dist, center=True, min_periods=0, closed = 'left')
                     ['delta_mf_median'].agg([custom_agg1, custom_agg2, custom_agg3]).reset_index()
                     .rename(columns={'custom_agg1': '5th', 'custom_agg2': 'median', 'custom_agg3': '95th'})
                     )
-                bg_biggest_pos_to_plot_smoothed_dist = (
+                """bg_biggest_pos_to_plot_smoothed_dist = (
                     biggest_pos_bg_to_plot_sorted_dist.set_index(dist_measure)
                     .rolling(smoothing_window_size_dist, center=True, min_periods=0,  closed = 'left')
                     ['delta_mf_median'].agg([custom_agg1, custom_agg2, custom_agg3]).reset_index()
                     .rename(columns={'custom_agg1': '5th', 'custom_agg2': 'median', 'custom_agg3': '95th'})
-                    )
+                    )"""
                 # positive corr
-                bg_colors = sns.color_palette('Blues', n_colors=4)
-                axes.plot(
-                    bg_biggest_pos_to_plot_smoothed_corr['rank_order_corr'],
+                """axes.plot(
+                    bg_biggest_pos_to_plot_smoothed_corr['correlation_distance'],
                     bg_biggest_pos_to_plot_smoothed_corr['median'],
                     color=bg_colors[0], label = '(BG) Methylation-coherence Top 25%',
                     linewidth = 1.5
                     )
                 axes.fill_between(
-                    bg_biggest_pos_to_plot_smoothed_corr['rank_order_corr'],
+                    bg_biggest_pos_to_plot_smoothed_corr['correlation_distance'],
                     bg_biggest_pos_to_plot_smoothed_corr['5th'],
                     bg_biggest_pos_to_plot_smoothed_corr['95th'],
                     color=bg_colors[0], alpha=0.2, rasterized=True
-                    )
+                    )"""
                 # negative corr
                 axes.plot(
-                    bg_biggest_neg_to_plot_smoothed_corr['rank_order_corr'],
+                    bg_biggest_neg_to_plot_smoothed_corr['correlation_distance'],
                     bg_biggest_neg_to_plot_smoothed_corr['median'],
-                    color=bg_colors[2], label = '(BG) Methylation-coherence Bottom 25%',
+                    color='steelblue', label = '(BG) Methylation-coherence Bottom 25%',
                     linewidth = 1.5
                     )
-                axes[2].fill_between(
-                    bg_biggest_neg_to_plot_smoothed_corr['rank_order_corr'],
+                """axes.fill_between(
+                    bg_biggest_neg_to_plot_smoothed_corr['correlation_distance'],
                     bg_biggest_neg_to_plot_smoothed_corr['5th'],
                     bg_biggest_neg_to_plot_smoothed_corr['95th'],
                     color=bg_colors[2], alpha=0.2, rasterized=True
-                    )
+                    )"""
                 # ositive dist  
-                axes_top.plot(
+                """axes_top.plot(
                     bg_biggest_pos_to_plot_smoothed_dist[dist_measure] /1000,
                     bg_biggest_pos_to_plot_smoothed_dist['median'],
                     color=bg_colors[0], label = '(BG) Genomic distance Top 25%',
@@ -661,28 +664,28 @@ class analyzeComethylation:
                     bg_biggest_pos_to_plot_smoothed_dist['5th'],
                     bg_biggest_pos_to_plot_smoothed_dist['95th'],
                     color=bg_colors[0], alpha=0.2, rasterized=True
-                    )
+                    )"""
                 # negative dist
                 axes_top.plot(
                     bg_biggest_neg_to_plot_smoothed_dist[dist_measure] / 1000,
                     bg_biggest_neg_to_plot_smoothed_dist['median'],
-                    color=bg_colors[2], label = '(BG) Genomic distance Bottom 25%',
+                    color='steelblue', label = '(BG) Genomic distance Bottom 25%',
                     linewidth = 1.5, linestyle = 'dashed'
                     )
-                axes_top.fill_between(
+                """axes_top.fill_between(
                     bg_biggest_neg_to_plot_smoothed_dist[dist_measure] / 1000,
                     bg_biggest_neg_to_plot_smoothed_dist['5th'],
                     bg_biggest_neg_to_plot_smoothed_dist['95th'],
                     color=bg_colors[2], alpha=0.2, rasterized=True
-                    )
+                    )"""
                 # show legend
                 axes.legend(loc='upper right', title='Mutation event')
                 axes_top.legend(loc='upper left', title='Mutation event')
                 fig.savefig(fname=out_fn, format='svg', dpi = 300, bbox_inches='tight') 
-                return biggest_pos_to_plot_smoothed_corr, biggest_neg_to_plot_smoothed_corr, biggest_pos_to_plot_smoothed_dist, biggest_neg_to_plot_smoothed_dist, bg_biggest_pos_to_plot_smoothed_corr, bg_biggest_neg_to_plot_smoothed_corr, bg_biggest_pos_to_plot_smoothed_dist, bg_biggest_neg_to_plot_smoothed_dist
+                return biggest_neg_to_plot_smoothed_corr, biggest_neg_to_plot_smoothed_dist, bg_biggest_neg_to_plot_smoothed_corr, bg_biggest_neg_to_plot_smoothed_dist
             
             fig.savefig(fname=out_fn, format='svg', dpi = 300, bbox_inches='tight') 
-            return biggest_pos_to_plot_smoothed_corr, biggest_neg_to_plot_smoothed_corr, biggest_pos_to_plot_smoothed_dist, biggest_neg_to_plot_smoothed_dist
+            return  biggest_neg_to_plot_smoothed_corr, biggest_neg_to_plot_smoothed_dist
         else:
             # sort the DataFrames by rank_order_corr and drop duplicates
             biggest_neg_to_plot_sorted = biggest_neg_to_plot.query(

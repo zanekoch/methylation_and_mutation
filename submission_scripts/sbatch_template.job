@@ -1,11 +1,11 @@
 #!/bin/bash
-#SBATCH --array=0-273%20
+#SBATCH --array=0-10
 #SBATCH --partition=nrnb-compute
 ##SBATCH --account=nrnb-gpu
 #SBATCH --mem=128GB
-#SBATCH --time=12:00:00
-#SBATCH --job-name=tcgaSoMage
-#SBATCH --cpus-per-task=1
+#SBATCH --time=2:00:00
+#SBATCH --job-name=CTtcga
+#SBATCH --cpus-per-task=16
 ##SBATCH --gres=gpu:1 
 #SBATCH --ntasks=1
 eval "$(conda shell.bash hook)"
@@ -22,6 +22,45 @@ nvidia-smi
 echo "was nvidia-smi successful?"
 
 
+# CpG burden clocks #
+
+############################################
+# create burden counts
+: '
+
+chroms=(1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22)
+srun python /cellar/users/zkoch/methylation_and_mutation/submission_scripts/create_cpg_burden_features.py  --consortium tcga --max_dist 1000 --mut_matrix_dir /cellar/users/zkoch/methylation_and_mutation/output_dirs/082823_residual_burden/tcga_CT_mut_wide_matrices --output_mut_burden_dir /cellar/users/zkoch/methylation_and_mutation/output_dirs/082823_residual_burden/tcga_CTmut_burden_feat_1kb_window --chrom ${chroms[$SLURM_ARRAY_TASK_ID]}
+'
+
+############################################
+############################################
+# train burden clocks
+tissues=(LGG THCA UCEC STAD LIHC CESC COAD KIRP THYM BRCA HNSC) #PAAD BLCA LUAD PRAD KIRC SARC PCPG GBM ESCA SKCM LUSC LAML allTissues 
+top_cpg_num_thousand=10
+srun python /cellar/users/zkoch/methylation_and_mutation/submission_scripts/train_burden_epi_clocks.py --consortium TCGA --tissue ${tissues[$SLURM_ARRAY_TASK_ID]} --burden_fn /cellar/users/zkoch/methylation_and_mutation/output_dirs/082823_residual_burden/${top_cpg_num_thousand}k_cpgs_moreTissues_QnormMethyl_CT/${tissues[$SLURM_ARRAY_TASK_ID]}_chosen_cpg_burden.parquet --out_dir /cellar/users/zkoch/methylation_and_mutation/output_dirs/082823_residual_burden/${top_cpg_num_thousand}k_cpgs_moreTissues_QnormMethyl_CT --use_qnorm_methyl False --hold_out_high_burden_samples False
+
+: '
+tissues=(PRAD PACA allTissues) #HNSC allTissues
+top_cpg_num_thousand=10
+srun python /cellar/users/zkoch/methylation_and_mutation/submission_scripts/train_burden_epi_clocks.py --consortium ICGC --tissue ${tissues[$SLURM_ARRAY_TASK_ID]} --burden_fn /cellar/users/zkoch/methylation_and_mutation/output_dirs/082823_residual_burden/icgc_${top_cpg_num_thousand}k_cpgs_qnorm/${tissues[$SLURM_ARRAY_TASK_ID]}_chosen_cpg_burden.parquet --out_dir /cellar/users/zkoch/methylation_and_mutation/output_dirs/082823_residual_burden/icgc_${top_cpg_num_thousand}k_cpgs_qnorm/ --use_qnorm_methyl False
+
+'
+############################################
+
+
+
+
+
+
+# train clock on CpGs that are correlated with local mutaiton burden
+: '
+tissues=(PRAD PACA PRAD PACA PRAD PACA PRAD PACA PRAD PACA PRAD PACA)
+num_cpgs_per_clock=(5000 5000 5000 5000 5000 5000 10000 10000 10000 10000 10000 10000)
+corr_dirs=(/cellar/users/zkoch/methylation_and_mutation/output_dirs/081423_linear_methyl_pred_output/icgc_mut_burden_feat_5000kb_window_corrs /cellar/users/zkoch/methylation_and_mutation/output_dirs/081423_linear_methyl_pred_output/icgc_mut_burden_feat_5000kb_window_corrs /cellar/users/zkoch/methylation_and_mutation/output_dirs/081423_linear_methyl_pred_output/icgc_mut_burden_feat_0.3coherence_corrs /cellar/users/zkoch/methylation_and_mutation/output_dirs/081423_linear_methyl_pred_output/icgc_mut_burden_feat_0.3coherence_corrs /cellar/users/zkoch/methylation_and_mutation/output_dirs/081423_linear_methyl_pred_output/icgc_mut_burden_feat_0.4coherence_corrs /cellar/users/zkoch/methylation_and_mutation/output_dirs/081423_linear_methyl_pred_output/icgc_mut_burden_feat_0.4coherence_corrs /cellar/users/zkoch/methylation_and_mutation/output_dirs/081423_linear_methyl_pred_output/icgc_mut_burden_feat_5000kb_window_corrs /cellar/users/zkoch/methylation_and_mutation/output_dirs/081423_linear_methyl_pred_output/icgc_mut_burden_feat_5000kb_window_corrs /cellar/users/zkoch/methylation_and_mutation/output_dirs/081423_linear_methyl_pred_output/icgc_mut_burden_feat_0.3coherence_corrs /cellar/users/zkoch/methylation_and_mutation/output_dirs/081423_linear_methyl_pred_output/icgc_mut_burden_feat_0.3coherence_corrs /cellar/users/zkoch/methylation_and_mutation/output_dirs/081423_linear_methyl_pred_output/icgc_mut_burden_feat_0.4coherence_corrs /cellar/users/zkoch/methylation_and_mutation/output_dirs/081423_linear_methyl_pred_output/icgc_mut_burden_feat_0.4coherence_corrs)
+start_cpg_set_num=0
+end_cpg_set_num=10
+srun python /cellar/users/zkoch/methylation_and_mutation/submission_scripts/train_clocks_using_local_burden_corr_cpgs.py --consortium icgc --tissue ${tissues[$SLURM_ARRAY_TASK_ID]} --corr_dir ${corr_dirs[$SLURM_ARRAY_TASK_ID]} --num_cpgs ${num_cpgs_per_clock[$SLURM_ARRAY_TASK_ID]} --start_cpg_set_num $start_cpg_set_num --end_cpg_set_num $end_cpg_set_num --output_fn ${corr_dirs[$SLURM_ARRAY_TASK_ID]}/${tissues[$SLURM_ARRAY_TASK_ID]}_${num_cpgs_per_clock[$SLURM_ARRAY_TASK_ID]}cpgs_${start_cpg_set_num}-${end_cpg_set_num}setNums.pkl
+'
 ############################################
 # create motif occurences
 #srun python /cellar/users/zkoch/methylation_and_mutation/source_files/methylation_motifs.py --meme_dir /cellar/users/zkoch/methylation_and_mutation/data/methylation_motifs_weiWang/wang_methyl_motifs_313 --surrounding_seq_fasta_fn /cellar/users/zkoch/methylation_and_mutation/data/methylation_motifs_weiWang/15kb_seq_each_side_each_illum_cpg.fasta --out_dir /cellar/users/zkoch/methylation_and_mutation/data/methylation_motifs_weiWang/motif_occurences --partition_num ${SLURM_ARRAY_TASK_ID} --num_partitions 20
@@ -68,7 +107,7 @@ srun python /cellar/users/zkoch/methylation_and_mutation/submission_scripts/run_
 
 # 4:45 to do 400 => to do 2000 CpGs will take 19 hours
 
-
+: '
 start_top_cpgs_values=()
 for ((i = 0; i < 273000; i += 1000)); do
     start_top_cpgs_values+=($i)
@@ -98,7 +137,7 @@ srun python /cellar/users/zkoch/methylation_and_mutation/submission_scripts/run_
 --scale_counts_within_dataset False \
 --predict_with_random_feat -1 \
 --use-gpu False
-
+'
 ############################################
 
 ############################################

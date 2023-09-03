@@ -179,15 +179,20 @@ def read_icgc_data() -> tuple:
     covariate_fn = "/cellar/users/zkoch/methylation_and_mutation/data/icgc_matrixQTL_data/icgc_cov_for_matrixQTL.csv.gz"
     return icgc_mut_w_age_df, illumina_cpg_locs_df, icgc_methyl_age_df_t, matrix_qtl_dir, covariate_fn
 
-def read_tcga_data() -> tuple:
+def read_tcga_data(qnorm_methylation = True) -> tuple:
     print("reading in data")
     # read in data
     dependency_f_dir = "/cellar/users/zkoch/methylation_and_mutation/dependency_files"
     data_dir = "/cellar/users/zkoch/methylation_and_mutation/data/final_tcga_data"
+    if qnorm_methylation:
+        methyl_dir = os.path.join(data_dir, 'dropped3SD_qnormed_methylation'),
+    else:
+        methyl_dir = os.path.join(data_dir, 'processed_methylation_noDropNaN'),
+    
     illumina_cpg_locs_df, all_mut_df, _, all_methyl_df_t, all_meta_df, _ = main(
         illum_cpg_locs_fn = os.path.join(dependency_f_dir, "illumina_cpg_450k_locations.csv"),
         out_dir = '',
-        methyl_dir = os.path.join(data_dir, 'dropped3SD_qnormed_methylation'),
+        methyl_dir = methyl_dir,
         mut_fn = os.path.join(data_dir, "PANCAN_mut.tsv.gz"),
         meta_fn = os.path.join(data_dir, "PANCAN_meta.tsv")
         )
@@ -195,6 +200,18 @@ def read_tcga_data() -> tuple:
     all_mut_w_age_df, all_methyl_age_df_t = utils.add_ages_to_mut_and_methyl(
         all_mut_df, all_meta_df, all_methyl_df_t
         )
+    if not qnorm_methylation:
+        # do imputation
+        def fill_nan2(df):
+            for col in df.columns[df.isnull().any(axis=0)]:
+                df[col].fillna(df[col].mean(),inplace=True)
+            return df
+        # do mean imputation by column
+        all_methyl_age_df_t_filled = fill_nan2(all_methyl_age_df_t.iloc[:, 3:])
+        all_methyl_age_df_t = pd.concat(
+            [all_methyl_age_df_t.iloc[:, :3], all_methyl_age_df_t_filled],
+            axis=1)
+        
     matrix_qtl_dir = "/cellar/users/zkoch/methylation_and_mutation/data/matrixQtl_data/tcga_clumped_muts_CV"
     covariate_fn = "/cellar/users/zkoch/methylation_and_mutation/data/matrixQtl_data/tcga_covariates.csv.gz"
     return all_mut_w_age_df, illumina_cpg_locs_df, all_methyl_age_df_t, matrix_qtl_dir, covariate_fn
