@@ -12,7 +12,6 @@ import sys
 from scipy.stats import spearmanr
 from scipy.sparse import csr_matrix, vstack
 
-
 class methylationPrediction:
     """
     A class which trains models to predict methylation for a given set

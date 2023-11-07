@@ -228,13 +228,13 @@ class analyzeComethylation:
         reference_genome = Fasta(
             '/cellar/users/zkoch/methylation_and_mutation/data/genome_annotations/hg19.fa'
             )
-        cpg_islands = pd.read_csv(
+        """cpg_islands = pd.read_csv(
             '/cellar/users/zkoch/methylation_and_mutation/data/genome_annotations/CpG_islands_hg19.bed.gz',
             sep = '\t', header = None
             )
         cpg_islands.columns = ['chr', 'start', 'end', 'name']
         cpg_islands['chr'] = cpg_islands['chr'].str.replace('chr', '')
-        
+        """
         # merge
         mean_metrics_w_mut = mean_metrics_df.loc[
             mean_metrics_df['mutated_sample']
@@ -248,7 +248,8 @@ class analyzeComethylation:
             'C>T': 'C>T', 'G>A': 'C>T', 
             'T>A': 'T>A', 'A>T': 'T>A',
             'T>C': 'T>C', 'A>G': 'T>C',
-            'T>G': 'T>G', 'A>C': 'T>G'})
+            'T>G': 'T>G', 'A>C': 'T>G'
+            })
         # remove deletions
         # mean_metrics_w_mut = mean_metrics_w_mut.loc[mean_metrics_w_mut['alt'] != '-']
         # add chr and start for BG muts, and add alt as Z
@@ -258,7 +259,7 @@ class analyzeComethylation:
             'mut_event'].str.split('_').str[1].str.split(':').str[0]
         mean_metrics_w_mut.loc[mean_metrics_w_mut['is_background'], 'alt'] = 'Z'
         
-        # get sequences, was_cpg, becomes_cpg, is_cgi, and gc percent
+        """# get sequences, was_cpg, becomes_cpg, is_cgi, and gc percent
         # start - 1 is the mutated position
         mean_metrics_w_mut['seq'] = mean_metrics_w_mut.apply(
             lambda x: reference_genome['chr'+x['chr']][x['start']-2: x['start'] + 1].seq,
@@ -273,16 +274,16 @@ class analyzeComethylation:
         is_cgi = ((mean_metrics_w_mut['chr'].values[:, np.newaxis] == cpg_islands['chr'].values) &
                 (mean_metrics_w_mut['start'].values[:, np.newaxis] >= cpg_islands['start'].values) &
                 (mean_metrics_w_mut['start'].values[:, np.newaxis] <= cpg_islands['end'].values)).any(axis=1)
-        mean_metrics_w_mut['is_cgi'] = is_cgi
+        mean_metrics_w_mut['is_cgi'] = is_cgi"""
         # also get sequence in 200bp window around each mutation 
-        mean_metrics_w_mut['seq_200bp'] = mean_metrics_w_mut.apply(
-            lambda x: reference_genome['chr'+x['chr']][x['start']-101: x['start'] + 100].seq,
+        mean_metrics_w_mut['seq_10kb'] = mean_metrics_w_mut.apply(
+            lambda x: reference_genome['chr'+x['chr']][x['start']-10001: x['start'] + 10000].seq,
             axis = 1)
         # get gc content in 200bp window
-        mean_metrics_w_mut['gc_perc_200bp'] = (
-            mean_metrics_w_mut['seq_200bp'].str.upper().str.count('G') \
-            + mean_metrics_w_mut['seq_200bp'].str.upper().str.count('C')
-            ) / 200
+        mean_metrics_w_mut['cpg_count_10kb'] = (
+            mean_metrics_w_mut['seq_10kb'].str.upper().str.count('GC') \
+            + mean_metrics_w_mut['seq_10kb'].str.upper().str.count('CG')
+            )
         return mean_metrics_w_mut
         
     

@@ -828,3 +828,23 @@ def mutual_info_one_chrom(
         )
         mi_results.append(mi)
     return pd.DataFrame(mi_results, columns= chrom_methyl_cpgs, index = chrom_methyl_cpgs)
+
+
+def mutual_info_muts(
+    mut_df: pd.DataFrame,
+    age: pd.Series,
+    ) -> pd.DataFrame:
+    """
+    mut_df: only mutation features
+    age: aligned ages of samples
+    """
+    from sklearn.feature_selection import mutual_info_regression
+    # select columsnt that start with this chr
+    mi = mutual_info_regression(
+        X = mut_df,
+        y = age,
+        discrete_features=False,
+        random_state = 42,
+        copy = False
+        )
+    return mi
