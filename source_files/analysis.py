@@ -115,7 +115,7 @@ def compare_mf_mutated_sample_vs_avg(mutation_in_measured_cpg_df, all_methyl_df_
     # limit to only big DNA_VAF mutations
     print("Number of mutations in measured CpG sites: {}".format(len(mutation_in_measured_cpg_df)))
     # select the 1000 rows with largest DNA_VAF
-    mutation_in_measured_cpg_df = mutation_in_measured_cpg_df.sort_values(by=['DNA_VAF'], ascending=False).iloc[:500]
+    mutation_in_measured_cpg_df = mutation_in_measured_cpg_df.sort_values(by=['DNA_VAF'], ascending=False).iloc[:1000]
     #mutation_in_measured_cpg_df = mutation_in_measured_cpg_df.loc[mutation_in_measured_cpg_df['DNA_VAF'] >.35]
     print("selected 500 mtuations events with largest DNA_VAF, minimum DNA_VAF: {}".format(mutation_in_measured_cpg_df['DNA_VAF'].min()))
     # plot distribution of MF at sites of mutation event vs same site with no mutation
