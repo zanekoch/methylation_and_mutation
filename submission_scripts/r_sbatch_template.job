@@ -1,0 +1,25 @@
+#!/bin/bash
+#SBATCH --array=0
+#SBATCH --partition=nrnb-compute
+#SBATCH --mem=64GB
+#SBATCH --time=16:00:00
+#SBATCH --job-name=GOannot
+#SBATCH --cpus-per-task=1
+#SBATCH --ntasks=1
+eval "$(conda shell.bash hook)"
+conda activate /cellar/users/zkoch/miniconda3/envs/r_go
+
+echo "Job ID: $SLURM_JOB_ID"
+echo "Job User: $SLURM_JOB_USER"
+echo "Num Cores: $SLURM_JOB_CPUS_PER_NODE"
+echo "Array Job ID: $SLURM_ARRAY_JOB_ID"
+echo "CUDA_VISIBLE_DEVICES: $CUDA_VISIBLE_DEVICES"
+
+######################
+# run cpg annotation script
+number_cpgs=1000
+num_corr_cpgs=(250)
+min_dist=100000
+output_dir=/cellar/users/zkoch/methylation_and_mutation/output_dirs/071723_cpg_module_annot_output/${number_cpgs}cpgs_${num_corr_cpgs[$SLURM_ARRAY_TASK_ID]}corr_cpgs_${min_dist}min_dist
+mkdir -p $output_dir
+srun Rscript /cellar/users/zkoch/methylation_and_mutation/source_files/cpg_module_annotation.R $number_cpgs ${num_corr_cpgs[$SLURM_ARRAY_TASK_ID]} $min_dist $output_dir

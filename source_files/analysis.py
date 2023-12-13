@@ -9,7 +9,9 @@ import sys
 import os 
 import seaborn as sns
 from matplotlib.ticker import PercentFormatter
-
+plt.rcParams['svg.fonttype'] = 'none'
+plt.rcParams['pdf.fonttype'] = 42
+plt.rcParams['ps.fonttype'] = 42
 
 # CONSTANTS
 VALID_MUTATIONS = ["C>A", "C>G", "C>T", "T>A", "T>C", "T>G", "G>C","G>A", "A>T", "A>G" , "A>C", "G>T", "C>-"]
@@ -18,95 +20,143 @@ DATA_SET = "TCGA"
 
 import utils
 
-def plot_mutations_distributions(all_mut_df, out_dir, illumina_cpg_locs_df, all_methyl_df_t):
+def plot_mutations_distributions(all_mut_df, illumina_cpg_locs_df, all_methyl_df_t):
     """
     For each dataset plot distribtion of mutation types, also for just mutations in illumina measured CpG sites
     """
-    # plot distribution of mutation type all together
-    fig, axes = plt.subplots(figsize=(7,6), facecolor="white")
-    axes = (all_mut_df['mutation'].value_counts() / len(all_mut_df['mutation'])).plot.bar(ax=axes, xlabel="Mutation type", color='maroon', alpha=0.7, ylabel="Pan-cancer frequency of mutation")
-    fig.savefig(os.path.join(out_dir, 'mut_type_count_all_datasets.png'))
-    # plot distribution of just mutations in measured CpG sites
+    sns.set_context('paper')
+
+    fig, axes = plt.subplots(figsize=(7,6), dpi =100)
+    # mutation frequency by type
+    mut_freq = all_mut_df.value_counts(subset=['mutation']).to_frame().reset_index()
+    mut_freq.columns = ['Mutation class', 'mut_freq']
+    # map mutation class to just C>A, C>G, C>T, T>A, T>C, T>G
+    mut_freq['Mutation class'] = mut_freq['Mutation class'].map({
+            'C>A': 'C>A', 'G>T': 'C>A', 
+            'C>G': 'C>G', 'G>C': 'C>G', 
+            'C>T': 'C>T', 'G>A': 'C>T', 
+            'T>A': 'T>A', 'A>T': 'T>A',
+            'T>C': 'T>C', 'A>G': 'T>C',
+            'T>G': 'T>G', 'A>C': 'T>G'})
+    mut_freq['mut_freq'] = mut_freq['mut_freq'] / len(all_mut_df['mutation'])
+    
+    # seaborn bar plot without confidence intervals
+    p = sns.barplot(x=mut_freq['Mutation class'], y=mut_freq['mut_freq'], ax=axes, color='white', edgecolor='black', errorbar=None, 
+                    order = ['C>T','C>A', 'C>G', 'T>C', 'T>G', 'T>A']
+                    )
+    axes.set_ylabel("Pan-cancer frequency of mutation")
+    #plt.savefig("/cellar/users/zkoch/methylation_and_mutation/output_dirs/final_figures/supplemental/figure1_TCGA_mutation_type_distr.svg",format='svg', dpi = 300)
+    
+    # CpG vs non CpG mutation frequency
+    # get all mutations in measured CpG sites
+    fig, axes = plt.subplots(figsize=(4,6),  dpi =100)
+    cpg_mut_num = all_mut_df.loc[all_mut_df['is_cpg'] == True].shape[0]
+    all_mut_num = all_mut_df.shape[0]
+    NUM_CPG = 28299634
+    BP_NUM = 3137144693
+    expected_cpg = NUM_CPG/BP_NUM
+    expected_non_cpg = 1 - expected_cpg
+    cpg_mut_freq = pd.DataFrame({'Mutation class': ['CpG', 'Expected\nCpG', 'non-CpG', 'Expected\nnon-CpG'], 'mut_freq': [cpg_mut_num/all_mut_num,expected_cpg, 1-cpg_mut_num/all_mut_num, expected_non_cpg]})
+    print(cpg_mut_freq)
+    p = sns.barplot(x=cpg_mut_freq['Mutation class'], y=cpg_mut_freq['mut_freq'], ax=axes, palette=['white', 'black','white', 'black' ], edgecolor='black', errorbar=None)
+    # remove x label 
+    axes.set_xlabel("")
+    axes.set_ylabel("")
+    axes.set_ylim([0,1])
+    # angle x ticks
+    for tick in axes.get_xticklabels():
+        tick.set_rotation(45)
+    #plt.savefig("/cellar/users/zkoch/methylation_and_mutation/output_dirs/final_figures/figure1/figure1A_TCGA_expected_cpg_mut.svg",format='svg', dpi = 300)
+    
+    
+    # Type of CpG mutation
+    fig, axes = plt.subplots(figsize=(4,6),  dpi =100)
+    mut_in_measured_cpg_df = utils.join_df_with_illum_cpg(all_mut_df, illumina_cpg_locs_df, all_methyl_df_t)
+    cpg_mut_freq = (mut_in_measured_cpg_df['mutation'].value_counts() / len(mut_in_measured_cpg_df['mutation'])).to_frame()
+    cpg_mut_freq.reset_index(inplace=True)
+    cpg_mut_freq.columns = ['Mutation class', 'mut_freq']
+    # map mutation class to just C>A, C>G, C>T, T>A, T>C, T>G
+    cpg_mut_freq['Mutation class'] = cpg_mut_freq['Mutation class'].map({
+        'C>A': 'CpG>ApG', 'G>T': 'CpG>ApG', 
+        'C>G': 'CpG>GpG', 'G>C': 'CpG>GpG', 
+        'C>T': 'CpG>TpG', 'G>A': 'CpG>TpG', 
+        'T>A': 'T>A', 'A>T': 'T>A',
+        'T>C': 'T>C', 'A>G': 'T>C',
+        'T>G': 'T>G', 'A>C': 'T>G'})
+    _, _, autotexts = axes.pie(cpg_mut_freq.dropna()['mut_freq'], labels = cpg_mut_freq.dropna()['Mutation class'], colors = ['white', 'grey', 'black'], autopct='%1.1f%%', startangle=90,  wedgeprops={"edgecolor":"k",'linewidth': 1, 'antialiased': True})
+    for i, autotext in enumerate(autotexts):
+        if i == 2:
+            autotext.set_color('white')
+    """p = sns.barplot(x=cpg_mut_freq['Mutation class'], y=cpg_mut_freq['mut_freq'], ax=axes, color='white', edgecolor='black', errorbar=None)
+    axes.set_ylabel("")
+    axes.set_xlabel("")
+    axes.set_ylim([0,1])"""
+    plt.savefig("/cellar/users/zkoch/methylation_and_mutation/output_dirs/final_figures/figure1/figure1B_TCGA_cpg_mut_type_piechart.svg",format='svg', dpi = 300)
+        
+    
+    """# plot distribution of just mutations in measured CpG sites
     fig2, axes2 = plt.subplots(figsize=(7,6), facecolor="white")
     mut_in_measured_cpg_df = utils.join_df_with_illum_cpg(all_mut_df, illumina_cpg_locs_df, all_methyl_df_t)
     axes2 = (mut_in_measured_cpg_df['mutation'].value_counts() / len(mut_in_measured_cpg_df['mutation'])).plot.bar(ax=axes2, xlabel="Mutations in measured CpG sites", color='maroon', alpha=0.7,ylabel="Pan-cancer frequency of mutation")
     fig2.savefig(os.path.join(out_dir, 'mut_type_count_in_measured_cpg_datasets.png'))
-    return mut_in_measured_cpg_df
+    return mut_in_measured_cpg_df"""
 
-def plot_mutations(all_mut_df, all_meta_df, dataset_names_list, out_dir, illumina_cpg_locs_df, all_methyl_df_t):
-    """
-    @ all_mut_df: pandas dataframe of all mutations
-    @ all_meta_df: pandas dataframe of all metadata
-    @ dataset_names_list: list of dataset names
-    @ out_dir: output directory
-    @ illumina_cpg_locs_df: pandas dataframe of illumina cpg locations
-    @ all_methyl_df_t: pandas dataframe of all methylation, processed 
-    @ returns: pandas dataframe of all mutations in illumina measured CpG sites
-    """
-    # for each dataset plot distribtion of all mutations, mutations in CpG sites, and C>T mutations in CpG sites
-    mut_in_measured_cpg_df = plot_mutations_distributions(all_mut_df, out_dir, illumina_cpg_locs_df, all_methyl_df_t)
-    # for each dataset plot # of C>T mutations by age
-    # TODO: fix plot_mutation_count_by_age to work with PANCAN
-    """utils.plot_mutation_count_by_age(all_mut_df, all_meta_df, dataset_names_list, out_dir)"""
-    return mut_in_measured_cpg_df
 
-def compare_mf_mutated_sample_vs_avg(mutation_in_measured_cpg_df, out_dir, all_methyl_df_t, dataset="TCGA"):
+
+def compare_mf_mutated_sample_vs_avg(mutation_in_measured_cpg_df, all_methyl_df_t):
     """
     Plot MF at sites of mutation event vs same site with no mutation. Write pvals of testing difference of distribution between mutated and not 
     """
     # output plots of avg vs not as seaborn kde's
-    fig, axes = plt.subplots(dpi=200)
-    non_mutated_methyl_df_t = all_methyl_df_t[all_methyl_df_t.columns[~all_methyl_df_t.columns.isin(mutation_in_measured_cpg_df['#id'])]]
+    sns.set_context('paper')
+    
+    non_mutated_methyl_df_t = all_methyl_df_t.loc[:, ~all_methyl_df_t.columns.isin(mutation_in_measured_cpg_df['#id'])]
     
     # limit to only big DNA_VAF mutations
-    mutation_in_measured_cpg_df = mutation_in_measured_cpg_df[mutation_in_measured_cpg_df['DNA_VAF'] >.5]
-    to_plot_df = pd.DataFrame(pd.concat([mutation_in_measured_cpg_df['avg_methyl_frac'], mutation_in_measured_cpg_df['methyl_fraction'], non_mutated_methyl_df_t.mean(axis=0)], axis=0)).reset_index(drop=True)
+    print("Number of mutations in measured CpG sites: {}".format(len(mutation_in_measured_cpg_df)))
+    # select the 1000 rows with largest DNA_VAF
+    mutation_in_measured_cpg_df = mutation_in_measured_cpg_df.sort_values(by=['DNA_VAF'], ascending=False).iloc[:1000]
+    #mutation_in_measured_cpg_df = mutation_in_measured_cpg_df.loc[mutation_in_measured_cpg_df['DNA_VAF'] >.35]
+    print("selected 500 mtuations events with largest DNA_VAF, minimum DNA_VAF: {}".format(mutation_in_measured_cpg_df['DNA_VAF'].min()))
+    # plot distribution of MF at sites of mutation event vs same site with no mutation
+    to_plot_df = pd.DataFrame(pd.concat(
+        [mutation_in_measured_cpg_df['avg_methyl_frac'],
+         mutation_in_measured_cpg_df['methyl_fraction'],
+         non_mutated_methyl_df_t.mean(axis=0)
+         ], axis=0)).reset_index(drop=True)
+    
     to_plot_df.columns = ['Methylation Fraction']
     to_plot_df['Type'] = ['Non mutated CpGs'] * len(mutation_in_measured_cpg_df['avg_methyl_frac']) +  ['Mutated CpGs'] * len(mutation_in_measured_cpg_df['methyl_fraction']) + ['Site of no CpG mutation'] * len(non_mutated_methyl_df_t.mean(axis=0))
-    # seaborn kde plot
-    p = sns.kdeplot(data=to_plot_df, x='Methylation Fraction', hue='Type', fill=True, common_norm=False, clip=[0,1], palette = ['steelblue', 'maroon', 'grey'], ax=axes, legend=False)
+    # all together
+    fig, axes = plt.subplots(dpi=100, figsize=(8,5))
+    p = sns.kdeplot(
+        data=to_plot_df, x='Methylation Fraction', hue='Type', fill=True,
+        common_norm=False, clip=[0,1], palette = ['steelblue', 'maroon', 'grey'], 
+        ax=axes, legend=False
+        )
+    #plt.savefig("/cellar/users/zkoch/methylation_and_mutation/output_dirs/final_figures/figure1/figure1E_kde_methyl_distr.svg",format='svg', dpi = 300)
+    #plt.savefig("/cellar/users/zkoch/methylation_and_mutation/output_dirs/final_figures/supplemental/icgc_figure1E_kde_methyl_distr.svg",format='svg', dpi = 300)
 
-    fig.savefig(os.path.join(out_dir, '{}_methylation_fraction_comparison.png'.format(dataset)))
-    # seperately save kde of just mutated, just non mutated, and just site of no CpG mutation
-    # set transparent background
-    fig2, axes2 = plt.subplots(dpi=200)
-    p2 = sns.kdeplot(data=to_plot_df[to_plot_df['Type'] == 'Non mutated CpGs'], x='Methylation Fraction', fill=True, common_norm=False, clip=[0,1], palette = ['grey'], ax=axes2, legend=False)
+    # just Non mutated CpGs vs Site of no CpG mutation
+    fig, axes = plt.subplots(dpi=100, figsize=(8,5))
+    p = sns.kdeplot(
+        data=to_plot_df[to_plot_df['Type'].isin(['Non mutated CpGs', 'Site of no CpG mutation'])], x='Methylation Fraction', hue='Type', fill=True,
+        common_norm=False, clip=[0,1], palette = ['steelblue', 'grey'], 
+        ax=axes, legend=False
+        )
+    #plt.savefig("/cellar/users/zkoch/methylation_and_mutation/output_dirs/final_figures/figure1/figure1E_kde_methyl_distr_only_blueGrey.svg",format='svg', dpi = 300)
+    #plt.savefig("/cellar/users/zkoch/methylation_and_mutation/output_dirs/final_figures/supplemental/icgc_figure1E_kde_methyl_distr_only_blueGrey.svg",format='svg', dpi = 300)
+    # just Site of no CpG mutation
+    fig, axes = plt.subplots(dpi=100, figsize=(8,5))
+    p = sns.kdeplot(
+        data=to_plot_df[to_plot_df['Type'].isin(['Site of no CpG mutation'])], x='Methylation Fraction', hue='Type', fill=True,
+        common_norm=False, clip=[0,1], palette = ['grey'], 
+        ax=axes, legend=False
+        )
+    #plt.savefig("/cellar/users/zkoch/methylation_and_mutation/output_dirs/final_figures/figure1/figure1E_kde_methyl_distr_only_grey.svg",format='svg', dpi = 300)
+    #plt.savefig("/cellar/users/zkoch/methylation_and_mutation/output_dirs/final_figures/supplemental/icgc_figure1E_kde_methyl_distr_only_grey.svg",format='svg', dpi = 300)
     
-    # hexbin plot of mutation_in_measured_cpg_df['methyl_fraction'] vs mutation_in_measured_cpg_df['avg_methyl_frac']
-    fig, axes = plt.subplots(dpi=200)
-    p3 = axes.hexbin(mutation_in_measured_cpg_df['avg_methyl_frac'], mutation_in_measured_cpg_df['methyl_fraction'], gridsize=50, bins='log', cmap='inferno')
-    axes.set_xlabel('Average MF of non-mutated individuals')
-    axes.set_ylabel('Average MF of mutated individuals')
-    # add a y=x line to the plot
-    axes.plot([0,1], [0,1], transform=axes.transAxes, color='black')
-    # add colorbar
-    cbar = fig.colorbar(p3)
-    # label colorbar
-    cbar.set_label('Count of CpG sites', rotation=270, labelpad=15)
-
-    # write pvals and effect sizes to file
-    with open(os.path.join(out_dir, "{}_methylation_fraction_results.txt".format(dataset)), "w+") as f:
-        if JUST_CT:
-            f.write("Difference in methylation fraction between C>T mutated samples and not, at same CpG\n")
-        else:
-            f.write("Difference in methylation fraction between C>T/G>A mutated samples and not, at same CpG\n")
-        f.write("Number of CpGs tested: {}\n".format(len(mutation_in_measured_cpg_df)))
-        f.write("Effect size: {}\n".format( mutation_in_measured_cpg_df.mean()))
-        statistic, wilc_p_val = stats.ranksums(mutation_in_measured_cpg_df['methyl_fraction'].to_numpy(), mutation_in_measured_cpg_df['avg_methyl_frac'].to_numpy(), alternative='less')
-        f.write("Wilcoxon rank sum p-value {}\n".format(wilc_p_val))
-        statistic, p_val = stats.mannwhitneyu(mutation_in_measured_cpg_df['methyl_fraction'].to_numpy(), mutation_in_measured_cpg_df['avg_methyl_frac'].to_numpy(), alternative='less', method='auto')
-        f.write("MannWhitney U p-value {}\n".format(p_val))
-        result = stats.binomtest(len(mutation_in_measured_cpg_df[mutation_in_measured_cpg_df['difference']<0]), len(mutation_in_measured_cpg_df), p=0.5, alternative='greater')
-        f.write("Binomial test of greater than p=0.5 p-value {}\n".format(result.pvalue))
-    # barplot 
-    fig, axes = plt.subplots(facecolor="white", dpi=200)
-    num_less_zero = len(mutation_in_measured_cpg_df[mutation_in_measured_cpg_df['difference']<0])
-    num_greater_zero = len(mutation_in_measured_cpg_df[mutation_in_measured_cpg_df['difference']>0])
-    axes.bar( x= ['Decrease', 'Increase'], color = ['darkgrey', 'lightgrey'], edgecolor='black', linewidth=2, height = [num_less_zero, num_greater_zero] )
-    axes.set_xlabel("Change in MF at site of C>T mutation")
-    axes.set_ylabel("Number of sites")
-    fig.savefig(os.path.join(out_dir, '{}_methylation_fraction_difference_hist.png'.format(dataset)))
-    return
+    return to_plot_df
 
 def compare_mf_site_of_mutation_vs_not(mutation_in_measured_cpg_df, all_methyl_df_t, out_dir):
     # test for difference between average methylation fraction at non-mutated CpG sites and at mutated CpG sites in non-mutated samples
@@ -142,10 +192,31 @@ def get_same_age_tissue_means(mut_in_measured_cpg_w_methyl_age_df, all_methyl_ag
     # for each mutation in mut_in_measured_cpg_w_methyl_age_df, get the average MF at the same CpG site in the same age bin range and tissue type as the sample where the mutation occured
     # get the average MF at the same CpG site in the same age bin range and tissue type as the sample where the mutation occured
 
-    mut_in_measured_cpg_w_methyl_age_df['avg_methyl_frac'] = mut_in_measured_cpg_w_methyl_age_df.apply(lambda mut_row: all_methyl_age_df_t[(np.abs(all_methyl_age_df_t['age_at_index'] - mut_row['age_at_index']) <= age_bin_size/2) & (all_methyl_age_df_t['dataset'] == mut_row['dataset'])][mut_row['#id']].mean(), axis=1)
+    mut_in_measured_cpg_w_methyl_age_df['avg_methyl_frac'] = mut_in_measured_cpg_w_methyl_age_df.apply(
+        lambda mut_row: all_methyl_age_df_t[
+            (np.abs(all_methyl_age_df_t['age_at_index'] - mut_row['age_at_index']) <= age_bin_size/2) 
+            & (all_methyl_age_df_t['dataset'] == mut_row['dataset'])
+            ][mut_row['#id']].mean(), axis=1)
+    """ #Prepare all_methyl_age_df_t by filtering out rows with age difference larger than age_bin_size/2
+    merged_df = all_methyl_age_df_t.copy()
+    merged_df['age_diff'] = np.abs(merged_df['age_at_index'].values[:, None] - mut_in_measured_cpg_w_methyl_age_df['age_at_index'].values)
+    merged_df = merged_df[merged_df['age_diff'] <= age_bin_size/2]
+
+    # Merge the two DataFrames on the 'dataset' column
+    merged_df = mut_in_measured_cpg_w_methyl_age_df.merge(merged_df, on='dataset', suffixes=('', '_y'))
+
+    # Group by the original index and calculate the mean value for each group
+    grouped_df = merged_df.groupby(merged_df.index)
+
+    # Map the mean values to the original DataFrame
+    mut_in_measured_cpg_w_methyl_age_df['avg_methyl_frac'] = grouped_df.apply(lambda group: group['#id_y'].mean())"""
+
     return mut_in_measured_cpg_w_methyl_age_df
 
-def methylation_fraction_comparison(all_mut_df, illumina_cpg_locs_df, all_methyl_df_t, out_dir, all_meta_df, age_bin_size = 10):
+def methylation_fraction_comparison(
+    all_mut_df, illumina_cpg_locs_df, all_methyl_df_t,
+    out_dir, all_meta_df, age_bin_size = 10
+    ):
     """
     Measure the effect a mutation has on MF at that site
     @ returns: pandas dataframe of all mutations in illumina measured CpG sites, their methylation fraction in mutated sample, and average methylation at that site across other samples (within 5 years of age)
@@ -155,6 +226,7 @@ def methylation_fraction_comparison(all_mut_df, illumina_cpg_locs_df, all_methyl
         mutations_df = all_mut_df[all_mut_df['mutation'] == 'C>T']
     else:
         mutations_df = all_mut_df
+        
     #for each CpG with methylation data get genomic location of its C
     mut_in_measured_cpg_df = utils.join_df_with_illum_cpg(mutations_df, illumina_cpg_locs_df, all_methyl_df_t)
     methyl_fractions = utils.get_methyl_fractions(mut_in_measured_cpg_df, all_methyl_df_t)
@@ -169,16 +241,18 @@ def methylation_fraction_comparison(all_mut_df, illumina_cpg_locs_df, all_methyl
     mut_in_measured_cpg_w_methyl_age_df = mut_in_measured_cpg_w_methyl_age_df.dropna(subset=['age_at_index'])
     
     # get means 
-    mut_in_measured_cpg_w_methyl_age_df = get_same_age_tissue_means(mut_in_measured_cpg_w_methyl_age_df, all_methyl_age_df_t, age_bin_size = 10)
-    """# old way
-    mutation_in_measured_cpg_df['avg_methyl_frac'] = all_methyl_df_t[mutation_in_measured_cpg_df['#id']].mean().values"""
+    """mut_in_measured_cpg_w_methyl_age_df = get_same_age_tissue_means(
+        mut_in_measured_cpg_w_methyl_age_df, all_methyl_age_df_t, age_bin_size = age_bin_size
+        )"""
+    # old way
+    mut_in_measured_cpg_w_methyl_age_df['avg_methyl_frac'] = all_methyl_df_t[mut_in_measured_cpg_w_methyl_age_df['#id']].mean().values
 
     # get difference between mean and mutated sample
     mut_in_measured_cpg_w_methyl_age_df['difference'] = mut_in_measured_cpg_w_methyl_age_df['methyl_fraction'] - mut_in_measured_cpg_w_methyl_age_df['avg_methyl_frac']
     # test for a difference
-    compare_mf_mutated_sample_vs_avg(mut_in_measured_cpg_w_methyl_age_df, out_dir, all_methyl_df_t)
+    to_plot_df = compare_mf_mutated_sample_vs_avg(mut_in_measured_cpg_w_methyl_age_df, out_dir, all_methyl_df_t)
     """compare_mf_site_of_mutation_vs_not(mut_in_measured_cpg_w_methyl_age_df, all_methyl_df_t, out_dir)"""
-    return mut_in_measured_cpg_w_methyl_age_df, all_methyl_age_df_t
+    return mut_in_measured_cpg_w_methyl_age_df, to_plot_df
 
 def main(illumina_cpg_locs_df, out_dir, all_mut_df, all_methyl_df_t, all_meta_df, dataset_names_list, age_bin_size):
     # make output directories

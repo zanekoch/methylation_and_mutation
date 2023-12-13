@@ -1,34 +1,55 @@
-import get_data, utils, comethylation_distance
-import os
-import matplotlib.pyplot as plt
-import numpy as np
-import pandas as pd
-import seaborn as sns
-import dask.dataframe as dd
-from scipy.stats import spearmanr
-from rich.progress import track
+import sys
+sys.path.append('/cellar/users/zkoch/methylation_and_mutation/source_files')
+import get_data
+import argparse
+import os 
 
-out_dir = "/cellar/users/zkoch/methylation_and_mutation/output_110422"
-dependency_f_dir = "/cellar/users/zkoch/methylation_and_mutation/dependency_files"
-data_dir = "/cellar/users/zkoch/methylation_and_mutation/data"
+def preproc_correls(
+    illumina_cpg_locs_df, 
+    all_methyl_age_df_t, 
+    out_dir
+    ) -> None:
+    """
+    Calculate the correlation matrix for each dataset within each chromosome and output to file
+    """
+    print("starting preproc_correls", flush=True)
+    # get all measured cpgs (nans already dropped)
+    all_measured_cpgs = all_methyl_age_df_t.columns.to_list()
+    for chrom in illumina_cpg_locs_df['chr'].unique():
+        # get the cpgs for this chromosome
+        this_chr_illumina_cpgs = illumina_cpg_locs_df.query('chr == @chrom')['#id'].to_list()
+        # and the cpgs that are measured in this chromosome
+        this_chr_measured_cpgs = list(set(all_measured_cpgs).intersection(set(this_chr_illumina_cpgs)))
+        for dset in all_methyl_age_df_t['dataset'].unique():
+            # select the cpgs for this dataset
+            this_chr_dset_methyl_df = all_methyl_age_df_t.query('dataset == @dset').loc[:, this_chr_measured_cpgs]
+            # and calculate the correlation matrix
+            corr_df = this_chr_dset_methyl_df.corr()
+            corr_df.to_parquet(os.path.join(out_dir, 'chr{}_{}.parquet'.format(chrom, dset)))
+            print("Done", chrom, dset, flush=True)
 
-all_illumina_cpg_locs_df = pd.read_csv(os.path.join(dependency_f_dir, "illumina_cpg_450k_locations.csv"), sep=',', dtype={'CHR': str}, low_memory=False)
-# get rows of all_illumina_cpg_locs_df where 'exon' appears in UCSC_RefGene_Group
-all_illumina_cpg_locs_df.dropna(subset=['UCSC_RefGene_Group'], inplace=True)
-exon_cpg_locs_df = all_illumina_cpg_locs_df[all_illumina_cpg_locs_df['UCSC_RefGene_Group'].str.contains('Body')]
-cpg_in_body = exon_cpg_locs_df['Name'].to_list()
-
-illumina_cpg_locs_df, all_mut_df, all_methyl_df, all_methyl_df_t, all_meta_df, dataset_names_list = get_data.main(os.path.join(dependency_f_dir, "illumina_cpg_450k_locations.csv"), 
-    out_dir,
-    os.path.join(data_dir, "processed_methylation"),
-    os.path.join(data_dir, "PANCAN_mut.tsv.gz"),
-    os.path.join(data_dir, "PANCAN_meta.tsv"))
-
-# add ages to all_methyl_df_t
-all_mut_w_age_df, all_methyl_age_df_t = utils.add_ages_to_mut_and_methyl(all_mut_df, all_meta_df, all_methyl_df_t)
-all_methyl_age_df_t.drop(columns=['gender'], inplace=True)
-all_mut_w_age_df.drop(columns=['gender'], inplace=True)
-
-mut_scan_distance = comethylation_distance.mutationScanDistance(all_mut_w_age_df, illumina_cpg_locs_df, all_methyl_age_df_t, age_bin_size = 5, max_dist = 100000)
-
-mut_scan_distance.preproc_correls(out_dir = '/cellar/users/zkoch/methylation_and_mutation/dependency_files/chr_dset_corrs')
+def main():
+    # argparse
+    parser = argparse.ArgumentParser(description='Calculate correlation between mutation and methylation')
+    parser.add_argument('--out_dir', type=str, help='output directory')
+    parser.add_argument('--consortium', type=str, help='TCGA or ICGC')
+    # parse
+    args = parser.parse_args()
+    out_dir = args.out_dir
+    consortium = args.consortium
+    # get data
+    if consortium == "ICGC":
+        all_mut_w_age_df, illumina_cpg_locs_df, all_methyl_age_df_t, matrix_qtl_dir, covariate_fn = get_data.read_icgc_data()
+    elif consortium == "TCGA":
+        all_mut_w_age_df, illumina_cpg_locs_df, all_methyl_age_df_t, matrix_qtl_dir, covariate_fn = get_data.read_tcga_data()
+    else:
+        raise ValueError("consortium must be TCGA or ICGC")
+    
+    preproc_correls(
+        illumina_cpg_locs_df,
+        all_methyl_age_df_t,
+        out_dir
+        )
+    
+if __name__ == "__main__":
+    main()

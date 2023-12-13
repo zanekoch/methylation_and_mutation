@@ -8,68 +8,6 @@ import numpy as np
 import dask.dataframe as dd
 import glob
 
-def read_icgc_data() -> tuple:
-    dependency_f_dir = "/cellar/users/zkoch/methylation_and_mutation/dependency_files"
-    icgc_mut_df = pd.read_parquet("/cellar/users/zkoch/methylation_and_mutation/data/icgc/for_matrixQTL/icgc_mut_df.parquet")
-    icgc_meta_df = pd.read_parquet("/cellar/users/zkoch/methylation_and_mutation/data/icgc/for_matrixQTL/icgc_meta_df.parquet")
-    illumina_cpg_locs_df = get_data.get_illum_locs(os.path.join(dependency_f_dir, "illumina_cpg_450k_locations.csv"))
-    # read in methyl from dask dir
-    #icgc_methyl_dd = dd.read_parquet('/cellar/users/zkoch/methylation_and_mutation/data/icgc/for_matrixQTL/icgc_methyl_df_samplesXcpg')
-    #icgc_methyl_df = icgc_methyl_dd.compute()
-    #icgc_methyl_df_t = icgc_methyl_df.T
-    icgc_methyl_dd = dd.read_parquet('/cellar/users/zkoch/methylation_and_mutation/data/icgc/methyl_dir')
-    icgc_methyl_df = icgc_methyl_dd.compute()
-    icgc_methyl_df_t = icgc_methyl_df.T
-    
-    shared_samples = set(icgc_methyl_df_t.index) & set(icgc_mut_df['sample'].unique()) & set(icgc_meta_df['sample'].unique())
-    icgc_methyl_df_t = icgc_methyl_df_t.loc[shared_samples]
-    icgc_methyl_df_t.dropna(how = 'any', axis=1, inplace=True)
-    
-    # rename columns 
-    icgc_mut_df.rename(columns={'chromosome':'chr', 'sample': 'case_submitter_id', 'chromosome_start':'start', 'MAF': 'DNA_VAF'}, inplace=True)
-    icgc_meta_df.rename(columns={'sample': 'case_submitter_id'}, inplace=True)
-    # merge with mut
-    icgc_mut_w_age_df = icgc_mut_df.merge(icgc_meta_df, on='case_submitter_id', how='left')
-    # and methyl dfs
-    icgc_meta_df_to_merge = icgc_meta_df[['case_submitter_id', 'age_at_index', 'dataset', 'gender']]
-    icgc_meta_df_to_merge.set_index('case_submitter_id', inplace=True)
-    # make gender column uppercase
-    icgc_meta_df_to_merge['gender'] = icgc_meta_df_to_merge['gender'].str.upper()
-    icgc_methyl_age_df_t = icgc_methyl_df_t.merge(icgc_meta_df_to_merge, left_index=True, right_index=True, how='left')
-    icgc_mi_df = pd.read_parquet('/cellar/users/zkoch/methylation_and_mutation/output_dirs/011723_output/icgc_mi.parquet')
-    icgc_mi_df.sort_values(by='mutual_info', ascending=False, inplace=True)
-    return icgc_mut_w_age_df, illumina_cpg_locs_df, icgc_methyl_age_df_t, icgc_mi_df
-
-def read_tcga_data(
-    dataset: str
-    ) -> tuple:
-    print("reading in data")
-    # read in data
-    out_dir = "/cellar/users/zkoch/methylation_and_mutation/output_dirs/output_010423"
-    dependency_f_dir = "/cellar/users/zkoch/methylation_and_mutation/dependency_files"
-    data_dir = "/cellar/users/zkoch/methylation_and_mutation/data"
-    methylation_dir = '/cellar/users/zkoch/methylation_and_mutation/data/processed_methylation'
-    illumina_cpg_locs_df, all_mut_df, _, all_methyl_df_t, all_meta_df, _ = get_data.main(
-        illum_cpg_locs_fn = os.path.join(dependency_f_dir, "illumina_cpg_450k_locations.csv"),
-        out_dir = out_dir,
-        methyl_dir = methylation_dir,
-        mut_fn = os.path.join(data_dir, "PANCAN_mut.tsv.gz"),
-        meta_fn = os.path.join(data_dir, "PANCAN_meta.tsv")
-        )
-    # add ages to all_methyl_df_t
-    all_mut_w_age_df, all_methyl_age_df_t = utils.add_ages_to_mut_and_methyl(
-        all_mut_df, all_meta_df, all_methyl_df_t
-        )
-    # mi dfs
-    mi_df = pd.read_parquet('/cellar/users/zkoch/methylation_and_mutation/dependency_files/mutual_informations/tcga_combinedMI_top10MI.parquet')
-    if dataset != "":
-        mi_df = mi_df[dataset]
-    else:
-        mi_df = mi_df['combined']
-    mi_df = mi_df.to_frame()
-    mi_df.columns = ['mutual_info']
-    return all_mut_w_age_df, illumina_cpg_locs_df, all_methyl_age_df_t, mi_df
-
 def run(
     do: str,
     consortium: str,
@@ -78,10 +16,16 @@ def run(
     out_dir: str, 
     start_top_cpgs: int, 
     end_top_cpgs: int,
-    aggregate: str,
-    scramble: bool,
+    mut_feat_params: dict,
+    train_baseline: str,
+    train_actual_model:str,
     model: str,
-    mut_feat_store_fns: list
+    mut_feat_store_fns: list,
+    agg_only_methyl_pred: bool,
+    scale_counts_within_dataset: bool,
+    predict_with_random_feat: int,
+    use_gpu: bool,
+    trained_model_fns: list
     ) -> None:
     """
     Driver function for generating features or training models
@@ -92,110 +36,187 @@ def run(
     @ out_dir: directory to save output to
     @ start_top_cpgs: start of range of top cpgs to use
     @ end_top_cpgs: end of range of top cpgs to use
+    @ mut_feat_params: dictionary of mutation feature parameters
     @ aggregate: feature aggregation strategy True, False, or Both
-    @ scramble: whether to scramble the methylation data
+    @ train_baseline: whether to scramble, cov_only, or none for baseline
+    @ train_actual_model: whether to train the actual, non-baseline, model
     @ model: model to use
     @ mut_feat_store_fns: list of mutation feature store filenames
+    @ agg_only_methyl_pred: whether to train the models on aggregate features only or not
+    @ scale_counts_within_dataset: whether to scale the mutation counts within the dataset
+    @ predict_with_random_feat: Nunber of times to predict with random features
+    @ use_gpu: whether to use gpu or not
+    @ trained_model_fns: list of trained model filenames
     @ returns: None
     """
     if consortium == "ICGC":
-        # TODO: make ICGC single dataset work
-        all_mut_w_age_df, illumina_cpg_locs_df, all_methyl_age_df_t, mi_df = read_icgc_data()
-        matrix_qtl_dir = "/cellar/users/zkoch/methylation_and_mutation/output_dirs/icgc_muts_011423"
+        all_mut_w_age_df, illumina_cpg_locs_df, all_methyl_age_df_t, matrix_qtl_dir, covariate_fn = get_data.read_icgc_data()
     elif consortium == "TCGA":
-        all_mut_w_age_df, illumina_cpg_locs_df, all_methyl_age_df_t, mi_df = read_tcga_data(dataset)
-        matrix_qtl_dir = "/cellar/users/zkoch/methylation_and_mutation/data/matrixQtl_data/clumped_muts_CV"
+        all_mut_w_age_df, illumina_cpg_locs_df, all_methyl_age_df_t, matrix_qtl_dir, covariate_fn = get_data.read_tcga_data()
+    # read in motif occurence df
+    motif_occurence_df = pd.read_parquet(
+        "/cellar/users/zkoch/methylation_and_mutation/data/methylation_motifs_weiWang/motif_occurences/motif_occurences_combined_15kb.parquet"
+        )
+    print("read in motif occurence df", flush=True)
+    generate_features = False
+    train_models = False
+    predict = False
     if do == "Feat_gen":
         generate_features = True
-    elif do == "Train_models":
+    elif do == "Train_models": # predicting here implicitly
         train_models = True
-    elif do == "Both":
+    elif do == "Both": # predicting here implicitly
         generate_features = True
         train_models = True
+    elif do == "Predict": # only predicting here, no feature generation or model training
+        predict = True
+        
     mut_feat_store_fn = ""
     if generate_features:
         print("generating features", flush=True)
-        # read in meQtl db
-        godmc_meqtls = pd.read_parquet(
-            '/cellar/users/zkoch/methylation_and_mutation/data/meQTL/goDMC_meQTL/goDMC_meQTLs_for_mutClock.parquet'
-            )
         # create mutation feature generating object
         mut_feat = mutation_features.mutationFeatures(
             all_mut_w_age_df = all_mut_w_age_df, illumina_cpg_locs_df = illumina_cpg_locs_df, 
-            all_methyl_age_df_t = all_methyl_age_df_t, meqtl_db = godmc_meqtls, out_dir = out_dir, 
+            all_methyl_age_df_t = all_methyl_age_df_t, out_dir = out_dir, 
             consortium = consortium, dataset = dataset, cross_val_num = cross_val_num, 
-            matrix_qtl_dir = matrix_qtl_dir
+            matrix_qtl_dir = matrix_qtl_dir,
+            covariate_fn = covariate_fn, motif_occurence_df = motif_occurence_df
             )
-        
         ######## choose CpGs ############
-        # get age correlation of CpGs
-        age_corr = mut_feat.all_methyl_age_df_t.loc[mut_feat.train_samples].corrwith(
-            mut_feat.all_methyl_age_df_t.loc[mut_feat.train_samples, 'age_at_index']
-            )
-        age_corr.drop(['age_at_index', 'gender_MALE', 'gender_FEMALE'], inplace=True)
-        age_corr = age_corr.to_frame()
-        age_corr.columns = ['age_corr']
-        age_corr['abs_age_corr'] = age_corr['age_corr'].abs()
-        # get stdev of CpGs
-        methyl_stdev = mut_feat.all_methyl_age_df_t.loc[mut_feat.train_samples, :].std()
-        methyl_stdev.drop(['age_at_index', 'gender_MALE', 'gender_FEMALE'], inplace=True)
-        methyl_stdev = methyl_stdev.to_frame()
-        methyl_stdev.columns = ['methyl_stdev']
-        
-        # choose the top cpgs sorted by cpg_pred_priority
+        # choose the top cpgs sorted by nearby mutation count and then absolute age correlation
         cpg_pred_priority = mut_feat.choose_cpgs_to_train(
-            metric_df = age_corr, bin_size=50000, 
-            sort_by = ['abs_age_corr', 'count'], mean = True
+            bin_size = mut_feat_params['bin_size'], 
+            sort_by = ['count', 'abs_age_corr']
             )
-        cpg_pred_priority = cpg_pred_priority.merge(methyl_stdev, left_on = '#id', right_index=True, how='left')
-        
-        # subset to sites with a nonzero mean count to ensure nearby WXS
-        cpg_pred_priority = cpg_pred_priority.loc[cpg_pred_priority['count'] > 0]
-        # resort just incase
-        cpg_pred_priority.sort_values(by=['abs_age_corr', 'count'], ascending=False, inplace=True)
-        # choose the top cpgs
+        # choose the start - end top cpgs
         chosen_cpgs = cpg_pred_priority.iloc[start_top_cpgs: end_top_cpgs]['#id'].to_list()
-        ##################################
         
+        ######### feature generation ###########
         # run the feature generation
         mut_feat.create_all_feat_mats(
-            cpg_ids = chosen_cpgs, aggregate = aggregate,
-            num_correl_sites = 500, max_meqtl_sites=100000, # all of 'em
-            nearby_window_size = 50000, num_db_sites = 26000,
-            extend_amount = 250 
+            cpg_ids = chosen_cpgs, 
+            aggregate = mut_feat_params['aggregate'],
+            num_correl_sites = mut_feat_params['num_correl_sites'], 
+            max_meqtl_sites=mut_feat_params['max_meqtl_sites'],
+            nearby_window_size = mut_feat_params['nearby_window_size'], 
+            extend_amount = mut_feat_params['extend_amount'] 
             )
         mut_feat_store_fn = mut_feat.save_mutation_features(
             start_top_cpgs = start_top_cpgs
             )
         mut_feat_store_fns = [mut_feat_store_fn]
     if train_models:
-        print("training models", flush=True)
-        methyl_pred = methylation_pred.methylationPrediction(
-            mut_feat_store_fns = mut_feat_store_fns,
-            model_type = model,
-            scramble = False
-            )
-        methyl_pred.train_all_models()
-        methyl_pred.apply_all_models()
-        methyl_pred.save_models_and_preds()
-        # also do scrambled
-        if scramble:
+        # there are 3 options: train baseline, train actual model, or both
+        # both
+        if train_actual_model == 'True' and train_baseline != 'none':
+            print(f"training actual model and {train_baseline} baseline", flush=True)
+            # do actual model
             methyl_pred = methylation_pred.methylationPrediction(
                 mut_feat_store_fns = mut_feat_store_fns,
                 model_type = model,
-                scramble = True
-                #trained_models_fns = [trained_models_fn]
+                baseline = "none",
+                agg_only = agg_only_methyl_pred,
+                scale_counts_within_dataset = scale_counts_within_dataset,
+                predict_with_random_feat = predict_with_random_feat,
+                illumina_cpg_locs_df = illumina_cpg_locs_df,
+                all_methyl_age_df_t = all_methyl_age_df_t,
+                use_gpu = use_gpu
                 )
             methyl_pred.train_all_models()
             methyl_pred.apply_all_models()
+            methyl_pred.calc_performance_by_dataset()
             methyl_pred.save_models_and_preds()
-    
+            # baseline
+            methyl_pred = methylation_pred.methylationPrediction(
+                mut_feat_store_fns = mut_feat_store_fns,
+                model_type = model,
+                baseline = train_baseline,
+                agg_only = agg_only_methyl_pred,
+                scale_counts_within_dataset = scale_counts_within_dataset,
+                all_methyl_age_df_t = all_methyl_age_df_t,
+                use_gpu = use_gpu
+                )
+            methyl_pred.train_all_models()
+            methyl_pred.apply_all_models()
+            methyl_pred.calc_performance_by_dataset()
+            methyl_pred.save_models_and_preds()
+        # just actual model
+        elif train_actual_model == 'True' and train_baseline == 'none':
+            print("training actual model and not baseline ", flush=True)
+            methyl_pred = methylation_pred.methylationPrediction(
+                mut_feat_store_fns = mut_feat_store_fns,
+                model_type = model,
+                baseline = "none",
+                agg_only = agg_only_methyl_pred,
+                scale_counts_within_dataset = scale_counts_within_dataset,
+                predict_with_random_feat = predict_with_random_feat,
+                illumina_cpg_locs_df = illumina_cpg_locs_df,
+                all_methyl_age_df_t = all_methyl_age_df_t,
+                use_gpu = use_gpu
+                )
+            methyl_pred.train_all_models()
+            methyl_pred.apply_all_models()
+            methyl_pred.calc_performance_by_dataset()
+            methyl_pred.save_models_and_preds()
+        # just baseline
+        elif train_actual_model == 'False' and train_baseline != 'none':
+            print(f"training only {train_baseline} baseline", flush=True)
+            # do non-scrambled
+            methyl_pred = methylation_pred.methylationPrediction(
+                mut_feat_store_fns = mut_feat_store_fns,
+                model_type = model,
+                baseline = train_baseline,
+                agg_only = agg_only_methyl_pred,
+                scale_counts_within_dataset = scale_counts_within_dataset,
+                all_methyl_age_df_t = all_methyl_age_df_t,
+                use_gpu = use_gpu
+                )
+            methyl_pred.train_all_models()
+            methyl_pred.apply_all_models()
+            methyl_pred.calc_performance_by_dataset()
+            methyl_pred.save_models_and_preds()
+        else:
+            print(f"{train_baseline} and {train_actual_model} are not a valid combination",
+                  flush=True
+                  )
+    if predict:
+        print("predicting", flush=True)
+        methyl_pred = methylation_pred.methylationPrediction(
+            mut_feat_store_fns = mut_feat_store_fns,
+            model_type = model,
+            trained_models_fns = trained_model_fns,
+            baseline = train_baseline,
+            agg_only = agg_only_methyl_pred,
+            scale_counts_within_dataset = scale_counts_within_dataset,
+            predict_with_random_feat = predict_with_random_feat,
+            illumina_cpg_locs_df = illumina_cpg_locs_df,
+            all_methyl_age_df_t = all_methyl_age_df_t,
+            use_gpu = use_gpu
+            )
+        methyl_pred.apply_all_models()
+        methyl_pred.calc_performance_by_dataset()
+        methyl_pred.save_models_and_preds()        
+            
+            
+def parse_str_bool(bool_str: str) -> bool:
+    """
+    Parses a string to a boolean
+    @ bool_str: str, either "True" or "False"
+    @ returns: bool
+    """
+    if bool_str == "True":
+        return True
+    elif bool_str == "False":
+        return False
+    else:
+        raise ValueError("bool_str must be True or False")
 
 def main():
     # parse arguments 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--do', type=str, help='whether to generate features, train models, or both')
+    parser.add_argument('--do', type=str, help="whether to 'Feat_gen', 'Train_models', 'Both' (train models and feat_gen), or 'Predict")
     parser.add_argument('--mut_feat_store_fns', type=str, help='glob path to feature files', default="")
+    parser.add_argument('--trained_model_fns', type=str, help='glob path to model files', default="")
     parser.add_argument('--consortium', type=str, help='TCGA or ICGC')
     parser.add_argument('--dataset', type=str, help='tissue type to run, e.g. BRCA, COAD, ...', default="")
     parser.add_argument('--cross_val', type=int, help='cross val fold number, assuming 5', default=0)
@@ -203,39 +224,75 @@ def main():
     parser.add_argument('--start_top_cpgs', type=int, help='index of top cpgs to start with', default=0)
     parser.add_argument('--end_top_cpgs', type=int, help='index of top cpgs to end with', default=0)
     parser.add_argument('--aggregate', type=str, help='False, True, or Both', default="Both")
-    parser.add_argument('--scramble' , type=bool, help='whether to scramble the mutation data', default=False)
+    parser.add_argument('--train_baseline' , type=str, help='whether to use a baseline, if so scrambled or cov_only [scramble, cov_only, both, none]', default='none')
+    parser.add_argument('--train_actual_model', type=str, help='whether to train the actual non-baseline model [True, False]', default='True')
     parser.add_argument('--model', type=str, help='xgboost or elasticNet', default="xgboost")
+    parser.add_argument('--burden_bin_size', type=int, help='bin size for burden test', default=25000)
+    parser.add_argument('--num_correl_sites', type=int, help='num_correl_sites', default=50)
+    parser.add_argument('--max_meqtl_sites', type=int, help='max_meqtl_sites', default=100000)
+    parser.add_argument('--nearby_window_size', type=int, help='nearby_window_size', default=50000)
+    parser.add_argument('--extend_amount', type=int, help='extend_amount', default=100)
+    parser.add_argument('--agg_only_methyl_pred', type=str, help='to train the models on aggregate features only or not: "True" or "False" ')
+    parser.add_argument('--scale_counts_within_dataset', type=str, help='whether to scale the mutation counts within the dataset: "True" or "False" ')
+    parser.add_argument('--predict_with_random_feat', type=int, help='Number of times to predict with random features', default=-1)
+    parser.add_argument('--use-gpu', type=str, help='True/False gpu')
+    
     args = parser.parse_args()
     do = args.do
     # assert do has a valid value
-    assert (do in ['Feat_gen', 'Train_models', 'Both']), "cannot generate features and train models at the same time"
+    assert (do in ['Feat_gen', 'Train_models', 'Both', 'Predict']), "cannot generate features and train models at the same time"
     # if training models, need to specify a glob path to the feature files
-    if do == "train_models":
-        assert (args.mut_feat_store_fns != ""), "must specify glob path to feature files if training models"    
+    if do == "Train_models":
+        assert (args.mut_feat_store_fns != ""), "must specify glob path to feature files if training models" 
     # expand the glob path into a list of filenames
     # may just be one file, but this still makes a list
     mut_feat_store_fns = glob.glob(args.mut_feat_store_fns)
+    if do == "Predict":
+        assert (args.trained_model_fns != ""), "must specify glob path to trained model files if predicting"
+    trained_model_fns = glob.glob(args.trained_model_fns)
+    
     consortium = args.consortium
     dataset = args.dataset
     cross_val_num = args.cross_val
     out_dir = args.out_dir
     start_top_cpgs = args.start_top_cpgs
     end_top_cpgs = args.end_top_cpgs
-    aggregate = args.aggregate
-    scramble = args.scramble
+    train_baseline = args.train_baseline
+    train_actual_model = args.train_actual_model
+    agg_only_methyl_pred = args.agg_only_methyl_pred
+    scale_counts_within_dataset = args.scale_counts_within_dataset
+    predict_with_random_feat = args.predict_with_random_feat
+    use_gpu = args.use_gpu
     model = args.model
     if model not in ['xgboost', 'elasticNet']:
         raise ValueError("model must be xgboost or elasticNet")
-    print(f"cross val {cross_val_num}\n doing {do}\n for {consortium} and {dataset}\n and outputting to {out_dir}")
-    # run 
+    agg_only_methyl_pred = parse_str_bool(agg_only_methyl_pred)
+    scale_counts_within_dataset = parse_str_bool(scale_counts_within_dataset)
+    use_gpu = parse_str_bool(use_gpu)
+    
+    print(f"cross val {cross_val_num}\n doing {do}\n for {consortium} and {dataset}\n, {use_gpu} use gpu, and outputting to {out_dir}")
+    
+    mut_feat_params = {
+        'bin_size': args.burden_bin_size, 'aggregate': args.aggregate, 
+        'num_correl_sites' : args.num_correl_sites, 'max_meqtl_sites' : args.max_meqtl_sites,
+        'nearby_window_size' : args.nearby_window_size, 'extend_amount' : args.extend_amount
+    }
+    print(mut_feat_params)
+    print(model)
+    print(f"agg only {agg_only_methyl_pred}")
+    print(f"scale counts within dataset {scale_counts_within_dataset}")
+    print(f"predict with random feat {predict_with_random_feat}")
     run(
         do = do,
         consortium = consortium, dataset = dataset, cross_val_num = cross_val_num,
         out_dir = out_dir, start_top_cpgs = start_top_cpgs,
-        end_top_cpgs = end_top_cpgs, aggregate = aggregate,
-        scramble = scramble, model = model, mut_feat_store_fns = mut_feat_store_fns
+        end_top_cpgs = end_top_cpgs, mut_feat_params = mut_feat_params,
+        train_baseline = train_baseline, train_actual_model = train_actual_model, model = model, mut_feat_store_fns = mut_feat_store_fns,
+        agg_only_methyl_pred = agg_only_methyl_pred, 
+        scale_counts_within_dataset = scale_counts_within_dataset,
+        predict_with_random_feat = predict_with_random_feat, use_gpu = use_gpu,
+        trained_model_fns = trained_model_fns
         )
         
-
 if __name__ == "__main__":
     main()

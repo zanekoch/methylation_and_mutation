@@ -53,6 +53,9 @@ def clump_partit_mutations(
         clumped_mut_df.to_csv(out_fn, compression='gzip')
         print(f"Wrote out clumped mutations to {out_fn}", flush=True)
     else: # no clumping
+        # if does not contains mut_loc column, create it
+        if 'mut_loc' not in mut_df.columns:
+            mut_df['mut_loc'] = mut_df['chr'].astype(str) + ':' + mut_df['start'].astype(str)
         # pivot
         mut_piv = mut_df.pivot_table(
             index='mut_loc', columns='sample', values='MAF', fill_value=0
